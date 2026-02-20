@@ -1,5 +1,5 @@
-import { Card, Fraction } from '../types/game'
-import { isDivisibleByFraction } from './arithmetic'
+import { Card, Fraction, Operation } from '../types/game'
+import { isDivisibleByFraction, applyOperation } from './arithmetic'
 
 export function sumOfNumberCards(cards: Card[]): number {
   return cards
@@ -95,4 +95,47 @@ function canSumToTarget(cards: Card[], target: number): boolean {
     if (sum === target) return true
   }
   return false
+}
+
+/**
+ * Evaluate a dice equation built by the player.
+ * diceSlots: array of 3 slots, each is a die value or null.
+ * ops: array of 2 operation slots.
+ * grouping: 'left' = (A op1 B) op2 C, 'right' = A op1 (B op2 C).
+ * Returns { valid, result } — valid means at least 2 dice used and result is a non-negative integer.
+ */
+export function checkEquation(
+  diceSlots: (number | null)[],
+  ops: (Operation | null)[],
+  grouping: 'left' | 'right'
+): { valid: boolean; result: number | null } {
+  // Count contiguous filled slots from the left
+  let filledCount = 0
+  for (let i = 0; i < diceSlots.length; i++) {
+    if (diceSlots[i] !== null) filledCount++
+    else break
+  }
+
+  if (filledCount < 2) return { valid: false, result: null }
+
+  let result: number | null = null
+
+  if (filledCount === 2) {
+    if (ops[0] === null) return { valid: false, result: null }
+    result = applyOperation(diceSlots[0]!, ops[0], diceSlots[1]!)
+  } else if (filledCount === 3) {
+    if (ops[0] === null || ops[1] === null) return { valid: false, result: null }
+    if (grouping === 'left') {
+      const ab = applyOperation(diceSlots[0]!, ops[0], diceSlots[1]!)
+      if (ab !== null) result = applyOperation(ab, ops[1], diceSlots[2]!)
+    } else {
+      const bc = applyOperation(diceSlots[1]!, ops[1], diceSlots[2]!)
+      if (bc !== null) result = applyOperation(diceSlots[0]!, ops[0], bc)
+    }
+  }
+
+  if (result === null) return { valid: false, result: null }
+  if (!Number.isInteger(result) || result < 0) return { valid: false, result }
+
+  return { valid: true, result }
 }

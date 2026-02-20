@@ -73,6 +73,7 @@ export type GameAction =
   | { type: 'DRAW_CARD' }
   | { type: 'CALL_LOLOS' }
   | { type: 'END_TURN' }
+  | { type: 'CONFIRM_EQUATION'; equationResult: number }
   | { type: 'SET_MESSAGE'; message: string }
   | { type: 'OPEN_JOKER_MODAL'; card: Card }
   | { type: 'CLOSE_JOKER_MODAL' }

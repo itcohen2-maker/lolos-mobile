@@ -4,6 +4,7 @@ import { useGame } from '../../hooks/useGame'
 import { Operation } from '../../types/game'
 import Button from '../ui/Button'
 import Modal from '../ui/Modal'
+import EquationBuilder from './EquationBuilder'
 
 export default function ActionBar() {
   const { state, dispatch } = useGame()
@@ -13,9 +14,6 @@ export default function ActionBar() {
   const isSelectPhase = state.phase === 'select-cards'
   const hasPlayed = state.hasPlayedCards
   const hasActiveOp = isSelectPhase && !!state.activeOperation && !hasPlayed
-
-  const selectedNumber = state.selectedCards.filter((c) => c.type === 'number')
-  const canPlayNumbers = isSelectPhase && !hasActiveOp && selectedNumber.length > 0
 
   const canCallLolos =
     isSelectPhase && currentPlayer.hand.length === 1 && !currentPlayer.calledLolos
@@ -42,19 +40,16 @@ export default function ActionBar() {
         </View>
       )}
 
-      {/* Play actions — essential controls only, no card-type hints */}
+      {/* Equation Builder + Draw — only when not in operation challenge and haven't played */}
       {isSelectPhase && !hasActiveOp && !hasPlayed && (
-        <View style={styles.row}>
-          {canPlayNumbers && (
-            <Button variant="success" onPress={() => dispatch({ type: 'PLAY_CARDS' })}>
-              {`שחק (${selectedNumber.reduce((s, c) => s + (c.value ?? 0), 0)})`}
+        <>
+          <EquationBuilder />
+          <View style={styles.row}>
+            <Button variant="secondary" onPress={() => dispatch({ type: 'DRAW_CARD' })}>
+              שלוף קלף
             </Button>
-          )}
-
-          <Button variant="secondary" onPress={() => dispatch({ type: 'DRAW_CARD' })}>
-            שלוף קלף
-          </Button>
-        </View>
+          </View>
+        </>
       )}
 
       {/* LOLOS + End Turn (End Turn only enabled after playing or drawing) */}

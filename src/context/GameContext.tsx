@@ -232,6 +232,54 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...newState, phase: 'select-cards' }
     }
 
+    case 'CONFIRM_EQUATION': {
+      if (state.hasPlayedCards) {
+        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+      }
+      if (state.selectedCards.length === 0) {
+        return { ...state, message: 'בחר/י לפחות קלף אחד לשחק!' }
+      }
+      const eqNumberCards = state.selectedCards.filter((c) => c.type === 'number')
+      if (eqNumberCards.length !== state.selectedCards.length) {
+        return { ...state, message: 'ניתן לשחק רק קלפי מספר בפעולה זו!' }
+      }
+      const eqCardSum = eqNumberCards.reduce((s, c) => s + (c.value ?? 0), 0)
+
+      // Strict validation: equation result must match card sum AND be a valid target
+      if (action.equationResult !== eqCardSum) {
+        return { ...state, message: 'המשוואה אינה נכונה או חסרה!' }
+      }
+      const eqMatchedTarget = state.validTargets.find((t) => t.result === action.equationResult)
+      if (!eqMatchedTarget) {
+        return { ...state, message: 'המשוואה אינה נכונה או חסרה!' }
+      }
+
+      const eqPlayedIds = new Set(state.selectedCards.map((c) => c.id))
+      const eqCurrentPlayer = state.players[state.currentPlayerIndex]
+      const eqNewHand = eqCurrentPlayer.hand.filter((c) => !eqPlayedIds.has(c.id))
+      const eqNewDiscard = [...state.discardPile, ...state.selectedCards]
+
+      const eqNewPlayers = state.players.map((p, i) =>
+        i === state.currentPlayerIndex ? { ...p, hand: eqNewHand } : p
+      )
+
+      let eqNewState: GameState = {
+        ...state,
+        players: eqNewPlayers,
+        discardPile: eqNewDiscard,
+        selectedCards: [],
+        identicalPlayCount: 0,
+        targetNumber: null,
+        hasPlayedCards: true,
+        message: 'קלפים שוחקו! סיים/י את התור.',
+      }
+
+      eqNewState = checkWin(eqNewState)
+      if (eqNewState.phase === 'game-over') return eqNewState
+
+      return { ...eqNewState, phase: 'select-cards' }
+    }
+
     case 'PLAY_IDENTICAL': {
       if (state.hasPlayedCards) {
         return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }

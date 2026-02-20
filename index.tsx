@@ -1,10 +1,5 @@
 // ============================================================
-// Index.tsx — Lolos Card Game — Strict 4-Phase Flow + Joker
-// ============================================================
-// Phase 1 (pre-roll):  Hand visible, match identical cards, roll
-// Phase 2 (building):  Dice rolled, equation builder, hand LOCKED
-// Phase 3 (solved):    Equation correct, hand UNLOCKED, pick cards
-// Phase 4 (confirm):   אשר after equation solved + cards selected
+// index.tsx — Lolos Card Game — SINGLE FILE
 // ============================================================
 
 import React, { useState, useEffect, useRef, createContext, useContext, useReducer } from 'react';
@@ -14,6 +9,7 @@ import {
   StyleSheet, Animated, Dimensions, Modal as RNModal,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { registerRootComponent } from 'expo';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
@@ -67,10 +63,6 @@ interface GameState {
   lastCardValue: number | null;
   identicalPlayCount: number;
   jokerModalOpen: boolean;
-  jokerCelebration: boolean;
-  jokerEquationActive: boolean;
-  jokerEquationOp: Operation | null;
-  jokerCard: Card | null;
   difficulty: 'easy' | 'full';
   winner: Player | null;
   message: string;
@@ -94,12 +86,10 @@ type GameAction =
   | { type: 'SET_MESSAGE'; message: string }
   | { type: 'OPEN_JOKER_MODAL'; card: Card }
   | { type: 'CLOSE_JOKER_MODAL' }
-  | { type: 'HIDE_JOKER_CELEBRATION' }
-  | { type: 'REOPEN_JOKER_PICKER' }
   | { type: 'RESET_GAME' };
 
 // ═══════════════════════════════════════════════════════════════
-//  ARITHMETIC
+//  ARITHMETIC — strict Left-to-Right
 // ═══════════════════════════════════════════════════════════════
 
 function applyOperation(a: number, op: Operation, b: number): number | null {
@@ -129,7 +119,8 @@ function validateFractionPlay(card: Card, topDiscard: Card | undefined): boolean
 
 const EQ_OPS_STR = ['+', '-', '*', '/'];
 
-function computeSlotResult(
+// getCurrentResult: (Slot1 [Op1] Slot2) then optionally ([Result] [Op2] Slot3)
+function getCurrentResult(
   s1: number | null, op1: string, s2: number | null, op2: string, s3: number | null,
 ): number | null {
   const calc = (x: number, op: string, y: number): number | null => {
@@ -140,10 +131,10 @@ function computeSlotResult(
     }
   };
   if (s1 === null || s2 === null) return null;
-  const ab = calc(s1, op1, s2);
-  if (ab === null) return null;
-  if (s3 !== null) return calc(ab, op2, s3);
-  return ab;
+  const intermediate = calc(s1, op1, s2);
+  if (intermediate === null) return null;
+  if (s3 !== null) return calc(intermediate, op2, s3);
+  return intermediate;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -228,6 +219,7 @@ function generateValidTargets(dice: DiceResult): EquationOption[] {
   const seen = new Set<string>();
   const results: EquationOption[] = [];
 
+  // Strict left-to-right: (a op1 b) op2 c
   for (const [a, b, c] of perms) {
     for (const op1 of ALL_OPS) {
       for (const op2 of ALL_OPS) {
@@ -235,16 +227,15 @@ function generateValidTargets(dice: DiceResult): EquationOption[] {
         if (ab !== null) {
           const r = applyOperation(ab, op2, c);
           if (r !== null && r >= 0 && Number.isInteger(r)) {
-            const eq = `(${a} ${op1} ${b}) ${op2} ${c} = ${r}`;
+            const eq = `${a} ${op1} ${b} ${op2} ${c} = ${r}`;
             if (!seen.has(`${r}:${eq}`)) { seen.add(`${r}:${eq}`); results.push({ equation: eq, result: r }); }
           }
         }
-        // Removed: no PEMDAS grouping — all calculations are strictly left-to-right
       }
     }
   }
 
-  // 2-dice combinations (3rd die optional)
+  // 2-dice pairs
   const pairs: [number, number][] = [
     [values[0], values[1]], [values[0], values[2]], [values[1], values[2]],
   ];
@@ -295,9 +286,7 @@ const initialState: GameState = {
   dice: null, selectedCards: [], validTargets: [], equationResult: null,
   activeOperation: null, activeFraction: null, pendingFractionTarget: null,
   fractionPenalty: 0, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
-  identicalPlayCount: 0, jokerModalOpen: false,
-  jokerCelebration: false, jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
-  difficulty: 'full', winner: null, message: '',
+  identicalPlayCount: 0, jokerModalOpen: false, difficulty: 'full', winner: null, message: '',
 };
 
 function reshuffleDiscard(st: GameState): GameState {
@@ -358,8 +347,6 @@ function endTurnLogic(st: GameState): GameState {
     activeFraction: null, identicalPlayCount: 0, hasPlayedCards: false,
     hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null,
     fractionPenalty: 0,
-    jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
-    jokerCelebration: false, jokerModalOpen: false,
   };
 }
 
@@ -393,8 +380,6 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         selectedCards: [], equationResult: null, validTargets: [],
         message: '', activeOperation: null, hasPlayedCards: false, hasDrawnCard: false,
         lastCardValue: null, pendingFractionTarget: null, fractionPenalty: 0,
-        jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
-        jokerCelebration: false, jokerModalOpen: false,
       };
     }
 
@@ -430,39 +415,37 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         ns = s;
       }
       const vt = generateValidTargets(dice);
-      return { ...ns, validTargets: vt, phase: 'building', message: ns.message || (vt.length === 0 ? 'אין מספרים תקינים מהקוביות.' : '') };
+      return { ...ns, validTargets: vt, phase: 'building', message: ns.message || '' };
     }
 
     case 'CONFIRM_EQUATION': {
       if (st.phase !== 'building') return st;
-      return { ...st, phase: 'solved', equationResult: action.result, message: `נכון! בחר/י קלפים שסכומם ${action.result}` };
+      return { ...st, phase: 'solved', equationResult: action.result, message: '' };
     }
 
     case 'SELECT_CARD': {
-      if (st.phase !== 'solved' && st.phase !== 'building') return { ...st, message: 'פתור/י קודם את המשוואה!' };
+      if (st.phase !== 'solved' && st.phase !== 'building') return st;
       if (st.hasPlayedCards) return st;
       const isSel = st.selectedCards.some(c => c.id === action.card.id);
       return { ...st, selectedCards: isSel ? st.selectedCards.filter(c => c.id !== action.card.id) : [...st.selectedCards, action.card], message: '' };
     }
 
     case 'DISCARD_AND_END': {
-      if (st.phase !== 'solved') return { ...st, message: 'פתור/י קודם את המשוואה!' };
-      if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים בתור הזה!' };
-      if (st.selectedCards.length === 0) return { ...st, message: 'בחר/י לפחות קלף אחד!' };
+      if (st.phase !== 'solved') return st;
+      if (st.hasPlayedCards) return st;
+      if (st.selectedCards.length === 0) return st;
 
       // Fraction defense
       if (st.pendingFractionTarget !== null) {
         const nums = st.selectedCards.filter(c => c.type === 'number');
-        if (nums.length !== 1 || nums[0].value !== st.pendingFractionTarget) {
-          return { ...st, message: `חובה להניח קלף עם הערך ${st.pendingFractionTarget} כדי להגן!` };
-        }
+        if (nums.length !== 1 || nums[0].value !== st.pendingFractionTarget) return st;
         const defId = nums[0].id;
         const cp = st.players[st.currentPlayerIndex];
         const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== defId) } : p);
         let ns: GameState = {
           ...st, players: np, discardPile: [...st.discardPile, nums[0]],
           selectedCards: [], hasPlayedCards: true, pendingFractionTarget: null, fractionPenalty: 0,
-          lastCardValue: nums[0].value ?? null, message: `הגנה הצליחה! הונח קלף ${st.pendingFractionTarget}.`,
+          lastCardValue: nums[0].value ?? null, message: '',
         };
         ns = checkWin(ns);
         return ns.phase === 'game-over' ? ns : { ...ns, phase: 'solved' };
@@ -470,19 +453,15 @@ function gameReducer(st: GameState, action: GameAction): GameState {
 
       // Normal: selected number cards must sum to equationResult
       const nums = st.selectedCards.filter(c => c.type === 'number');
-      if (nums.length !== st.selectedCards.length) return { ...st, message: 'ניתן לשחק רק קלפי מספר!' };
+      if (nums.length !== st.selectedCards.length) return st;
       const sum = nums.reduce((s, c) => s + (c.value ?? 0), 0);
-      if (st.equationResult !== null && sum !== st.equationResult) {
-        return { ...st, message: `הסכום ${sum} לא תואם את תוצאת המשוואה ${st.equationResult}!` };
-      }
-      if (!st.validTargets.some(t => t.result === sum)) {
-        return { ...st, message: `הסכום ${sum} לא תואם אף תוצאת קוביות.` };
-      }
+      if (st.equationResult !== null && sum !== st.equationResult) return st;
+      if (!st.validTargets.some(t => t.result === sum)) return st;
       const ids = new Set(st.selectedCards.map(c => c.id));
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => !ids.has(c.id)) } : p);
       const lastVal = nums[nums.length - 1].value ?? null;
-      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, ...st.selectedCards], selectedCards: [], identicalPlayCount: 0, hasPlayedCards: true, lastCardValue: lastVal, message: 'קלפים שוחקו!' };
+      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, ...st.selectedCards], selectedCards: [], identicalPlayCount: 0, hasPlayedCards: true, lastCardValue: lastVal, message: '' };
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       return endTurnLogic(ns);
@@ -491,34 +470,32 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     case 'PLAY_IDENTICAL': {
       if (st.phase !== 'pre-roll') return st;
       const td = st.discardPile[st.discardPile.length - 1];
-      if (!validateIdenticalPlay(action.card, td)) return { ...st, message: 'הקלף לא תואם את הקלף העליון!' };
+      if (!validateIdenticalPlay(action.card, td)) return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
       const identVal = action.card.type === 'number' ? action.card.value ?? null : null;
-      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], hasPlayedCards: true, lastCardValue: identVal, message: 'קלף תואם לערימה! התור נגמר.' };
+      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], hasPlayedCards: true, lastCardValue: identVal, message: '' };
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       return endTurnLogic(ns);
     }
 
     case 'PLAY_OPERATION': {
-      if (st.phase !== 'pre-roll' && st.phase !== 'solved') return st;
-      if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים בתור הזה!' };
-      if (action.card.type !== 'operation') return { ...st, message: 'זה לא קלף פעולה!' };
+      if (st.phase !== 'pre-roll' && st.phase !== 'solved' && st.phase !== 'building') return st;
+      if (st.hasPlayedCards) return st;
+      if (action.card.type !== 'operation') return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], activeOperation: action.card.operation!, selectedCards: [], hasPlayedCards: true, message: `שוחק קלף פעולה ${action.card.operation}!` };
+      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], activeOperation: action.card.operation!, selectedCards: [], hasPlayedCards: true, message: '' };
       ns = checkWin(ns);
       return ns;
     }
 
     case 'PLAY_FRACTION': {
-      if (st.phase !== 'solved') return st;
-      if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים בתור הזה!' };
+      if (st.phase !== 'solved' && st.phase !== 'building') return st;
+      if (st.hasPlayedCards) return st;
       const td = st.discardPile[st.discardPile.length - 1];
-      if (!validateFractionPlay(action.card, td)) {
-        return { ...st, message: `לא ניתן להניח ${action.card.fraction} על ${td?.value}. זה לא מתחלק!` };
-      }
+      if (!validateFractionPlay(action.card, td)) return st;
       const cp = st.players[st.currentPlayerIndex];
       const denom = fractionDenominator(action.card.fraction!);
       const requiredResult = td.value! / denom;
@@ -526,85 +503,48 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       let ns: GameState = {
         ...st, players: np, discardPile: [...st.discardPile, action.card],
         selectedCards: [], hasPlayedCards: true,
-        pendingFractionTarget: requiredResult, fractionPenalty: denom,
-        message: `התקפת שבר! ${td.value} ÷ ${denom} = ${requiredResult}. היריב/ה חייב/ת להניח ${requiredResult} או לשלוף ${denom} קלפים!`,
+        pendingFractionTarget: requiredResult, fractionPenalty: denom, message: '',
       };
       ns = checkWin(ns);
       return ns;
     }
 
     case 'OPEN_JOKER_MODAL':
-      return { ...st, jokerModalOpen: true, jokerCelebration: true, selectedCards: [action.card] };
+      return { ...st, jokerModalOpen: true, selectedCards: [action.card] };
     case 'CLOSE_JOKER_MODAL':
-      return { ...st, jokerModalOpen: false, jokerCelebration: false, selectedCards: [] };
+      return { ...st, jokerModalOpen: false, selectedCards: [] };
 
     case 'PLAY_JOKER': {
-      // Reopening picker to change operation on already-placed joker
-      if (st.jokerEquationActive) {
-        return {
-          ...st, jokerEquationOp: action.chosenOperation,
-          jokerModalOpen: false, jokerCelebration: false,
-          message: `פעולת הג'וקר שונתה ל-${action.chosenOperation}!`,
-        };
-      }
       const cp = st.players[st.currentPlayerIndex];
-      const np = st.players.map((p, i) => i === st.currentPlayerIndex
-        ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      // Defense scenario: play joker as operation attack
-      if (st.activeOperation && !st.hasPlayedCards) {
-        let ns: GameState = {
-          ...st, players: np,
-          discardPile: [...st.discardPile, action.card],
-          activeOperation: action.chosenOperation,
-          selectedCards: [], jokerModalOpen: false, jokerCelebration: false,
-          hasPlayedCards: true,
-          message: `ג'וקר שוחק כ-${action.chosenOperation}!`,
-        };
-        ns = checkWin(ns);
-        return ns;
-      }
-      // Equation builder integration: joker occupies an operation slot
-      let ns: GameState = {
-        ...st, players: np,
-        discardPile: [...st.discardPile, action.card],
-        jokerEquationActive: true,
-        jokerEquationOp: action.chosenOperation,
-        jokerCard: action.card,
-        selectedCards: [], jokerModalOpen: false, jokerCelebration: false,
-        message: `ג'וקר הופעל כ-${action.chosenOperation}!`,
-      };
+      const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
+      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], activeOperation: action.chosenOperation, selectedCards: [], jokerModalOpen: false, hasPlayedCards: true, message: '' };
       ns = checkWin(ns);
       return ns;
     }
 
     case 'DRAW_CARD': {
-      if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים! סיים/י תור.' };
-      if (st.hasDrawnCard) return { ...st, message: 'כבר שלפת קלף בתור הזה!' };
+      if (st.hasPlayedCards) return st;
+      if (st.hasDrawnCard) return st;
       let s = reshuffleDiscard(st);
-      if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: 'אין קלפים לשליפה!' };
+      if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: '' };
       const drawnCard = s.drawPile[0];
       s = drawFromPile(s, 1, s.currentPlayerIndex);
       s = { ...s, hasDrawnCard: true };
       const topDiscard = s.discardPile[s.discardPile.length - 1];
       if (drawnCard.type === 'number' && topDiscard && topDiscard.type === 'number' && drawnCard.value === topDiscard.value) {
-        const result = endTurnLogic(s);
-        return { ...result, message: 'קלף זהה! חוק לולוס מופעל — התור נגמר.' };
+        return endTurnLogic(s);
       }
       return endTurnLogic(s);
     }
 
     case 'CALL_LOLOS': {
       const cp = st.players[st.currentPlayerIndex];
-      if (cp.hand.length > 2) return { ...st, message: 'ניתן לקרוא לולוס רק עם קלף אחד או שניים ביד!' };
+      if (cp.hand.length > 2) return st;
       return { ...st, players: st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, calledLolos: true } : p), message: `${cp.name} קרא/ה לולוס!` };
     }
 
     case 'END_TURN': return endTurnLogic(st);
     case 'SET_MESSAGE': return { ...st, message: action.message };
-    case 'HIDE_JOKER_CELEBRATION':
-      return { ...st, jokerCelebration: false };
-    case 'REOPEN_JOKER_PICKER':
-      return { ...st, jokerModalOpen: true };
     case 'RESET_GAME': return initialState;
     default: return st;
   }
@@ -685,97 +625,35 @@ const mS = StyleSheet.create({
 //  BASE CARD
 // ═══════════════════════════════════════════════════════════════
 
-function BaseCard({ children, borderColor = '#9CA3AF', bgColor = '#FFF', bgGradient, selected = false, onPress, faceDown = false, small = false }: {
-  children: React.ReactNode; borderColor?: string; bgColor?: string; bgGradient?: [string, string]; selected?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
+function BaseCard({ children, borderColor = '#9CA3AF', bgColor = '#FFF', selected = false, onPress, faceDown = false, small = false }: {
+  children: React.ReactNode; borderColor?: string; bgColor?: string; selected?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
 }) {
   const w = small ? 52 : 72;
   const h = small ? 76 : 104;
   const fade = useRef(new Animated.Value(0)).current;
   useEffect(() => { Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start(); }, []);
 
-  // ── Face-down card (draw pile) ──
   if (faceDown) return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
-      <View style={{
-        width: w, height: h, borderRadius: 12,
-        backgroundColor: '#312E81',
-        borderWidth: 2, borderColor: '#818CF8',
-        borderBottomWidth: small ? 4 : 5, borderBottomColor: '#1E1B4B',
-        alignItems: 'center', justifyContent: 'center',
-        shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.35, shadowRadius: 6, elevation: 6,
-      }}>
-        {/* Inner glow circle */}
-        <View style={{
-          width: 28, height: 28, borderRadius: 14,
-          borderWidth: 2, borderColor: 'rgba(129,140,248,0.5)',
-          backgroundColor: 'rgba(129,140,248,0.1)',
-        }} />
-        {/* Top gloss */}
-        <View style={{
-          position: 'absolute', top: 0, left: 0, right: 0,
-          height: small ? 24 : 34, borderTopLeftRadius: 10, borderTopRightRadius: 10,
-          backgroundColor: 'rgba(255,255,255,0.08)',
-        }} />
+      <View style={[cardS.card, { width: w, height: h, backgroundColor: '#312E81', borderColor: '#818CF8' }]}>
+        <View style={{ width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: 'rgba(129,140,248,0.4)' }} />
       </View>
     </TouchableOpacity>
   );
-
-  // ── Face-up card ──
-  const bg = bgGradient ? bgGradient[0] : bgColor;
-  const edge = bgGradient ? bgGradient[1] : borderColor;
-  const glossH = small ? 24 : 34;
-
   return (
     <Animated.View style={{ opacity: fade }}>
       <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
-        {/* Outer wrapper — holds shadow (overflow visible) */}
-        <View style={{
-          width: w, height: h,
-          borderRadius: 12,
-          transform: [{ translateY: selected ? -6 : 0 }],
-          // 3D shadow
-          shadowColor: selected ? '#FACC15' : '#000',
-          shadowOffset: { width: 0, height: selected ? 6 : 4 },
-          shadowOpacity: selected ? 0.5 : 0.35,
-          shadowRadius: selected ? 10 : 6,
-          elevation: selected ? 10 : 6,
-        }}>
-          {/* Inner card — clips gradient to rounded rect */}
-          <View style={{
-            width: w, height: h,
-            borderRadius: 12, overflow: 'hidden',
-            backgroundColor: bg,
-            borderWidth: selected ? 2.5 : 2,
-            borderColor: selected ? '#FACC15' : borderColor,
-            // ── 3D bottom edge ──
-            borderBottomWidth: selected ? 6 : (small ? 4 : 5),
-            borderBottomColor: selected ? '#B45309' : edge,
-          }}>
-            {/* Two-tone gradient fill */}
-            {bgGradient && (
-              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                <View style={{ flex: 1, backgroundColor: bgGradient[0] }} />
-                <View style={{ flex: 1, backgroundColor: bgGradient[1] }} />
-              </View>
-            )}
-            {/* Top glossy shine */}
-            <View style={{
-              position: 'absolute', top: 0, left: 0, right: 0,
-              height: glossH,
-              backgroundColor: 'rgba(255,255,255,0.18)',
-              borderTopLeftRadius: 10, borderTopRightRadius: 10,
-            }} />
-            {/* Card content */}
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-              {children}
-            </View>
-          </View>
+        <View style={[cardS.card, { width: w, height: h, backgroundColor: bgColor, borderColor: selected ? '#FACC15' : borderColor, borderWidth: selected ? 2.5 : 2, transform: [{ translateY: selected ? -8 : 0 }] }, selected && cardS.sel]}>
+          {children}
         </View>
       </TouchableOpacity>
     </Animated.View>
   );
 }
+const cardS = StyleSheet.create({
+  card: { borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
+  sel: { shadowColor: '#FACC15', shadowOpacity: 0.4, elevation: 8 },
+});
 
 // ═══════════════════════════════════════════════════════════════
 //  DIE
@@ -811,74 +689,37 @@ const dieS = StyleSheet.create({
 //  CARD TYPE COMPONENTS
 // ═══════════════════════════════════════════════════════════════
 
-function getNumCol(v: number) {
-  if (v <= 9) return { border: '#60A5FA', grad: ['#3B82F6', '#0D9488'] as [string, string] };
-  if (v <= 19) return { border: '#4ADE80', grad: ['#22C55E', '#0D9488'] as [string, string] };
-  return { border: '#F87171', grad: ['#EF4444', '#E11D48'] as [string, string] };
-}
+function getNumCol(v: number) { if (v <= 9) return { b: '#3B82F6', t: '#2563EB' }; if (v <= 19) return { b: '#22C55E', t: '#16A34A' }; return { b: '#EF4444', t: '#DC2626' }; }
 
 function NumberCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
   const v = card.value ?? 0; const cl = getNumCol(v);
-  return (
-    <BaseCard borderColor={cl.border} bgGradient={cl.grad} selected={selected} onPress={onPress} small={small}>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 18 : 28, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-      }}>{v}</Text>
-      {!small && (
-        <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>מספר</Text>
-      )}
-    </BaseCard>
-  );
+  return <BaseCard borderColor={cl.b} bgColor="#FFF" selected={selected} onPress={onPress} small={small}>
+    <View style={{ alignItems: 'center' }}><Text style={{ color: cl.t, fontSize: small ? 18 : 24, fontWeight: '800' }}>{v}</Text>{!small && <Text style={{ color: '#9CA3AF', fontSize: 7, marginTop: 2 }}>מספר</Text>}</View>
+  </BaseCard>;
 }
 
 const fDisp: Record<string, { n: string; d: string; s: string }> = { '1/2': { n: '1', d: '2', s: '½' }, '1/3': { n: '1', d: '3', s: '⅓' }, '1/4': { n: '1', d: '4', s: '¼' }, '1/5': { n: '1', d: '5', s: '⅕' } };
 
 function FractionCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
   const f = fDisp[card.fraction ?? '1/2'];
-  const ts = { color: '#FFF', textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 } as any, textShadowRadius: 3 };
-  return (
-    <BaseCard borderColor="#A78BFA" bgGradient={['#8B5CF6', '#4338CA']} selected={selected} onPress={onPress} small={small}>
-      {small
-        ? <Text style={{ ...ts, fontSize: 20, fontWeight: '800' }}>{f.s}</Text>
-        : <View style={{ alignItems: 'center' }}>
-            <Text style={{ ...ts, fontSize: 20, fontWeight: '900', lineHeight: 24 }}>{f.n}</Text>
-            <View style={{ width: 24, height: 2.5, backgroundColor: 'rgba(255,255,255,0.6)', marginVertical: 2, borderRadius: 2 }} />
-            <Text style={{ ...ts, fontSize: 20, fontWeight: '900', lineHeight: 24 }}>{f.d}</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>שבר</Text>
-          </View>
-      }
-    </BaseCard>
-  );
+  return <BaseCard borderColor="#8B5CF6" bgColor="#F5F3FF" selected={selected} onPress={onPress} small={small}>
+    <View style={{ alignItems: 'center' }}>{small
+      ? <Text style={{ color: '#7C3AED', fontSize: 20, fontWeight: '800' }}>{f.s}</Text>
+      : <><Text style={{ color: '#7C3AED', fontSize: 18, fontWeight: '800', lineHeight: 22 }}>{f.n}</Text><View style={{ width: 22, height: 2, backgroundColor: '#A78BFA', marginVertical: 2 }} /><Text style={{ color: '#7C3AED', fontSize: 18, fontWeight: '800', lineHeight: 22 }}>{f.d}</Text><Text style={{ color: '#A78BFA', fontSize: 7, marginTop: 2 }}>שבר</Text></>
+    }</View>
+  </BaseCard>;
 }
 
 function OperationCardComp({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  return (
-    <BaseCard borderColor="#FB923C" bgGradient={['#F97316', '#DC2626']} selected={selected} onPress={onPress} small={small}>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 22 : 32, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-      }}>{card.operation}</Text>
-      {!small && (
-        <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>פעולה</Text>
-      )}
-    </BaseCard>
-  );
+  return <BaseCard borderColor="#F97316" bgColor="#FFF7ED" selected={selected} onPress={onPress} small={small}>
+    <View style={{ alignItems: 'center' }}><Text style={{ color: '#EA580C', fontSize: small ? 20 : 30, fontWeight: '800' }}>{card.operation}</Text>{!small && <Text style={{ color: '#FB923C', fontSize: 7, marginTop: 2 }}>פעולה</Text>}</View>
+  </BaseCard>;
 }
 
 function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  return (
-    <BaseCard borderColor="#FCD34D" bgGradient={['#FACC15', '#D97706']} selected={selected} onPress={onPress} small={small}>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 16 : 24,
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-      }}>★</Text>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 10 : 14, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
-      }}>ג'וקר</Text>
-    </BaseCard>
-  );
+  return <BaseCard borderColor="#EAB308" bgColor="#FEFCE8" selected={selected} onPress={onPress} small={small}>
+    <View style={{ alignItems: 'center' }}><Text style={{ color: '#CA8A04', fontSize: small ? 14 : 20 }}>★</Text><Text style={{ color: '#CA8A04', fontSize: small ? 10 : 13, fontWeight: '800' }}>ג'וקר</Text></View>
+  </BaseCard>;
 }
 
 function GameCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
@@ -897,34 +738,9 @@ function GameCard({ card, selected, onPress, small }: { card: Card; selected?: b
 function DrawPile() {
   const { state, dispatch } = useGame();
   const canDraw = (state.phase === 'pre-roll' || state.phase === 'building') && !state.hasPlayedCards;
-  const count = state.drawPile.length;
-
-  // Shared style for the stacked "ghost" cards behind the top card
-  const ghost = (rotate: string, dx: number, dy: number, bg: string): any => ({
-    position: 'absolute' as const, top: 4 + dy, left: 4 + dx,
-    width: 72, height: 104, borderRadius: 12,
-    backgroundColor: bg, borderWidth: 2, borderColor: '#818CF8',
-    borderBottomWidth: 4, borderBottomColor: '#1E1B4B',
-    transform: [{ rotate }],
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25, shadowRadius: 3, elevation: 3,
-  });
-
   return (
     <View style={{ alignItems: 'center' }}>
-      <View style={{ position: 'relative', width: 84, height: 116 }}>
-        {/* Bottom card — most rotated */}
-        {count > 4 && <View style={ghost('-5deg', -4, 3, '#272362')} />}
-        {/* Middle card */}
-        {count > 2 && <View style={ghost('3.5deg', 3, -2, '#2D2878')} />}
-        {/* Card just beneath top */}
-        {count > 1 && <View style={ghost('-1.5deg', -1, 1, '#312E81')} />}
-        {/* Tappable top card */}
-        <View style={{ position: 'absolute', top: 4, left: 6 }}>
-          <BaseCard faceDown onPress={canDraw ? () => dispatch({ type: 'DRAW_CARD' }) : undefined}><></></BaseCard>
-        </View>
-      </View>
-      <Text style={{ color: '#9CA3AF', fontSize: 10, marginTop: 2 }}>{count}</Text>
+      <BaseCard faceDown onPress={canDraw ? () => dispatch({ type: 'DRAW_CARD' }) : undefined}><></></BaseCard>
     </View>
   );
 }
@@ -968,98 +784,32 @@ function DiceArea() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  JOKER CELEBRATION — Golden flash + confetti burst + text
+//  CELEBRATION FLASH (Joker rainbow)
 // ═══════════════════════════════════════════════════════════════
 
-const GOLD_SHADES = ['#FFD700', '#FFA500', '#FACC15', '#F59E0B', '#EAB308', '#FDE68A'];
+const RAINBOW = ['#EF4444', '#F97316', '#EAB308', '#22C55E', '#3B82F6', '#8B5CF6'];
 
-function JokerCelebration() {
-  const { dispatch } = useGame();
-  const flashAnim = useRef(new Animated.Value(0)).current;
-  const textScale = useRef(new Animated.Value(0.3)).current;
-  const textOpacity = useRef(new Animated.Value(0)).current;
-  const fadeOut = useRef(new Animated.Value(1)).current;
-  const confettiPieces = useRef(
-    Array.from({ length: 40 }, () => ({
-      x: new Animated.Value(SCREEN_W / 2),
-      y: new Animated.Value(SCREEN_H / 2),
-      r: new Animated.Value(0),
-      c: GOLD_SHADES[Math.floor(Math.random() * GOLD_SHADES.length)],
-      targetX: Math.random() * SCREEN_W,
-      targetY: Math.random() * SCREEN_H,
-    }))
-  ).current;
-
+function CelebrationFlash({ onDone }: { onDone: () => void }) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  const colorIdx = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    // Golden flash
     Animated.sequence([
-      Animated.timing(flashAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
-      Animated.timing(flashAnim, { toValue: 0.25, duration: 350, useNativeDriver: true }),
-    ]).start();
-
-    // Text pop-in with spring
-    Animated.parallel([
-      Animated.spring(textScale, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
-      Animated.timing(textOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
-    ]).start();
-
-    // Confetti burst from center
-    confettiPieces.forEach((p) => {
-      Animated.parallel([
-        Animated.timing(p.x, { toValue: p.targetX, duration: 1200, useNativeDriver: true }),
-        Animated.timing(p.y, { toValue: p.targetY, duration: 1200, useNativeDriver: true }),
-        Animated.timing(p.r, { toValue: Math.random() * 720 - 360, duration: 1200, useNativeDriver: true }),
-      ]).start();
-    });
-
-    // Fade-out then dismiss
-    const fadeTimer = setTimeout(() => {
-      Animated.timing(fadeOut, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => {
-        dispatch({ type: 'HIDE_JOKER_CELEBRATION' });
-      });
-    }, 1800);
-    return () => clearTimeout(fadeTimer);
+      Animated.timing(colorIdx, { toValue: RAINBOW.length - 1, duration: 800, useNativeDriver: false }),
+      Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: false }),
+    ]).start(() => onDone());
   }, []);
-
+  const bg = colorIdx.interpolate({ inputRange: RAINBOW.map((_, i) => i), outputRange: RAINBOW });
   return (
-    <Animated.View style={[StyleSheet.absoluteFill, { zIndex: 9999, opacity: fadeOut }]} pointerEvents="none">
-      {/* Golden flash overlay */}
-      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFD700', opacity: flashAnim }]} />
-      {/* Confetti burst */}
-      {confettiPieces.map((p, i) => (
-        <Animated.View key={i} style={{
-          position: 'absolute', width: i % 3 === 0 ? 14 : 10, height: i % 3 === 0 ? 14 : 10,
-          borderRadius: i % 2 === 0 ? 7 : 2, backgroundColor: p.c,
-          transform: [
-            { translateX: p.x as any }, { translateY: p.y as any },
-            { rotateZ: p.r.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] }) as any },
-          ],
-        }} />
-      ))}
-      {/* Text overlay */}
-      <View style={{ ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' }}>
-        <Animated.View style={{ transform: [{ scale: textScale as any }], opacity: textOpacity, alignItems: 'center' }}>
-          <Text style={{
-            fontSize: 48, fontWeight: '900', color: '#FFF',
-            textShadowColor: '#B8860B', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12,
-            textAlign: 'center',
-          }}>
-            {'\u2605'} ג'וקר הופעל! {'\u2605'}
-          </Text>
-          <Text style={{
-            fontSize: 20, fontWeight: '700', color: '#FEFCE8', textAlign: 'center', marginTop: 10,
-            textShadowColor: '#B8860B', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6,
-          }}>
-            לוח הכפל שלך!
-          </Text>
-        </Animated.View>
+    <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: bg as any, opacity: opacity as any }]} pointerEvents="none">
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ fontSize: 60, fontWeight: '900', color: '#FFF' }}>★ ג'וקר! ★</Text>
       </View>
     </Animated.View>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  EQUATION BUILDER — Phase 2 (building) only
+//  EQUATION BUILDER
 // ═══════════════════════════════════════════════════════════════
 
 const SLOT_SZ = 46;
@@ -1071,17 +821,13 @@ function EquationBuilder() {
   const [slots, setSlots] = useState<(number | null)[]>([null, null, null]);
   const [op1, setOp1] = useState('+');
   const [op2, setOp2] = useState('+');
-  const [answer, setAnswer] = useState('');
-  const [checkMsg, setCheckMsg] = useState('');
   const [selectedDie, setSelectedDie] = useState<number | null>(null);
 
   const diceKey = state.dice ? `${state.dice.die1}-${state.dice.die2}-${state.dice.die3}` : '';
   useEffect(() => {
-    setSlots([null, null, null]); setOp1('+'); setOp2('+');
-    setAnswer(''); setCheckMsg(''); setSelectedDie(null);
+    setSlots([null, null, null]); setOp1('+'); setOp2('+'); setSelectedDie(null);
   }, [diceKey]);
 
-  // Only show during building phase
   if (state.phase !== 'building') return null;
   if (!state.dice) return null;
   if (state.activeOperation || state.pendingFractionTarget !== null) return null;
@@ -1095,7 +841,7 @@ function EquationBuilder() {
     const firstEmpty = slots.findIndex(s => s === null);
     if (firstEmpty !== -1) {
       const next = [...slots]; next[firstEmpty] = dieIndex;
-      setSlots(next); setSelectedDie(null); setCheckMsg('');
+      setSlots(next); setSelectedDie(null);
     } else { setSelectedDie(dieIndex); }
   };
 
@@ -1103,96 +849,39 @@ function EquationBuilder() {
     const current = slots[slotIndex];
     if (current !== null) {
       const next = [...slots]; next[slotIndex] = null;
-      setSlots(next); setCheckMsg(''); return;
+      setSlots(next); return;
     }
     if (selectedDie !== null) {
       const next = [...slots]; next[slotIndex] = selectedDie;
-      setSlots(next); setSelectedDie(null); setCheckMsg('');
+      setSlots(next); setSelectedDie(null);
     }
   };
 
   const cycleOp = (cur: string) => EQ_OPS_STR[(EQ_OPS_STR.indexOf(cur) + 1) % EQ_OPS_STR.length];
   const slotVal = (i: number): number | null => slots[i] !== null ? diceValues[slots[i]!] : null;
 
-  // Joker: convert game Operation format to equation format
-  const jokerToEqOp = (op: Operation): string => {
-    switch (op) { case 'x': return '*'; case '÷': return '/'; default: return op; }
-  };
-  const effectiveOp1 = state.jokerEquationActive && state.jokerEquationOp
-    ? jokerToEqOp(state.jokerEquationOp)
-    : op1;
+  // getCurrentResult(): strict L-to-R, 3rd slot optional
+  const currentResult = getCurrentResult(slotVal(0), op1, slotVal(1), op2, slotVal(2));
+
+  // targetCard = sum of selected hand number cards
+  const selectedNums = state.selectedCards.filter(c => c.type === 'number');
+  const targetCard = selectedNums.reduce((s, c) => s + (c.value ?? 0), 0);
+
+  // Single boolean
+  const isEquationValid = currentResult !== null
+    && selectedNums.length > 0
+    && currentResult === targetCard
+    && state.validTargets.some(t => t.result === currentResult);
 
   const handleConfirm = () => {
-    // Block if joker active but no operation chosen
-    if (state.jokerEquationActive && !state.jokerEquationOp) {
-      setCheckMsg('יש לבחור פעולה לג\'וקר!'); return;
-    }
-    if (slotVal(0) === null || slotVal(1) === null) {
-      setCheckMsg('הנח/י לפחות 2 קוביות!'); return;
-    }
-    const actual = computeSlotResult(slotVal(0), effectiveOp1, slotVal(1), op2, slotVal(2));
-    if (actual === null || !Number.isInteger(actual) || actual < 0) {
-      setCheckMsg('המשוואה אינה נכונה או חסרה!'); return;
-    }
-    const num = parseInt(answer, 10);
-    if (isNaN(num) || num !== actual) {
-      setCheckMsg('המשוואה אינה נכונה או חסרה!'); return;
-    }
-    if (!state.validTargets.some(t => t.result === actual)) {
-      setCheckMsg('המשוואה אינה נכונה או חסרה!'); return;
-    }
-    dispatch({ type: 'CONFIRM_EQUATION', result: actual });
-    // If cards are already selected during building, auto-discard them
-    // React processes sequential dispatches in order, so DISCARD_AND_END
-    // will see the solved state from CONFIRM_EQUATION
-    if (state.selectedCards.length > 0) {
-      dispatch({ type: 'DISCARD_AND_END' });
-    }
+    if (!isEquationValid) return;
+    dispatch({ type: 'CONFIRM_EQUATION', result: currentResult! });
+    dispatch({ type: 'DISCARD_AND_END' });
   };
-
-  const selNums = state.selectedCards.filter(c => c.type === 'number');
-  const selectedSum = selNums.reduce((s, c) => s + (c.value ?? 0), 0);
-  const hasCardsSelected = selNums.length > 0 && selNums.length === state.selectedCards.length;
-
-  const renderSlot = (idx: number) => {
-    const val = slotVal(idx);
-    const isEmpty = val === null;
-    return (
-      <TouchableOpacity key={`slot-${idx}`} style={[eqS.slot, isEmpty ? eqS.slotEmpty : eqS.slotFilled]}
-        onPress={() => handleSlotTap(idx)} activeOpacity={0.7}>
-        {isEmpty ? null : <Text style={eqS.slotValue}>{val}</Text>}
-      </TouchableOpacity>
-    );
-  };
-
-  const opToDisplay = (v: string) => { switch (v) { case '*': return 'x'; case '/': return '÷'; default: return v; } };
-
-  const renderOp = (value: string, setter: (v: string) => void, key: string) => (
-    <TouchableOpacity key={key} style={eqS.opCircle}
-      onPress={() => { setter(cycleOp(value)); setCheckMsg(''); }} activeOpacity={0.7}>
-      <Text style={eqS.opCircleText}>{opToDisplay(value)}</Text>
-    </TouchableOpacity>
-  );
-
-  // Joker operation circle — gold-bordered, tappable to reopen picker
-  const renderJokerOp = () => (
-    <TouchableOpacity key="joker-op" style={eqS.jokerOpCircle}
-      onPress={() => dispatch({ type: 'REOPEN_JOKER_PICKER' })} activeOpacity={0.7}>
-      <Text style={eqS.jokerOpStar}>{'\u2605'}</Text>
-      {state.jokerEquationOp && <Text style={eqS.jokerOpText}>{state.jokerEquationOp}</Text>}
-    </TouchableOpacity>
-  );
 
   return (
     <View style={eqS.wrapper}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Text style={eqS.title}>בנה/י משוואה מהקוביות</Text>
-        {state.jokerEquationActive && (
-          <View style={eqS.jokerBadge}>
-            <Text style={eqS.jokerBadgeText}>{'\u2605'} ג'וקר פעיל</Text>
-          </View>
-        )}
-      </View>
+      <Text style={eqS.title}>בנה/י משוואה מהקוביות</Text>
       <View style={eqS.poolRow}>
         {pool.map(i => (
           <TouchableOpacity key={`pool-${i}`} style={[eqS.poolDie, selectedDie === i && eqS.poolDieSelected]}
@@ -1200,44 +889,57 @@ function EquationBuilder() {
             <Text style={eqS.poolDieText}>{diceValues[i]}</Text>
           </TouchableOpacity>
         ))}
-        {pool.length === 0 && <Text style={eqS.poolHint}>כל הקוביות הוצבו</Text>}
       </View>
       <View style={eqS.eqRow}>
-        {renderSlot(0)}
-        {state.jokerEquationActive ? renderJokerOp() : renderOp(op1, setOp1, 'op1')}
-        {renderSlot(1)}
-        {renderOp(op2, setOp2, 'op2')}
-        {renderSlot(2)}
+        <TouchableOpacity style={[eqS.slot, slotVal(0) === null ? eqS.slotEmpty : eqS.slotFilled]}
+          onPress={() => handleSlotTap(0)} activeOpacity={0.7}>
+          {slotVal(0) !== null && <Text style={eqS.slotValue}>{slotVal(0)}</Text>}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={eqS.opCircle}
+          onPress={() => setOp1(cycleOp(op1))} activeOpacity={0.7}>
+          <Text style={eqS.opCircleText}>{op1}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[eqS.slot, slotVal(1) === null ? eqS.slotEmpty : eqS.slotFilled]}
+          onPress={() => handleSlotTap(1)} activeOpacity={0.7}>
+          {slotVal(1) !== null && <Text style={eqS.slotValue}>{slotVal(1)}</Text>}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={eqS.opCircle}
+          onPress={() => setOp2(cycleOp(op2))} activeOpacity={0.7}>
+          <Text style={eqS.opCircleText}>{op2}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[eqS.slot, slotVal(2) === null ? eqS.slotEmpty : eqS.slotFilled]}
+          onPress={() => handleSlotTap(2)} activeOpacity={0.7}>
+          {slotVal(2) !== null && <Text style={eqS.slotValue}>{slotVal(2)}</Text>}
+        </TouchableOpacity>
+
         <Text style={eqS.equals}>=</Text>
-        <TextInput style={eqS.inputBox} value={answer}
-          onChangeText={t => { setAnswer(t); setCheckMsg(''); }}
-          keyboardType="numeric" placeholder="?" placeholderTextColor="#555" textAlign="center" />
-        <TouchableOpacity style={[eqS.checkBtn, hasCardsSelected && { backgroundColor: '#2563EB' }]} onPress={handleConfirm} activeOpacity={0.7}>
-          <Text style={eqS.checkText}>{hasCardsSelected ? `אשר והנח (${selectedSum})` : 'אשר'}</Text>
+        <View style={[eqS.resultBox, currentResult !== null && eqS.resultBoxFilled]}>
+          <Text style={eqS.resultText}>{currentResult !== null ? currentResult : '?'}</Text>
+        </View>
+
+        <TouchableOpacity
+          style={[eqS.confirmBtn, isEquationValid ? eqS.confirmBtnOn : eqS.confirmBtnOff]}
+          onPress={handleConfirm}
+          disabled={!isEquationValid}
+          activeOpacity={0.7}>
+          <Text style={eqS.confirmText}>אשר</Text>
         </TouchableOpacity>
       </View>
-      {state.validTargets.length > 0 && (
-        <Text style={eqS.hintText}>תוצאות אפשריות: {state.validTargets.map(t => t.result).join(', ')}</Text>
-      )}
-      {!!checkMsg && <View style={eqS.msgBox}><Text style={eqS.msgText}>{checkMsg}</Text></View>}
     </View>
   );
 }
 
-const JOKER_OP_SZ = 38;
 const eqS = StyleSheet.create({
   wrapper: { backgroundColor: 'rgba(31,41,55,0.6)', borderRadius: 12, padding: 12, alignItems: 'center', gap: 10 },
   title: { color: '#93C5FD', fontSize: 14, fontWeight: '800', textAlign: 'center' },
-  jokerBadge: {
-    backgroundColor: 'rgba(234,179,8,0.25)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.5)',
-    borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2,
-  },
-  jokerBadgeText: { color: '#FDE68A', fontSize: 10, fontWeight: '700' },
   poolRow: { flexDirection: 'row', gap: 10, justifyContent: 'center', alignItems: 'center', minHeight: 42 },
   poolDie: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#FFF', borderWidth: 2, borderColor: '#93C5FD', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.15, shadowRadius: 2, elevation: 3 },
   poolDieSelected: { borderColor: '#FACC15', borderWidth: 2.5, shadowColor: '#FACC15', shadowOpacity: 0.4, elevation: 6 },
   poolDieText: { fontSize: 18, fontWeight: '800', color: '#1E40AF' },
-  poolHint: { color: '#6B7280', fontSize: 11, fontStyle: 'italic' },
   eqRow: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 5 },
   slot: { width: SLOT_SZ, height: SLOT_SZ, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   slotEmpty: { backgroundColor: 'rgba(55,65,81,0.4)', borderWidth: 2, borderStyle: 'dashed', borderColor: '#6B7280' },
@@ -1245,25 +947,18 @@ const eqS = StyleSheet.create({
   slotValue: { fontSize: 20, fontWeight: '800', color: '#1F2937' },
   opCircle: { width: OP_SZ, height: OP_SZ, borderRadius: OP_SZ / 2, backgroundColor: '#F97316', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 3 },
   opCircleText: { fontSize: 16, fontWeight: '800', color: '#FFF' },
-  jokerOpCircle: {
-    width: JOKER_OP_SZ, height: JOKER_OP_SZ, borderRadius: JOKER_OP_SZ / 2,
-    backgroundColor: '#FEFCE8', borderWidth: 2.5, borderColor: '#EAB308',
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#EAB308', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 4, elevation: 6,
-  },
-  jokerOpStar: { fontSize: 10, color: '#CA8A04', marginTop: -1 },
-  jokerOpText: { fontSize: 13, fontWeight: '900', color: '#92400E', marginTop: -2 },
   equals: { fontSize: 22, fontWeight: '800', color: '#9CA3AF', marginHorizontal: 2 },
-  inputBox: { width: SLOT_SZ, height: SLOT_SZ, borderRadius: 10, backgroundColor: '#1F2937', borderWidth: 2, borderColor: '#4B5563', color: '#FFF', fontSize: 20, fontWeight: '800', padding: 0 },
-  checkBtn: { backgroundColor: '#16A34A', paddingHorizontal: 12, height: SLOT_SZ, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  checkText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
-  hintText: { color: '#6B7280', fontSize: 11, textAlign: 'center' },
-  msgBox: { backgroundColor: 'rgba(234,179,8,0.15)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, width: '100%' },
-  msgText: { color: '#FDE68A', fontSize: 13, textAlign: 'center', fontWeight: '600' },
+  resultBox: { width: SLOT_SZ, height: SLOT_SZ, borderRadius: 10, backgroundColor: '#1F2937', borderWidth: 2, borderColor: '#4B5563', alignItems: 'center', justifyContent: 'center' },
+  resultBoxFilled: { borderColor: '#22C55E' },
+  resultText: { color: '#FFF', fontSize: 20, fontWeight: '800' },
+  confirmBtn: { paddingHorizontal: 12, height: SLOT_SZ, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  confirmBtnOn: { backgroundColor: '#16A34A' },
+  confirmBtnOff: { backgroundColor: '#4B5563', opacity: 0.5 },
+  confirmText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  ACTION BAR — Phase-aware buttons
+//  ACTION BAR
 // ═══════════════════════════════════════════════════════════════
 
 function ActionBar() {
@@ -1276,64 +971,46 @@ function ActionBar() {
   const isSolved = state.phase === 'solved';
   const hp = state.hasPlayedCards;
 
-  // Challenge states
   const hasOpChallenge = isPreRoll && !!state.activeOperation && !hp;
   const hasFracChallenge = isPreRoll && state.pendingFractionTarget !== null && !hp;
   const hasChallenge = hasOpChallenge || hasFracChallenge;
 
-  // Solved phase: select cards to discard
   const selNums = state.selectedCards.filter(c => c.type === 'number');
   const selectedSum = selNums.reduce((s, c) => s + (c.value ?? 0), 0);
   const canDiscard = isSolved && !hp && selNums.length > 0 && selNums.length === state.selectedCards.length;
 
-  // Fraction defense in solved phase
   const canDefendFrac = isSolved && state.pendingFractionTarget !== null && !hp
     && selNums.length === 1 && selNums[0].value === state.pendingFractionTarget;
 
-  const canCallLolos = (isPreRoll || isSolved) && cp.hand.length <= 2 && !cp.calledLolos && !hasChallenge;
+  const canCallLolos = (isPreRoll || isBuilding || isSolved) && cp.hand.length <= 2 && !cp.calledLolos && !hasChallenge;
 
   return (
     <View style={aS.container}>
-      {/* Phase 1: Operation challenge */}
       {hasOpChallenge && (
         <View style={aS.opSec}>
           <Text style={aS.opT}>אתגר פעולה: {state.activeOperation}</Text>
-          <Text style={aS.opH}>הגן/י עם קלף פעולה תואם או ג'וקר, או קבל/י עונש.</Text>
           <Btn variant="danger" size="sm" onPress={() => dispatch({ type: 'END_TURN' })}>קבל/י עונש</Btn>
         </View>
       )}
 
-      {/* Phase 1: Fraction challenge */}
       {hasFracChallenge && (
         <View style={aS.opSec}>
           <Text style={aS.opT}>התקפת שבר! נדרש: {state.pendingFractionTarget}</Text>
-          <Text style={aS.opH}>בחר/י קלף מספר {state.pendingFractionTarget} מהיד, או קבל/י {state.fractionPenalty} קלפי עונשין.</Text>
           <Btn variant="danger" size="sm" onPress={() => dispatch({ type: 'END_TURN' })}>
             {`קבל עונש (${state.fractionPenalty})`}
           </Btn>
         </View>
       )}
 
-      {/* Phase 2: Building — draw card to skip */}
       {isBuilding && !hp && (
         <View style={aS.row}>
           <Btn variant="secondary" size="sm" onPress={() => dispatch({ type: 'DRAW_CARD' })}>שלוף קלף (ויתור)</Btn>
         </View>
       )}
 
-      {/* Phase 3: Solved — banner */}
-      {isSolved && !hp && !state.pendingFractionTarget && (
-        <View style={aS.solvedBanner}>
-          <Text style={aS.solvedText}>משוואה פתורה! תוצאה: {state.equationResult}</Text>
-          <Text style={aS.solvedHint}>בחר/י קלפי מספר מהיד שסכומם {state.equationResult}</Text>
-        </View>
-      )}
-
-      {/* Phase 3: Fraction defense banner */}
       {isSolved && !hp && state.pendingFractionTarget !== null && (
         <View style={aS.opSec}>
           <Text style={aS.opT}>התקפת שבר! נדרש: {state.pendingFractionTarget}</Text>
-          <Text style={aS.opH}>בחר/י קלף מספר {state.pendingFractionTarget} מהיד.</Text>
           {canDefendFrac && (
             <Btn variant="success" size="sm" onPress={() => dispatch({ type: 'DISCARD_AND_END' })}>
               {`הגן (${state.pendingFractionTarget})`}
@@ -1342,7 +1019,6 @@ function ActionBar() {
         </View>
       )}
 
-      {/* Phase 4: Confirm — אשר button (equation solved + cards selected) */}
       {canDiscard && !state.pendingFractionTarget && (
         <View style={aS.row}>
           <Btn variant="success" onPress={() => dispatch({ type: 'DISCARD_AND_END' })}>
@@ -1351,48 +1027,24 @@ function ActionBar() {
         </View>
       )}
 
-      {/* End turn after playing cards */}
       {(isPreRoll || isSolved) && hp && (
         <View style={aS.row}>
           <Btn variant="secondary" onPress={() => dispatch({ type: 'END_TURN' })}>סיים תור</Btn>
         </View>
       )}
 
-      {/* Lolos button */}
       {canCallLolos && (
         <View style={aS.row}>
           <Btn variant="gold" size="lg" onPress={() => dispatch({ type: 'CALL_LOLOS' })}>לולוס!</Btn>
         </View>
       )}
 
-      {/* Messages */}
       {!!state.message && <View style={aS.msg}><Text style={aS.msgT}>{state.message}</Text></View>}
 
-      {/* Joker operation picker — hidden during celebration */}
-      <AppModal
-        visible={state.jokerModalOpen && !state.jokerCelebration}
-        onClose={() => dispatch({ type: 'CLOSE_JOKER_MODAL' })}
-        title="איזו פעולה הג'וקר מייצג?"
-      >
-        <View style={{ alignItems: 'center', marginBottom: 16 }}>
-          <Text style={{ color: '#FDE68A', fontSize: 36 }}>{'\u2605'}</Text>
-          <Text style={{ color: '#D1D5DB', fontSize: 14, textAlign: 'center', marginTop: 4 }}>
-            {state.jokerEquationActive
-              ? 'שנה/י את פעולת הג\'וקר במשוואה'
-              : 'בחר/י פעולה עבור הג\'וקר'}
-          </Text>
-        </View>
+      <AppModal visible={state.jokerModalOpen} onClose={() => dispatch({ type: 'CLOSE_JOKER_MODAL' })} title="בחר/י פעולה לג'וקר">
         <View style={aS.jGrid}>
           {(['+', '-', 'x', '÷'] as Operation[]).map(op => (
-            <TouchableOpacity key={op} style={aS.jBtn} activeOpacity={0.7}
-              onPress={() => {
-                const j = state.selectedCards[0];
-                if (j) dispatch({ type: 'PLAY_JOKER', card: j, chosenOperation: op });
-                else if (state.jokerEquationActive && state.jokerCard)
-                  dispatch({ type: 'PLAY_JOKER', card: state.jokerCard, chosenOperation: op });
-              }}>
-              <Text style={aS.jBtnText}>{op}</Text>
-            </TouchableOpacity>
+            <Btn key={op} variant="primary" size="lg" onPress={() => { const j = state.selectedCards[0]; if (j) dispatch({ type: 'PLAY_JOKER', card: j, chosenOperation: op }); }} style={{ width: '45%', minWidth: 100 }}>{op}</Btn>
           ))}
         </View>
       </AppModal>
@@ -1404,27 +1056,13 @@ const aS = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   opSec: { backgroundColor: 'rgba(154,52,18,0.2)', borderWidth: 1, borderColor: 'rgba(249,115,22,0.3)', borderRadius: 10, padding: 12 },
   opT: { color: '#FDBA74', fontSize: 13, fontWeight: '600', marginBottom: 4 },
-  opH: { color: '#9CA3AF', fontSize: 11, marginBottom: 8 },
   msg: { backgroundColor: 'rgba(234,179,8,0.1)', borderRadius: 10, padding: 10, alignItems: 'center' },
   msgT: { color: '#FDE68A', fontSize: 13, textAlign: 'center' },
-  jGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, justifyContent: 'center', paddingBottom: 8 },
-  jBtn: {
-    width: '42%', minWidth: 100, aspectRatio: 1.6,
-    backgroundColor: '#1F2937', borderWidth: 2.5, borderColor: '#EAB308',
-    borderRadius: 16, alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#EAB308', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 6, elevation: 6,
-  },
-  jBtnText: { fontSize: 36, fontWeight: '900', color: '#FACC15' },
-  solvedBanner: {
-    backgroundColor: 'rgba(34,197,94,0.15)', borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)',
-    borderRadius: 10, padding: 12, alignItems: 'center',
-  },
-  solvedText: { color: '#4ADE80', fontSize: 15, fontWeight: '700' },
-  solvedHint: { color: '#86EFAC', fontSize: 12, marginTop: 4 },
+  jGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  PLAYER HAND — Phase-aware opacity & interaction
+//  PLAYER HAND — always full opacity, always tappable
 // ═══════════════════════════════════════════════════════════════
 
 function PlayerHand() {
@@ -1437,7 +1075,6 @@ function PlayerHand() {
   const isSolved = state.phase === 'solved';
   const topDiscard = state.discardPile[state.discardPile.length - 1];
 
-  // Challenge in pre-roll
   const hasOpChallenge = isPreRoll && !!state.activeOperation && !state.hasPlayedCards;
   const hasFracChallenge = isPreRoll && state.pendingFractionTarget !== null && !state.hasPlayedCards;
 
@@ -1449,23 +1086,9 @@ function PlayerHand() {
   });
 
   const handleCardTap = (card: Card) => {
-    // Phase 2: building → select number cards for discard while building equation
-    if (isBuilding && !state.hasPlayedCards) {
-      if (card.type === 'number') {
-        dispatch({ type: 'SELECT_CARD', card });
-      } else if (card.type === 'joker') {
-        if (state.jokerEquationActive) {
-          dispatch({ type: 'SET_MESSAGE', message: "כבר יש ג'וקר במשוואה! לחץ/י עליו כדי לשנות פעולה." });
-        } else {
-          dispatch({ type: 'OPEN_JOKER_MODAL', card });
-        }
-      }
-      return;
-    }
+    if (state.hasPlayedCards) return;
 
-    // Phase 1: pre-roll
     if (isPreRoll) {
-      // Operation challenge defense
       if (hasOpChallenge) {
         if (card.type === 'operation' && card.operation === state.activeOperation) {
           dispatch({ type: 'PLAY_OPERATION', card });
@@ -1474,22 +1097,19 @@ function PlayerHand() {
         }
         return;
       }
-      // Fraction challenge defense
       if (hasFracChallenge) {
         if (card.type === 'number' && card.value === state.pendingFractionTarget) {
           dispatch({ type: 'SELECT_CARD', card });
         }
         return;
       }
-      // Normal pre-roll: only identical matching
       if (validateIdenticalPlay(card, topDiscard)) {
         dispatch({ type: 'PLAY_IDENTICAL', card });
       }
       return;
     }
 
-    // Phase 3: solved → select cards
-    if (isSolved && !state.hasPlayedCards) {
+    if (isBuilding || isSolved) {
       if (card.type === 'number') {
         dispatch({ type: 'SELECT_CARD', card });
       } else if (card.type === 'fraction') {
@@ -1497,25 +1117,9 @@ function PlayerHand() {
       } else if (card.type === 'operation') {
         dispatch({ type: 'PLAY_OPERATION', card });
       } else if (card.type === 'joker') {
-        if (state.jokerEquationActive) {
-          dispatch({ type: 'SET_MESSAGE', message: "כבר יש ג'וקר במשוואה! לחץ/י עליו כדי לשנות פעולה." });
-        } else {
-          dispatch({ type: 'OPEN_JOKER_MODAL', card });
-        }
+        dispatch({ type: 'OPEN_JOKER_MODAL', card });
       }
-      return;
     }
-  };
-
-  const isCardTappable = (card: Card): boolean => {
-    if (isBuilding && !state.hasPlayedCards) return card.type === 'number' || card.type === 'joker';
-    if (isPreRoll) {
-      if (hasOpChallenge) return (card.type === 'operation' && card.operation === state.activeOperation) || card.type === 'joker';
-      if (hasFracChallenge) return card.type === 'number' && card.value === state.pendingFractionTarget;
-      return validateIdenticalPlay(card, topDiscard);
-    }
-    if (isSolved && !state.hasPlayedCards) return true;
-    return false;
   };
 
   return (
@@ -1527,8 +1131,7 @@ function PlayerHand() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: 4, paddingBottom: 4 }}>
         {sorted.map(card => {
           const sel = state.selectedCards.some(c => c.id === card.id);
-          const tappable = isCardTappable(card);
-          return <GameCard key={card.id} card={card} selected={sel} small onPress={tappable ? () => handleCardTap(card) : undefined} />;
+          return <GameCard key={card.id} card={card} selected={sel} small onPress={() => handleCardTap(card)} />;
         })}
       </ScrollView>
     </View>
@@ -1592,8 +1195,7 @@ function StartScreen() {
           {[
             'כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!',
             'הטל 3 קוביות וצור מספר יעד באמצעות חשבון (הקובייה השלישית אופציונלית).',
-            'פתור את המשוואה קודם — רק אז תוכל/י לבחור קלפים מהיד.',
-            'שחק/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה.',
+            'בחר/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה.',
             'לפני הטלת קוביות: אם יש קלף תואם לערימה — לחץ עליו לסיום תור.',
             'כשנותר 1-2 קלפים — לחץ "לולוס!" לפני שתסיים, אחרת תשלוף עונשין.',
           ].map((r, i) => <Text key={i} style={ssS.rItem}>{i + 1}. {r}</Text>)}
@@ -1672,7 +1274,15 @@ const piS = StyleSheet.create({
 function GameScreen() {
   const { state, dispatch } = useGame();
   const cp = state.players[state.currentPlayerIndex];
-  // Celebration is now driven by state.jokerCelebration
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevJokerOpen = useRef(state.jokerModalOpen);
+
+  useEffect(() => {
+    if (prevJokerOpen.current && !state.jokerModalOpen && state.hasPlayedCards) {
+      setShowCelebration(true);
+    }
+    prevJokerOpen.current = state.jokerModalOpen;
+  }, [state.jokerModalOpen, state.hasPlayedCards]);
 
   return (
     <View style={gsS.container}>
@@ -1706,7 +1316,7 @@ function GameScreen() {
         <PlayerHand />
       </View>
 
-      {state.jokerCelebration && <JokerCelebration />}
+      {showCelebration && <CelebrationFlash onDone={() => setShowCelebration(false)} />}
     </View>
   );
 }
@@ -1769,7 +1379,7 @@ const goS = StyleSheet.create({
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  ROUTER + APP
+//  ROUTER + APP + REGISTER
 // ═══════════════════════════════════════════════════════════════
 
 function GameRouter() {
@@ -1785,7 +1395,7 @@ function GameRouter() {
   }
 }
 
-export default function App() {
+function App() {
   return (
     <GameProvider>
       <StatusBar style="light" />
@@ -1793,3 +1403,5 @@ export default function App() {
     </GameProvider>
   );
 }
+
+registerRootComponent(App);
