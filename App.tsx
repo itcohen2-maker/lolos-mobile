@@ -46,7 +46,7 @@ interface Player {
 interface DiceResult { die1: number; die2: number; die3: number; }
 interface EquationOption { equation: string; result: number; }
 
-type GamePhase = 'setup' | 'turn-transition' | 'pre-roll' | 'building' | 'solved' | 'game-over';
+type GamePhase = 'setup' | 'turn-transition' | 'pre-roll' | 'building' | 'solved' | 'fraction-attack' | 'game-over';
 
 interface GameState {
   phase: GamePhase;
@@ -62,6 +62,8 @@ interface GameState {
   activeFraction: Fraction | null;
   pendingFractionTarget: number | null;
   fractionPenalty: number;
+  attackingFraction: Fraction | null;
+  originalTargetValue: number | null;
   hasPlayedCards: boolean;
   hasDrawnCard: boolean;
   lastCardValue: number | null;
@@ -87,6 +89,9 @@ type GameAction =
   | { type: 'PLAY_IDENTICAL'; card: Card }
   | { type: 'PLAY_OPERATION'; card: Card }
   | { type: 'PLAY_FRACTION'; card: Card }
+  | { type: 'FRACTION_DEFEND_SOLVE'; card: Card }
+  | { type: 'FRACTION_DEFEND_BLOCK'; card: Card }
+  | { type: 'FRACTION_DRAW_PENALTY' }
   | { type: 'PLAY_JOKER'; card: Card; chosenOperation: Operation }
   | { type: 'DRAW_CARD' }
   | { type: 'CALL_LOLOS' }
@@ -294,7 +299,8 @@ const initialState: GameState = {
   phase: 'setup', players: [], currentPlayerIndex: 0, drawPile: [], discardPile: [],
   dice: null, selectedCards: [], validTargets: [], equationResult: null,
   activeOperation: null, activeFraction: null, pendingFractionTarget: null,
-  fractionPenalty: 0, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
+  fractionPenalty: 0, attackingFraction: null, originalTargetValue: null,
+  hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
   identicalPlayCount: 0, jokerModalOpen: false,
   jokerCelebration: false, jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
   difficulty: 'full', winner: null, message: '',
@@ -339,10 +345,7 @@ function endTurnLogic(st: GameState): GameState {
   } else if (s.activeOperation && s.hasPlayedCards) {
     keepOp = true;
   }
-  if (s.pendingFractionTarget !== null && !s.hasPlayedCards) {
-    s = drawFromPile(s, s.fractionPenalty, s.currentPlayerIndex);
-    s.message = `${s.players[s.currentPlayerIndex].name} לא הגן/ה! שלף/ה ${s.fractionPenalty} קלפי עונשין.`;
-  }
+  // Fraction penalty is now handled by FRACTION_DRAW_PENALTY — no auto-penalty here
   const up = s.players[s.currentPlayerIndex];
   if (up.hand.length === 1 && !up.calledLolos) {
     s = drawFromPile(s, 1, s.currentPlayerIndex);
@@ -357,7 +360,24 @@ function endTurnLogic(st: GameState): GameState {
     activeOperation: keepOp ? s.activeOperation : null,
     activeFraction: null, identicalPlayCount: 0, hasPlayedCards: false,
     hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null,
-    fractionPenalty: 0,
+    fractionPenalty: 0, attackingFraction: null, originalTargetValue: null,
+    jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
+    jokerCelebration: false, jokerModalOpen: false,
+  };
+}
+
+// Advance turn while preserving fraction attack state for the next player
+function advanceTurnWithAttack(st: GameState): GameState {
+  const next = (st.currentPlayerIndex + 1) % st.players.length;
+  return {
+    ...st,
+    players: st.players.map(p => ({ ...p, calledLolos: false })),
+    currentPlayerIndex: next, phase: 'turn-transition', dice: null,
+    selectedCards: [], equationResult: null, validTargets: [],
+    activeOperation: null, activeFraction: null,
+    identicalPlayCount: 0, hasPlayedCards: false,
+    hasDrawnCard: false, lastCardValue: null,
+    // Preserve fraction attack state: pendingFractionTarget, fractionPenalty, attackingFraction, originalTargetValue
     jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
     jokerCelebration: false, jokerModalOpen: false,
   };
@@ -393,6 +413,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         selectedCards: [], equationResult: null, validTargets: [],
         message: '', activeOperation: null, hasPlayedCards: false, hasDrawnCard: false,
         lastCardValue: null, pendingFractionTarget: null, fractionPenalty: 0,
+        attackingFraction: null, originalTargetValue: null,
         jokerEquationActive: false, jokerEquationOp: null, jokerCard: null,
         jokerCelebration: false, jokerModalOpen: false,
       };
@@ -406,14 +427,12 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         let s = drawFromPile(st, 2, st.currentPlayerIndex);
         return { ...s, phase: 'pre-roll', activeOperation: null, message: `אין הגנה מפני ${st.activeOperation}! שלפת 2 קלפי עונשין.` };
       }
+      // Fraction attack: route to fraction-attack phase
       if (st.pendingFractionTarget !== null) {
-        const cp = st.players[st.currentPlayerIndex];
-        const hasMatch = cp.hand.some(c => c.type === 'number' && c.value === st.pendingFractionTarget);
-        if (hasMatch) {
-          return { ...st, phase: 'pre-roll', message: `התקפת שבר! הנח/י קלף עם הערך ${st.pendingFractionTarget} או שלוף/י ${st.fractionPenalty} קלפים.` };
-        }
-        let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
-        return { ...s, phase: 'pre-roll', pendingFractionTarget: null, fractionPenalty: 0, message: `אין קלף ${st.pendingFractionTarget}! שלפת ${st.fractionPenalty} קלפי עונשין.` };
+        return {
+          ...st, phase: 'fraction-attack',
+          message: `⚠️ הותקפת! הנח ${st.pendingFractionTarget} או משוך ${st.fractionPenalty} קלפים`,
+        };
       }
       return { ...st, phase: 'pre-roll', message: '' };
     }
@@ -450,23 +469,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים בתור הזה!' };
       if (st.selectedCards.length === 0) return { ...st, message: 'בחר/י לפחות קלף אחד!' };
 
-      // Fraction defense
-      if (st.pendingFractionTarget !== null) {
-        const nums = st.selectedCards.filter(c => c.type === 'number');
-        if (nums.length !== 1 || nums[0].value !== st.pendingFractionTarget) {
-          return { ...st, message: `חובה להניח קלף עם הערך ${st.pendingFractionTarget} כדי להגן!` };
-        }
-        const defId = nums[0].id;
-        const cp = st.players[st.currentPlayerIndex];
-        const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== defId) } : p);
-        let ns: GameState = {
-          ...st, players: np, discardPile: [...st.discardPile, nums[0]],
-          selectedCards: [], hasPlayedCards: true, pendingFractionTarget: null, fractionPenalty: 0,
-          lastCardValue: nums[0].value ?? null, message: `הגנה הצליחה! הונח קלף ${st.pendingFractionTarget}.`,
-        };
-        ns = checkWin(ns);
-        return ns.phase === 'game-over' ? ns : { ...ns, phase: 'solved' };
-      }
+      // Fraction defense is now handled by FRACTION_DEFEND_SOLVE in fraction-attack phase
 
       // Normal: selected number cards must sum to equationResult
       const nums = st.selectedCards.filter(c => c.type === 'number');
@@ -513,7 +516,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     }
 
     case 'PLAY_FRACTION': {
-      if (st.phase !== 'solved') return st;
+      // Attack mode: allowed in pre-roll AND solved phases
+      if (st.phase !== 'pre-roll' && st.phase !== 'solved') return st;
       if (st.hasPlayedCards) return { ...st, message: 'כבר שיחקת קלפים בתור הזה!' };
       const td = st.discardPile[st.discardPile.length - 1];
       if (!validateFractionPlay(action.card, td)) {
@@ -527,10 +531,77 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         ...st, players: np, discardPile: [...st.discardPile, action.card],
         selectedCards: [], hasPlayedCards: true,
         pendingFractionTarget: requiredResult, fractionPenalty: denom,
+        attackingFraction: action.card.fraction as Fraction,
+        originalTargetValue: td.value!,
         message: `התקפת שבר! ${td.value} ÷ ${denom} = ${requiredResult}. היריב/ה חייב/ת להניח ${requiredResult} או לשלוף ${denom} קלפים!`,
       };
       ns = checkWin(ns);
-      return ns;
+      if (ns.phase === 'game-over') return ns;
+      // Turn ends immediately — advance to next player with attack pending
+      return advanceTurnWithAttack(ns);
+    }
+
+    // ── Fraction Attack Defense ──
+    case 'FRACTION_DEFEND_SOLVE': {
+      if (st.phase !== 'fraction-attack') return st;
+      if (action.card.type !== 'number' || action.card.value !== st.pendingFractionTarget) {
+        return { ...st, message: `חובה להניח קלף עם הערך ${st.pendingFractionTarget}!` };
+      }
+      const cp = st.players[st.currentPlayerIndex];
+      const np = st.players.map((p, i) => i === st.currentPlayerIndex
+        ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
+      let ns: GameState = {
+        ...st, players: np, discardPile: [...st.discardPile, action.card],
+        selectedCards: [], hasPlayedCards: true,
+        pendingFractionTarget: null, fractionPenalty: 0,
+        attackingFraction: null, originalTargetValue: null,
+        lastCardValue: action.card.value ?? null,
+        message: `הגנה הצליחה! הונח קלף ${st.pendingFractionTarget}.`,
+      };
+      ns = checkWin(ns);
+      if (ns.phase === 'game-over') return ns;
+      // Attack resolved — continue to normal pre-roll for this player
+      return { ...ns, phase: 'pre-roll' };
+    }
+
+    case 'FRACTION_DEFEND_BLOCK': {
+      if (st.phase !== 'fraction-attack') return st;
+      if (action.card.type !== 'fraction' || !action.card.fraction) {
+        return { ...st, message: 'חובה להניח קלף שבר כדי לחסום!' };
+      }
+      const blockDenom = fractionDenominator(action.card.fraction as Fraction);
+      if (st.pendingFractionTarget === null || st.pendingFractionTarget % blockDenom !== 0) {
+        return { ...st, message: `לא ניתן לחסום עם ${action.card.fraction}! ${st.pendingFractionTarget} לא מתחלק ב-${blockDenom}.` };
+      }
+      const newTarget = st.pendingFractionTarget / blockDenom;
+      const cp = st.players[st.currentPlayerIndex];
+      const np = st.players.map((p, i) => i === st.currentPlayerIndex
+        ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
+      let ns: GameState = {
+        ...st, players: np, discardPile: [...st.discardPile, action.card],
+        selectedCards: [], hasPlayedCards: true,
+        pendingFractionTarget: newTarget, fractionPenalty: blockDenom,
+        attackingFraction: action.card.fraction as Fraction,
+        originalTargetValue: st.pendingFractionTarget,
+        message: `חסימה! ${st.pendingFractionTarget} ÷ ${blockDenom} = ${newTarget}. השחקן הבא חייב להניח ${newTarget} או לשלוף ${blockDenom} קלפים!`,
+      };
+      ns = checkWin(ns);
+      if (ns.phase === 'game-over') return ns;
+      // Pass attack to next player
+      return advanceTurnWithAttack(ns);
+    }
+
+    case 'FRACTION_DRAW_PENALTY': {
+      if (st.phase !== 'fraction-attack') return st;
+      let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
+      s = {
+        ...s,
+        pendingFractionTarget: null, fractionPenalty: 0,
+        attackingFraction: null, originalTargetValue: null,
+        message: `${s.players[s.currentPlayerIndex].name} קיבל/ה ${st.fractionPenalty} קלפי עונשין!`,
+      };
+      // Penalty taken — continue to normal pre-roll for this player
+      return { ...s, phase: 'pre-roll' };
     }
 
     case 'OPEN_JOKER_MODAL':
@@ -948,6 +1019,8 @@ const dpS = StyleSheet.create({ empty: { width: 72, height: 104, borderRadius: 1
 function DiceArea() {
   const { state, dispatch } = useGame();
   const [rolling, setRolling] = useState(false);
+  // Hide dice completely during fraction-attack phase
+  if (state.phase === 'fraction-attack') return null;
   const handleRoll = () => {
     if (state.phase !== 'pre-roll') return;
     setRolling(true);
@@ -1263,6 +1336,80 @@ const eqS = StyleSheet.create({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  FRACTION ATTACK BANNER — Shown during fraction-attack phase
+// ═══════════════════════════════════════════════════════════════
+
+function FractionAttackBanner() {
+  const { state, dispatch } = useGame();
+  if (state.phase !== 'fraction-attack') return null;
+
+  const cp = state.players[state.currentPlayerIndex];
+  const hasMatchingNumber = cp?.hand.some(c => c.type === 'number' && c.value === state.pendingFractionTarget);
+  const hasBlockingFraction = cp?.hand.some(c => {
+    if (c.type !== 'fraction' || !c.fraction) return false;
+    const d = fractionDenominator(c.fraction as Fraction);
+    return state.pendingFractionTarget !== null && state.pendingFractionTarget % d === 0;
+  });
+
+  return (
+    <View style={fabS.container}>
+      {/* Danger header */}
+      <View style={fabS.header}>
+        <Text style={fabS.headerIcon}>⚠️</Text>
+        <Text style={fabS.headerText}>הותקפת בשבר!</Text>
+      </View>
+
+      {/* Target display: original ÷ denom = result */}
+      {state.originalTargetValue !== null && state.attackingFraction && (
+        <View style={fabS.targetRow}>
+          <Text style={fabS.origValue}>{state.originalTargetValue}</Text>
+          <Text style={fabS.divSign}>÷</Text>
+          <Text style={fabS.fracValue}>{fractionDenominator(state.attackingFraction)}</Text>
+          <Text style={fabS.eqSign}>=</Text>
+          <Text style={fabS.resultValue}>{state.pendingFractionTarget}</Text>
+        </View>
+      )}
+
+      {/* Instructions */}
+      <Text style={fabS.instruction}>
+        הנח קלף {state.pendingFractionTarget} • חסום עם שבר • או משוך {state.fractionPenalty} קלפים
+      </Text>
+
+      {/* Action buttons */}
+      <View style={fabS.btnRow}>
+        {hasMatchingNumber && (
+          <Text style={fabS.hint}>לחץ/י על קלף {state.pendingFractionTarget} מהיד כדי להגן</Text>
+        )}
+        {hasBlockingFraction && (
+          <Text style={fabS.hint}>לחץ/י על קלף שבר מהיד כדי לחסום</Text>
+        )}
+        <Btn variant="danger" size="md" onPress={() => dispatch({ type: 'FRACTION_DRAW_PENALTY' })}>
+          {`משוך ${state.fractionPenalty} קלפים`}
+        </Btn>
+      </View>
+    </View>
+  );
+}
+const fabS = StyleSheet.create({
+  container: {
+    backgroundColor: 'rgba(127,29,29,0.35)', borderWidth: 2, borderColor: 'rgba(239,68,68,0.5)',
+    borderRadius: 14, padding: 16, gap: 12, alignItems: 'center',
+  },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerIcon: { fontSize: 28 },
+  headerText: { color: '#FCA5A5', fontSize: 20, fontWeight: '900' },
+  targetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, direction: 'ltr' as any },
+  origValue: { color: '#D1D5DB', fontSize: 28, fontWeight: '800' },
+  divSign: { color: '#9CA3AF', fontSize: 24, fontWeight: '700' },
+  fracValue: { color: '#A78BFA', fontSize: 28, fontWeight: '800' },
+  eqSign: { color: '#9CA3AF', fontSize: 24, fontWeight: '700' },
+  resultValue: { color: '#EF4444', fontSize: 32, fontWeight: '900' },
+  instruction: { color: '#FCA5A5', fontSize: 13, textAlign: 'center', fontWeight: '600' },
+  btnRow: { alignItems: 'center', gap: 8, width: '100%' },
+  hint: { color: '#86EFAC', fontSize: 12, fontWeight: '600', textAlign: 'center' },
+});
+
+// ═══════════════════════════════════════════════════════════════
 //  ACTION BAR — Phase-aware buttons
 // ═══════════════════════════════════════════════════════════════
 
@@ -1276,21 +1423,15 @@ function ActionBar() {
   const isSolved = state.phase === 'solved';
   const hp = state.hasPlayedCards;
 
-  // Challenge states
+  // Challenge states (operation only — fraction attacks use FractionAttackBanner)
   const hasOpChallenge = isPreRoll && !!state.activeOperation && !hp;
-  const hasFracChallenge = isPreRoll && state.pendingFractionTarget !== null && !hp;
-  const hasChallenge = hasOpChallenge || hasFracChallenge;
 
   // Solved phase: select cards to discard
   const selNums = state.selectedCards.filter(c => c.type === 'number');
   const selectedSum = selNums.reduce((s, c) => s + (c.value ?? 0), 0);
   const canDiscard = isSolved && !hp && selNums.length > 0 && selNums.length === state.selectedCards.length;
 
-  // Fraction defense in solved phase
-  const canDefendFrac = isSolved && state.pendingFractionTarget !== null && !hp
-    && selNums.length === 1 && selNums[0].value === state.pendingFractionTarget;
-
-  const canCallLolos = (isPreRoll || isSolved) && cp.hand.length <= 2 && !cp.calledLolos && !hasChallenge;
+  const canCallLolos = (isPreRoll || isSolved) && cp.hand.length <= 2 && !cp.calledLolos && !hasOpChallenge;
 
   return (
     <View style={aS.container}>
@@ -1303,17 +1444,6 @@ function ActionBar() {
         </View>
       )}
 
-      {/* Phase 1: Fraction challenge */}
-      {hasFracChallenge && (
-        <View style={aS.opSec}>
-          <Text style={aS.opT}>התקפת שבר! נדרש: {state.pendingFractionTarget}</Text>
-          <Text style={aS.opH}>בחר/י קלף מספר {state.pendingFractionTarget} מהיד, או קבל/י {state.fractionPenalty} קלפי עונשין.</Text>
-          <Btn variant="danger" size="sm" onPress={() => dispatch({ type: 'END_TURN' })}>
-            {`קבל עונש (${state.fractionPenalty})`}
-          </Btn>
-        </View>
-      )}
-
       {/* Phase 2: Building — draw card to skip */}
       {isBuilding && !hp && (
         <View style={aS.row}>
@@ -1322,28 +1452,15 @@ function ActionBar() {
       )}
 
       {/* Phase 3: Solved — banner */}
-      {isSolved && !hp && !state.pendingFractionTarget && (
+      {isSolved && !hp && (
         <View style={aS.solvedBanner}>
           <Text style={aS.solvedText}>משוואה פתורה! תוצאה: {state.equationResult}</Text>
           <Text style={aS.solvedHint}>בחר/י קלפי מספר מהיד שסכומם {state.equationResult}</Text>
         </View>
       )}
 
-      {/* Phase 3: Fraction defense banner */}
-      {isSolved && !hp && state.pendingFractionTarget !== null && (
-        <View style={aS.opSec}>
-          <Text style={aS.opT}>התקפת שבר! נדרש: {state.pendingFractionTarget}</Text>
-          <Text style={aS.opH}>בחר/י קלף מספר {state.pendingFractionTarget} מהיד.</Text>
-          {canDefendFrac && (
-            <Btn variant="success" size="sm" onPress={() => dispatch({ type: 'DISCARD_AND_END' })}>
-              {`הגן (${state.pendingFractionTarget})`}
-            </Btn>
-          )}
-        </View>
-      )}
-
       {/* Phase 4: Confirm — אשר button (equation solved + cards selected) */}
-      {canDiscard && !state.pendingFractionTarget && (
+      {canDiscard && (
         <View style={aS.row}>
           <Btn variant="success" onPress={() => dispatch({ type: 'DISCARD_AND_END' })}>
             {`אשר והנח (${selectedSum})`}
@@ -1435,11 +1552,11 @@ function PlayerHand() {
   const isPreRoll = state.phase === 'pre-roll';
   const isBuilding = state.phase === 'building';
   const isSolved = state.phase === 'solved';
+  const isFractionAttack = state.phase === 'fraction-attack';
   const topDiscard = state.discardPile[state.discardPile.length - 1];
 
-  // Challenge in pre-roll
+  // Challenge in pre-roll (operation only)
   const hasOpChallenge = isPreRoll && !!state.activeOperation && !state.hasPlayedCards;
-  const hasFracChallenge = isPreRoll && state.pendingFractionTarget !== null && !state.hasPlayedCards;
 
   const sorted = [...cp.hand].sort((a, b) => {
     const o = { number: 0, fraction: 1, operation: 2, joker: 3 } as const;
@@ -1474,21 +1591,27 @@ function PlayerHand() {
         }
         return;
       }
-      // Fraction challenge defense
-      if (hasFracChallenge) {
-        if (card.type === 'number' && card.value === state.pendingFractionTarget) {
-          dispatch({ type: 'SELECT_CARD', card });
-        }
-        return;
-      }
-      // Normal pre-roll: only identical matching
+      // Normal pre-roll: identical matching or fraction attack
       if (validateIdenticalPlay(card, topDiscard)) {
         dispatch({ type: 'PLAY_IDENTICAL', card });
+      } else if (card.type === 'fraction' && !state.hasPlayedCards) {
+        // Fraction attack from pre-roll
+        dispatch({ type: 'PLAY_FRACTION', card });
       }
       return;
     }
 
-    // Phase 3: solved → select cards
+    // Fraction-attack phase: defend with number, block with fraction
+    if (isFractionAttack) {
+      if (card.type === 'number' && card.value === state.pendingFractionTarget) {
+        dispatch({ type: 'FRACTION_DEFEND_SOLVE', card });
+      } else if (card.type === 'fraction') {
+        dispatch({ type: 'FRACTION_DEFEND_BLOCK', card });
+      }
+      return;
+    }
+
+    // Phase 3: solved → select cards or attack with fraction
     if (isSolved && !state.hasPlayedCards) {
       if (card.type === 'number') {
         dispatch({ type: 'SELECT_CARD', card });
@@ -1509,9 +1632,19 @@ function PlayerHand() {
 
   const isCardTappable = (card: Card): boolean => {
     if (isBuilding && !state.hasPlayedCards) return card.type === 'number' || card.type === 'joker';
+    if (isFractionAttack) {
+      // Can tap: matching number card to solve, or fraction card to block
+      if (card.type === 'number' && card.value === state.pendingFractionTarget) return true;
+      if (card.type === 'fraction' && card.fraction) {
+        const d = fractionDenominator(card.fraction as Fraction);
+        return state.pendingFractionTarget !== null && state.pendingFractionTarget % d === 0;
+      }
+      return false;
+    }
     if (isPreRoll) {
       if (hasOpChallenge) return (card.type === 'operation' && card.operation === state.activeOperation) || card.type === 'joker';
-      if (hasFracChallenge) return card.type === 'number' && card.value === state.pendingFractionTarget;
+      // Allow identical matching and fraction attacks in pre-roll
+      if (card.type === 'fraction' && !state.hasPlayedCards) return validateFractionPlay(card, topDiscard);
       return validateIdenticalPlay(card, topDiscard);
     }
     if (isSolved && !state.hasPlayedCards) return true;
@@ -1622,6 +1755,7 @@ const ssS = StyleSheet.create({
 function TurnTransition() {
   const { state, dispatch } = useGame();
   const cp = state.players[state.currentPlayerIndex];
+  const isUnderAttack = state.pendingFractionTarget !== null;
   return (
     <View style={ttS.container}>
       <TouchableOpacity style={ttS.exit} onPress={() => dispatch({ type: 'RESET_GAME' })}>
@@ -1630,8 +1764,18 @@ function TurnTransition() {
       <Text style={{ color: '#9CA3AF', fontSize: 14 }}>העבר/י את המכשיר ל</Text>
       <Text style={{ color: '#FFF', fontSize: 32, fontWeight: '800', marginTop: 8 }}>{cp?.name}</Text>
       <Text style={{ color: '#6B7280', fontSize: 12, marginTop: 8 }}>{cp?.hand.length} קלפים ביד</Text>
-      {!!state.message && <View style={ttS.msgBox}><Text style={ttS.msgT}>{state.message}</Text></View>}
-      <Btn variant="primary" size="lg" onPress={() => dispatch({ type: 'BEGIN_TURN' })} style={{ width: '100%', marginTop: 24 }}>אני מוכן/ה</Btn>
+      {isUnderAttack && (
+        <View style={[ttS.msgBox, { backgroundColor: 'rgba(220,38,38,0.2)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)' }]}>
+          <Text style={{ color: '#FCA5A5', fontSize: 20, fontWeight: '900', textAlign: 'center' }}>⚠️ הותקפת בשבר!</Text>
+          <Text style={{ color: '#FCA5A5', fontSize: 14, textAlign: 'center', marginTop: 4 }}>
+            הנח {state.pendingFractionTarget} או משוך {state.fractionPenalty} קלפים
+          </Text>
+        </View>
+      )}
+      {!!state.message && !isUnderAttack && <View style={ttS.msgBox}><Text style={ttS.msgT}>{state.message}</Text></View>}
+      <Btn variant={isUnderAttack ? 'danger' : 'primary'} size="lg" onPress={() => dispatch({ type: 'BEGIN_TURN' })} style={{ width: '100%', marginTop: 24 }}>
+        {isUnderAttack ? 'ראה התקפה' : 'אני מוכן/ה'}
+      </Btn>
     </View>
   );
 }
@@ -1698,6 +1842,7 @@ function GameScreen() {
         </View>
 
         <DiceArea />
+        <FractionAttackBanner />
         <EquationBuilder />
         <ActionBar />
       </ScrollView>
@@ -1779,7 +1924,8 @@ function GameRouter() {
     case 'turn-transition': return <TurnTransition />;
     case 'pre-roll':
     case 'building':
-    case 'solved': return <GameScreen />;
+    case 'solved':
+    case 'fraction-attack': return <GameScreen />;
     case 'game-over': return <GameOver />;
     default: return <StartScreen />;
   }
