@@ -14,6 +14,10 @@ import {
   StyleSheet, Animated, Dimensions, Modal as RNModal,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
+import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
@@ -753,11 +757,107 @@ const mS = StyleSheet.create({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  3D TEXT HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+function interpolateColor(hex1: string, hex2: string, steps: number): string[] {
+  const parse = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const [r1, g1, b1] = parse(hex1);
+  const [r2, g2, b2] = parse(hex2);
+  return Array.from({ length: steps }, (_, i) => {
+    const t = steps <= 1 ? 0 : i / (steps - 1);
+    const r = Math.round(r1 + (r2 - r1) * t);
+    const g = Math.round(g1 + (g2 - g1) * t);
+    const b = Math.round(b1 + (b2 - b1) * t);
+    return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+  });
+}
+
+function Text3D({ text, fontSize, faceColor, darkColor, lightColor, maxOffset = 10 }: {
+  text: string; fontSize: number; faceColor: string; darkColor: string; lightColor: string; maxOffset?: number;
+}) {
+  const colors = interpolateColor(darkColor, lightColor, maxOffset);
+  return (
+    <View>
+      {colors.map((color, i) => (
+        <Text key={i} style={{
+          position: 'absolute', top: maxOffset - i, left: maxOffset - i,
+          color, fontSize, fontFamily: 'Fredoka_700Bold',
+        }}>{text}</Text>
+      ))}
+      <Text style={{ color: faceColor, fontSize, fontFamily: 'Fredoka_700Bold' }}>{text}</Text>
+    </View>
+  );
+}
+
+function Line3D({ width, height, faceColor, darkColor, lightColor, layers = 3 }: {
+  width: number; height: number; faceColor: string; darkColor: string; lightColor: string; layers?: number;
+}) {
+  const colors = interpolateColor(darkColor, lightColor, layers);
+  return (
+    <View style={{ width: width + layers, height: height + layers }}>
+      {colors.map((color, i) => (
+        <View key={i} style={{
+          position: 'absolute', top: layers - i, left: layers - i,
+          width, height, backgroundColor: color, borderRadius: height / 2,
+        }} />
+      ))}
+      <View style={{ width, height, backgroundColor: faceColor, borderRadius: height / 2 }} />
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  JESTER SVG
+// ═══════════════════════════════════════════════════════════════
+
+function JesterSvg({ size = 45 }: { size?: number }) {
+  const h = size * 1.4;
+  return (
+    <Svg width={size} height={h} viewBox="0 0 60 84">
+      {/* Hat - 3 sharp triangles with bells */}
+      <SvgPolygon points="30,28 8,4 25,26" fill="#EA4335" />
+      <SvgPolygon points="30,28 30,0 35,26" fill="#4285F4" />
+      <SvgPolygon points="30,28 52,4 35,26" fill="#34A853" />
+      <SvgCircle cx={8} cy={4} r={3.5} fill="#FBBC05" />
+      <SvgCircle cx={30} cy={0} r={3.5} fill="#FBBC05" />
+      <SvgCircle cx={52} cy={4} r={3.5} fill="#FBBC05" />
+      {/* Face */}
+      <SvgCircle cx={30} cy={38} r={11} fill="#FFE0B2" />
+      {/* Evil eyebrows */}
+      <SvgPath d="M 23 34 L 28 32" stroke="#333" strokeWidth={2} strokeLinecap="round" />
+      <SvgPath d="M 37 34 L 32 32" stroke="#333" strokeWidth={2} strokeLinecap="round" />
+      {/* Eyes */}
+      <SvgCircle cx={26} cy={37} r={2} fill="#333" />
+      <SvgCircle cx={34} cy={37} r={2} fill="#333" />
+      {/* Wide mischievous grin */}
+      <SvgPath d="M 23 43 Q 26 49 30 46 Q 34 49 37 43" stroke="#333" strokeWidth={1.8} strokeLinecap="round" fill="none" />
+      {/* Scalloped yellow collar */}
+      <SvgPath d="M 17 50 Q 21 46 25 50 Q 29 46 33 50 Q 37 46 41 50 L 41 53 L 17 53 Z" fill="#FBBC05" />
+      {/* Split body — red left, green right */}
+      <SvgRect x={19} y={53} width={11} height={16} fill="#EA4335" />
+      <SvgRect x={30} y={53} width={11} height={16} fill="#34A853" />
+      {/* Yellow diamonds */}
+      <SvgPolygon points="25,58 27,55 29,58 27,61" fill="#FBBC05" />
+      <SvgPolygon points="31,58 33,55 35,58 33,61" fill="#FBBC05" />
+      <SvgPolygon points="25,65 27,62 29,65 27,68" fill="#FBBC05" />
+      <SvgPolygon points="31,65 33,62 35,65 33,68" fill="#FBBC05" />
+      {/* Legs — blue left, orange right */}
+      <SvgRect x={20} y={69} width={9} height={11} rx={2} fill="#4285F4" />
+      <SvgRect x={31} y={69} width={9} height={11} rx={2} fill="#F97316" />
+      {/* Pointed shoes */}
+      <SvgPath d="M 16 80 L 29 80 L 25 77" fill="#4285F4" />
+      <SvgPath d="M 44 80 L 31 80 L 35 77" fill="#F97316" />
+    </Svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  BASE CARD
 // ═══════════════════════════════════════════════════════════════
 
-function BaseCard({ children, borderColor = '#9CA3AF', bgColor = '#FFF', bgGradient, selected = false, onPress, faceDown = false, small = false }: {
-  children: React.ReactNode; borderColor?: string; bgColor?: string; bgGradient?: [string, string]; selected?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
+function BaseCard({ children, borderColor = '#9CA3AF', selected = false, onPress, faceDown = false, small = false }: {
+  children: React.ReactNode; borderColor?: string; selected?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
 }) {
   const w = small ? 52 : 72;
   const h = small ? 76 : 104;
@@ -776,13 +876,11 @@ function BaseCard({ children, borderColor = '#9CA3AF', bgColor = '#FFF', bgGradi
         shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.35, shadowRadius: 6, elevation: 6,
       }}>
-        {/* Inner glow circle */}
         <View style={{
           width: 28, height: 28, borderRadius: 14,
           borderWidth: 2, borderColor: 'rgba(129,140,248,0.5)',
           backgroundColor: 'rgba(129,140,248,0.1)',
         }} />
-        {/* Top gloss */}
         <View style={{
           position: 'absolute', top: 0, left: 0, right: 0,
           height: small ? 24 : 34, borderTopLeftRadius: 10, borderTopRightRadius: 10,
@@ -792,50 +890,39 @@ function BaseCard({ children, borderColor = '#9CA3AF', bgColor = '#FFF', bgGradi
     </TouchableOpacity>
   );
 
-  // ── Face-up card ──
-  const bg = bgGradient ? bgGradient[0] : bgColor;
-  const edge = bgGradient ? bgGradient[1] : borderColor;
-  const glossH = small ? 24 : 34;
-
+  // ── Face-up card — white gradient + gloss sheen ──
   return (
     <Animated.View style={{ opacity: fade }}>
       <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
-        {/* Outer wrapper — holds shadow (overflow visible) */}
         <View style={{
-          width: w, height: h,
-          borderRadius: 12,
+          width: w, height: h, borderRadius: 12,
           transform: [{ translateY: selected ? -6 : 0 }],
-          // 3D shadow
           shadowColor: selected ? '#FACC15' : '#000',
           shadowOffset: { width: 0, height: selected ? 6 : 4 },
           shadowOpacity: selected ? 0.5 : 0.35,
           shadowRadius: selected ? 10 : 6,
           elevation: selected ? 10 : 6,
         }}>
-          {/* Inner card — clips gradient to rounded rect */}
           <View style={{
-            width: w, height: h,
-            borderRadius: 12, overflow: 'hidden',
-            backgroundColor: bg,
+            width: w, height: h, borderRadius: 12, overflow: 'hidden',
             borderWidth: selected ? 2.5 : 2,
             borderColor: selected ? '#FACC15' : borderColor,
-            // ── 3D bottom edge ──
             borderBottomWidth: selected ? 6 : (small ? 4 : 5),
-            borderBottomColor: selected ? '#B45309' : edge,
+            borderBottomColor: selected ? '#B45309' : borderColor,
           }}>
-            {/* Two-tone gradient fill */}
-            {bgGradient && (
-              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                <View style={{ flex: 1, backgroundColor: bgGradient[0] }} />
-                <View style={{ flex: 1, backgroundColor: bgGradient[1] }} />
-              </View>
-            )}
-            {/* Top glossy shine */}
+            {/* White-to-gray gradient background (160deg) */}
+            <LinearGradient
+              colors={['#FFFFFF', '#F5F5F5', '#E8E8E8']}
+              locations={[0, 0.7, 1]}
+              start={{ x: 0.3, y: 0 }}
+              end={{ x: 0.7, y: 1 }}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            />
+            {/* Gloss sheen overlay (radial ellipse approximation) */}
             <View style={{
-              position: 'absolute', top: 0, left: 0, right: 0,
-              height: glossH,
-              backgroundColor: 'rgba(255,255,255,0.18)',
-              borderTopLeftRadius: 10, borderTopRightRadius: 10,
+              position: 'absolute', top: -(h * 0.15), left: w * 0.05,
+              width: w * 0.9, height: h * 0.5, borderRadius: w,
+              backgroundColor: 'rgba(255,255,255,0.4)',
             }} />
             {/* Card content */}
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -882,73 +969,124 @@ const dieS = StyleSheet.create({
 //  CARD TYPE COMPONENTS
 // ═══════════════════════════════════════════════════════════════
 
-function getNumCol(v: number) {
-  if (v <= 9) return { border: '#60A5FA', grad: ['#3B82F6', '#0D9488'] as [string, string] };
-  if (v <= 19) return { border: '#4ADE80', grad: ['#22C55E', '#0D9488'] as [string, string] };
-  return { border: '#F87171', grad: ['#EF4444', '#E11D48'] as [string, string] };
+function getNumColors(v: number) {
+  if (v <= 9) return { face: '#2196F3', border: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9' };
+  if (v <= 19) return { face: '#FBBC05', border: '#FBBC05', dark: '#8B6800', light: '#DC9E00' };
+  return { face: '#34A853', border: '#34A853', dark: '#1B5E2B', light: '#36944F' };
 }
 
 function NumberCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  const v = card.value ?? 0; const cl = getNumCol(v);
+  const v = card.value ?? 0;
+  const cl = getNumColors(v);
+  const fs = small ? 20 : 32;
+  const maxOff = small ? 5 : 10;
   return (
-    <BaseCard borderColor={cl.border} bgGradient={cl.grad} selected={selected} onPress={onPress} small={small}>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 18 : 28, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-      }}>{v}</Text>
-      {!small && (
-        <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>מספר</Text>
-      )}
+    <BaseCard borderColor={cl.border} selected={selected} onPress={onPress} small={small}>
+      <Text3D text={String(v)} fontSize={fs} faceColor={cl.face} darkColor={cl.dark} lightColor={cl.light} maxOffset={maxOff} />
     </BaseCard>
   );
 }
 
-const fDisp: Record<string, { n: string; d: string; s: string }> = { '1/2': { n: '1', d: '2', s: '½' }, '1/3': { n: '1', d: '3', s: '⅓' }, '1/4': { n: '1', d: '4', s: '¼' }, '1/5': { n: '1', d: '5', s: '⅕' } };
-
 function FractionCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  const f = fDisp[card.fraction ?? '1/2'];
-  const ts = { color: '#FFF', textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 } as any, textShadowRadius: 3 };
+  const f = card.fraction ?? '1/2';
+  const [num, den] = f.split('/');
+  const face = '#EA4335';
+  const border = '#EA4335';
+  const dark = '#8B1A12';
+  const light = '#DC4736';
+  const fs = small ? 14 : 20;
+  const maxOff = small ? 3 : 6;
+  const lineW = small ? 18 : 28;
+  const lineH = small ? 3 : 4;
   return (
-    <BaseCard borderColor="#A78BFA" bgGradient={['#8B5CF6', '#4338CA']} selected={selected} onPress={onPress} small={small}>
-      {small
-        ? <Text style={{ ...ts, fontSize: 20, fontWeight: '800' }}>{f.s}</Text>
-        : <View style={{ alignItems: 'center' }}>
-            <Text style={{ ...ts, fontSize: 20, fontWeight: '900', lineHeight: 24 }}>{f.n}</Text>
-            <View style={{ width: 24, height: 2.5, backgroundColor: 'rgba(255,255,255,0.6)', marginVertical: 2, borderRadius: 2 }} />
-            <Text style={{ ...ts, fontSize: 20, fontWeight: '900', lineHeight: 24 }}>{f.d}</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>שבר</Text>
-          </View>
-      }
+    <BaseCard borderColor={border} selected={selected} onPress={onPress} small={small}>
+      <View style={{ alignItems: 'center' }}>
+        <Text3D text={num} fontSize={fs} faceColor={face} darkColor={dark} lightColor={light} maxOffset={maxOff} />
+        <View style={{ marginVertical: small ? 1 : 2 }}>
+          <Line3D width={lineW} height={lineH} faceColor={face} darkColor={dark} lightColor={light} layers={3} />
+        </View>
+        <Text3D text={den} fontSize={fs} faceColor={face} darkColor={dark} lightColor={light} maxOffset={maxOff} />
+      </View>
     </BaseCard>
   );
 }
 
 function OperationCardComp({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
   return (
-    <BaseCard borderColor="#FB923C" bgGradient={['#F97316', '#DC2626']} selected={selected} onPress={onPress} small={small}>
+    <BaseCard borderColor="#F97316" selected={selected} onPress={onPress} small={small}>
       <Text style={{
-        color: '#FFF', fontSize: small ? 22 : 32, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
+        color: '#F97316', fontSize: small ? 22 : 32, fontFamily: 'Fredoka_700Bold',
       }}>{card.operation}</Text>
-      {!small && (
-        <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, marginTop: 1, fontWeight: '700', letterSpacing: 1 }}>פעולה</Text>
-      )}
     </BaseCard>
   );
 }
 
 function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+  const w = small ? 52 : 72;
+  const h = small ? 76 : 104;
+  const bw = 3;
+  const maxOff = small ? 3 : 5;
+  const cornerFs = small ? 9 : 12;
+  const svgSize = small ? 24 : 36;
+  const fade = useRef(new Animated.Value(0)).current;
+  useEffect(() => { Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start(); }, []);
+
+  const corners = [
+    { sym: '+', face: '#EA4335', dark: '#8B1A12', light: '#DC4736', pos: { top: 3, left: 3 } as any, rot: '-12deg' },
+    { sym: '÷', face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9', pos: { top: 3, right: 3 } as any, rot: '10deg' },
+    { sym: '×', face: '#34A853', dark: '#1B5E2B', light: '#36944F', pos: { bottom: 8, left: 3 } as any, rot: '10deg' },
+    { sym: '−', face: '#FBBC05', dark: '#8B6800', light: '#DC9E00', pos: { bottom: 8, right: 3 } as any, rot: '-10deg' },
+  ];
+
   return (
-    <BaseCard borderColor="#FCD34D" bgGradient={['#FACC15', '#D97706']} selected={selected} onPress={onPress} small={small}>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 16 : 24,
-        textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4,
-      }}>★</Text>
-      <Text style={{
-        color: '#FFF', fontSize: small ? 10 : 14, fontWeight: '900',
-        textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
-      }}>ג'וקר</Text>
-    </BaseCard>
+    <Animated.View style={{ opacity: fade }}>
+      <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
+        <View style={{
+          width: w, height: h, borderRadius: 12,
+          transform: [{ translateY: selected ? -6 : 0 }],
+          shadowColor: selected ? '#FACC15' : '#000',
+          shadowOffset: { width: 0, height: selected ? 6 : 4 },
+          shadowOpacity: selected ? 0.5 : 0.35,
+          shadowRadius: selected ? 10 : 6,
+          elevation: selected ? 10 : 6,
+        }}>
+          {/* Rainbow conic-gradient border (diagonal approximation) */}
+          <LinearGradient
+            colors={['#EA4335', '#4285F4', '#34A853', '#FBBC05', '#EA4335']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ width: w, height: h, borderRadius: 12, padding: bw }}
+          >
+            <View style={{ flex: 1, borderRadius: 12 - bw, overflow: 'hidden' }}>
+              {/* White gradient fill */}
+              <LinearGradient
+                colors={['#FFFFFF', '#F5F5F5', '#E8E8E8']}
+                locations={[0, 0.7, 1]}
+                start={{ x: 0.3, y: 0 }}
+                end={{ x: 0.7, y: 1 }}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+              />
+              {/* Gloss sheen */}
+              <View style={{
+                position: 'absolute', top: -(h * 0.15), left: w * 0.05,
+                width: w * 0.9, height: h * 0.5, borderRadius: w,
+                backgroundColor: 'rgba(255,255,255,0.4)',
+              }} />
+              {/* Jester SVG centered */}
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <JesterSvg size={svgSize} />
+              </View>
+              {/* 3D corner symbols — NO black outline */}
+              {corners.map((c, i) => (
+                <View key={i} style={[{ position: 'absolute', transform: [{ rotate: c.rot }] }, c.pos]}>
+                  <Text3D text={c.sym} fontSize={cornerFs} faceColor={c.face} darkColor={c.dark} lightColor={c.light} maxOffset={maxOff} />
+                </View>
+              ))}
+            </View>
+          </LinearGradient>
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -1544,6 +1682,70 @@ const aS = StyleSheet.create({
 //  PLAYER HAND — Phase-aware opacity & interaction
 // ═══════════════════════════════════════════════════════════════
 
+function AnimatedHandCard({ card, selected, tappable, onPress }: { card: Card; selected: boolean; tappable: boolean; onPress?: () => void }) {
+  const liftAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const glowAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (selected) {
+      Animated.parallel([
+        Animated.spring(liftAnim, { toValue: 1, friction: 6, tension: 120, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1.08, friction: 6, tension: 120, useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.spring(liftAnim, { toValue: 0, friction: 8, tension: 100, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 100, useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 0, duration: 150, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [selected]);
+
+  const translateY = liftAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -18] });
+
+  return (
+    <Animated.View style={{
+      transform: [{ translateY }, { scale: scaleAnim }],
+      zIndex: selected ? 10 : 1,
+    }}>
+      <GameCard key={card.id} card={card} selected={selected} small onPress={tappable ? onPress : undefined} />
+    </Animated.View>
+  );
+}
+
+function FanHandCard({ card, selected, tappable, onPress, angle, offsetX, offsetY, index, total }: {
+  card: Card; selected: boolean; tappable: boolean; onPress?: () => void;
+  angle: number; offsetX: number; offsetY: number; index: number; total: number;
+}) {
+  const liftAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (selected) {
+      Animated.parallel([
+        Animated.spring(liftAnim, { toValue: 1, friction: 6, tension: 120, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1.15, friction: 6, tension: 120, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.spring(liftAnim, { toValue: 0, friction: 8, tension: 100, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 100, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [selected]);
+  const liftY = liftAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -30] });
+  return (
+    <Animated.View style={{
+      position: 'absolute', left: offsetX, bottom: offsetY,
+      zIndex: selected ? 100 : index,
+      transform: [{ rotate: `${angle}deg` }, { translateY: liftY }, { scale: scaleAnim }],
+    }}>
+      <GameCard card={card} selected={selected} small onPress={tappable ? onPress : undefined} />
+    </Animated.View>
+  );
+}
+
 function PlayerHand() {
   const { state, dispatch } = useGame();
   const cp = state.players[state.currentPlayerIndex];
@@ -1657,13 +1859,27 @@ function PlayerHand() {
         <Text style={{ color: '#D1D5DB', fontSize: 13, fontWeight: '600' }}>היד של {cp.name}</Text>
         <Text style={{ color: '#6B7280', fontSize: 11 }}>({cp.hand.length} קלפים)</Text>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: 4, paddingBottom: 4 }}>
-        {sorted.map(card => {
+      <View style={{ width: '100%', height: 126, position: 'relative', overflow: 'visible' }}>
+        {sorted.map((card, i) => {
           const sel = state.selectedCards.some(c => c.id === card.id);
           const tappable = isCardTappable(card);
-          return <GameCard key={card.id} card={card} selected={sel} small onPress={tappable ? () => handleCardTap(card) : undefined} />;
+          const count = sorted.length;
+          const { width: curW } = Dimensions.get('window');
+          const CARD_W = 52;
+          const maxAngle = Math.min(70, count * 7);
+          const angleStep2 = count > 1 ? maxAngle / (count - 1) : 0;
+          const angle = count > 1 ? -maxAngle / 2 + angleStep2 * i : 0;
+          const rad = (angle * Math.PI) / 180;
+          const centerX = (curW - 24) / 2 - CARD_W / 2;
+          const offsetX = centerX + Math.sin(rad) * 500 * 0.45;
+          const offsetY = Math.cos(rad) * 500 * 0.04;
+          return (
+            <FanHandCard key={card.id} card={card} selected={sel} tappable={tappable}
+              onPress={() => handleCardTap(card)} angle={angle} offsetX={offsetX}
+              offsetY={offsetY} index={i} total={count} />
+          );
         })}
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -1862,7 +2078,7 @@ const gsS = StyleSheet.create({
   exitT: { color: '#FFF', fontSize: 13, fontWeight: '700' },
   logo: { color: '#F59E0B', fontSize: 20, fontWeight: '900', letterSpacing: 2, flex: 1, textAlign: 'center' },
   turn: { color: '#D1D5DB', fontSize: 13 },
-  hand: { backgroundColor: 'rgba(31,41,55,0.3)', paddingHorizontal: 12, paddingVertical: 10, paddingBottom: 24 },
+  hand: { backgroundColor: 'rgba(31,41,55,0.3)', paddingHorizontal: 12, paddingTop: 6, paddingBottom: 16, overflow: 'visible' },
   deckCounter: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', textAlign: 'center' },
 });
 
@@ -1919,19 +2135,25 @@ const goS = StyleSheet.create({
 
 function GameRouter() {
   const { state } = useGame();
+  useEffect(() => {
+    if (state.phase === 'setup') {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    } else {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    }
+  }, [state.phase]);
   switch (state.phase) {
     case 'setup': return <StartScreen />;
     case 'turn-transition': return <TurnTransition />;
-    case 'pre-roll':
-    case 'building':
-    case 'solved':
-    case 'fraction-attack': return <GameScreen />;
+    case 'pre-roll': case 'building': case 'solved': case 'fraction-attack': return <GameScreen />;
     case 'game-over': return <GameOver />;
     default: return <StartScreen />;
   }
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts({ Fredoka_700Bold });
+  if (!fontsLoaded) return null;
   return (
     <GameProvider>
       <StatusBar style="light" />

@@ -12,6 +12,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { registerRootComponent } from 'expo';
+import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
+import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
+import Dice3D from './Dice3D';
+import { GoldDieFace } from './AnimatedDice';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
@@ -54,17 +58,24 @@ interface GameState {
   discardPile: Card[];
   dice: DiceResult | null;
   selectedCards: Card[];
+  stagedCards: Card[];
   validTargets: EquationOption[];
   equationResult: number | null;
   activeOperation: Operation | null;
   activeFraction: Fraction | null;
   pendingFractionTarget: number | null;
   fractionPenalty: number;
+  fractionAttackResolved: boolean;
   hasPlayedCards: boolean;
   hasDrawnCard: boolean;
   lastCardValue: number | null;
-  identicalPlayCount: number;
+  consecutiveIdenticalPlays: number;
+  identicalAlert: { playerName: string; cardDisplay: string; consecutive: number } | null;
   jokerModalOpen: boolean;
+  equationOpCard: Card | null;
+  equationOpPosition: number | null;
+  lastMoveMessage: string | null;
+  lastEquationDisplay: string | null;
   difficulty: 'easy' | 'full';
   winner: Player | null;
   message: string;
@@ -74,13 +85,17 @@ type GameAction =
   | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
-  | { type: 'ROLL_DICE' }
-  | { type: 'CONFIRM_EQUATION'; result: number }
-  | { type: 'CONFIRM_AND_DISCARD'; result: number }
-  | { type: 'SELECT_CARD'; card: Card }
-  | { type: 'DISCARD_AND_END' }
+  | { type: 'ROLL_DICE'; values?: DiceResult }
+  | { type: 'CONFIRM_EQUATION'; result: number; equationDisplay: string }
+  | { type: 'REVERT_TO_BUILDING' }
+  | { type: 'STAGE_CARD'; card: Card }
+  | { type: 'UNSTAGE_CARD'; card: Card }
+  | { type: 'CONFIRM_STAGED' }
   | { type: 'PLAY_IDENTICAL'; card: Card }
   | { type: 'PLAY_OPERATION'; card: Card }
+  | { type: 'SELECT_EQ_OP'; card: Card }
+  | { type: 'PLACE_EQ_OP'; position: number }
+  | { type: 'REMOVE_EQ_OP' }
   | { type: 'PLAY_FRACTION'; card: Card }
   | { type: 'DEFEND_FRACTION_SOLVE'; card: Card }
   | { type: 'DEFEND_FRACTION_PENALTY' }
@@ -91,6 +106,8 @@ type GameAction =
   | { type: 'SET_MESSAGE'; message: string }
   | { type: 'OPEN_JOKER_MODAL'; card: Card }
   | { type: 'CLOSE_JOKER_MODAL' }
+  | { type: 'DISMISS_IDENTICAL_ALERT' }
+  | { type: 'CLEAR_TOAST' }
   | { type: 'RESET_GAME' };
 
 // ═══════════════════════════════════════════════════════════════
@@ -287,6 +304,65 @@ function validateIdenticalPlay(card: Card, topDiscard: Card | undefined): boolea
   }
 }
 
+function getStagedPermutations(arr: number[]): number[][] {
+  if (arr.length <= 1) return [arr];
+  const result: number[][] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const perm of getStagedPermutations(rest)) result.push([arr[i], ...perm]);
+  }
+  return result;
+}
+
+function validateStagedCards(numberCards: Card[], opCard: Card | null, target: number): boolean {
+  const values = numberCards.map(c => c.value ?? 0);
+  if (values.length === 0) return false;
+  if (!opCard) {
+    // No operator → sum all numbers
+    return values.reduce((s, v) => s + v, 0) === target;
+  }
+  const op = opCard.operation!;
+  // Try every permutation of number values × every operator gap position
+  const perms = getStagedPermutations(values);
+  for (const perm of perms) {
+    for (let gapPos = 0; gapPos < perm.length - 1; gapPos++) {
+      // Evaluate left-to-right: default + except at gapPos where op is used
+      let result: number | null = perm[0];
+      for (let i = 1; i < perm.length; i++) {
+        const useOp = i - 1 === gapPos ? op : '+';
+        result = applyOperation(result!, useOp as Operation, perm[i]);
+        if (result === null) break;
+      }
+      if (result !== null && result === target) return true;
+    }
+  }
+  return false;
+}
+
+function computeStagedResult(staged: Card[]): number | null {
+  // Evaluate staged cards left-to-right in tap order
+  // Numbers separated by default +, unless an operator card appears between them
+  const parsed: ({ type: 'num'; value: number } | { type: 'op'; op: Operation })[] = [];
+  for (const c of staged) {
+    if (c.type === 'number') parsed.push({ type: 'num', value: c.value ?? 0 });
+    else if (c.type === 'operation') parsed.push({ type: 'op', op: c.operation! });
+  }
+  if (parsed.length === 0) return null;
+  // Build evaluation: insert default + between consecutive numbers
+  let result: number | null = null;
+  let pendingOp: Operation = '+';
+  for (const item of parsed) {
+    if (item.type === 'num') {
+      if (result === null) { result = item.value; }
+      else { result = applyOperation(result, pendingOp, item.value); pendingOp = '+'; }
+      if (result === null) return null;
+    } else {
+      pendingOp = item.op;
+    }
+  }
+  return result;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  GAME REDUCER
 // ═══════════════════════════════════════════════════════════════
@@ -295,10 +371,12 @@ const CARDS_PER_PLAYER = 10;
 
 const initialState: GameState = {
   phase: 'setup', players: [], currentPlayerIndex: 0, drawPile: [], discardPile: [],
-  dice: null, selectedCards: [], validTargets: [], equationResult: null,
+  dice: null, selectedCards: [], stagedCards: [], validTargets: [], equationResult: null,
   activeOperation: null, activeFraction: null, pendingFractionTarget: null,
-  fractionPenalty: 0, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
-  identicalPlayCount: 0, jokerModalOpen: false, difficulty: 'full', winner: null, message: '',
+  fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
+  consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationOpCard: null, equationOpPosition: null,
+  lastMoveMessage: null, lastEquationDisplay: null,
+  difficulty: 'full', winner: null, message: '',
 };
 
 function reshuffleDiscard(st: GameState): GameState {
@@ -350,11 +428,11 @@ function endTurnLogic(st: GameState): GameState {
     ...s,
     players: s.players.map(p => ({ ...p, calledLolos: false })),
     currentPlayerIndex: next, phase: 'turn-transition', dice: null,
-    selectedCards: [], equationResult: null, validTargets: [],
+    selectedCards: [], stagedCards: [], equationResult: null, validTargets: [],
     activeOperation: keepOp ? s.activeOperation : null,
-    activeFraction: null, identicalPlayCount: 0, hasPlayedCards: false,
+    activeFraction: null, identicalAlert: null, hasPlayedCards: false,
     hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null,
-    fractionPenalty: 0,
+    fractionPenalty: 0, equationOpCard: null, equationOpPosition: null,
   };
 }
 
@@ -381,7 +459,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     }
     case 'NEXT_TURN': {
       const next = (st.currentPlayerIndex + 1) % st.players.length;
-      return { ...st, players: st.players.map(p => ({ ...p, calledLolos: false })), currentPlayerIndex: next, phase: 'turn-transition', dice: null, selectedCards: [], equationResult: null, validTargets: [], message: '', activeOperation: null, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null, fractionPenalty: 0 };
+      return { ...st, players: st.players.map(p => ({ ...p, calledLolos: false })), currentPlayerIndex: next, phase: 'turn-transition', dice: null, selectedCards: [], stagedCards: [], equationResult: null, validTargets: [], message: '', activeOperation: null, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: false, equationOpCard: null, equationOpPosition: null };
     }
     case 'BEGIN_TURN': {
       if (st.activeOperation) {
@@ -391,14 +469,16 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         let s = drawFromPile(st, 2, st.currentPlayerIndex);
         return { ...s, phase: 'pre-roll', activeOperation: null, message: `אין הגנה מפני ${st.activeOperation}! שלפת 2 קלפי עונשין.` };
       }
-      if (st.pendingFractionTarget !== null) {
-        return { ...st, phase: 'pre-roll', message: `התקפת שבר! נדרש: ${st.pendingFractionTarget}. הגן/י בקלף מספר, חסום/י בשבר, או שלוף/י ${st.fractionPenalty} קלפים.` };
+      // Fraction attack: only if active AND not already resolved
+      if (st.pendingFractionTarget !== null && !st.fractionAttackResolved) {
+        return { ...st, phase: 'pre-roll', message: '' };
       }
-      return { ...st, phase: 'pre-roll', message: '' };
+      // Normal turn — reset the resolved flag
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: '' };
     }
     case 'ROLL_DICE': {
       if (st.phase !== 'pre-roll') return st;
-      const dice = rollDiceUtil();
+      const dice = action.values || rollDiceUtil();
       let ns: GameState = { ...st, dice };
       if (isTriple(dice)) {
         let s = { ...ns, players: ns.players.map(p => ({ ...p, hand: [...p.hand] })) };
@@ -407,71 +487,117 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         ns = s;
       }
       const vt = generateValidTargets(dice);
-      return { ...ns, validTargets: vt, phase: 'building', message: ns.message || '' };
+      return { ...ns, validTargets: vt, phase: 'building', activeOperation: null, consecutiveIdenticalPlays: 0, message: ns.message || '' };
     }
     case 'CONFIRM_EQUATION': {
       if (st.phase !== 'building') return st;
-      return { ...st, phase: 'solved', equationResult: action.result, message: '' };
+      return { ...st, phase: 'solved', equationResult: action.result, lastEquationDisplay: action.equationDisplay, stagedCards: [], message: '' };
     }
-    case 'CONFIRM_AND_DISCARD': {
-      // Atomic confirm + discard — avoids double-dispatch race condition
-      if (st.phase !== 'building') return st;
-      if (st.pendingFractionTarget !== null) return st;
-      if (st.hasPlayedCards || st.selectedCards.length === 0) return st;
-      const cdNums = st.selectedCards.filter(c => c.type === 'number');
-      if (cdNums.length !== st.selectedCards.length) return st;
-      const cdSum = cdNums.reduce((s, c) => s + (c.value ?? 0), 0);
-      if (cdSum !== action.result) return st;
-      if (!st.validTargets.some(t => t.result === cdSum)) return st;
-      const cdIds = new Set(st.selectedCards.map(c => c.id));
-      const cdCp = st.players[st.currentPlayerIndex];
-      const cdNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cdCp.hand.filter(c => !cdIds.has(c.id)) } : p);
-      let cdNs: GameState = { ...st, phase: 'solved', equationResult: action.result, players: cdNp, discardPile: [...st.discardPile, ...st.selectedCards], selectedCards: [], identicalPlayCount: 0, hasPlayedCards: true, lastCardValue: cdNums[cdNums.length - 1].value ?? null, message: '' };
-      cdNs = checkWin(cdNs);
-      if (cdNs.phase === 'game-over') return cdNs;
-      return endTurnLogic(cdNs);
+    case 'REVERT_TO_BUILDING': {
+      if (st.phase !== 'solved' || st.hasPlayedCards) return st;
+      return { ...st, phase: 'building', equationResult: null, lastEquationDisplay: null, stagedCards: [], message: '' };
     }
-    case 'SELECT_CARD': {
-      if (st.phase !== 'solved' && st.phase !== 'building') return st;
-      if (st.hasPlayedCards) return st;
-      const isSel = st.selectedCards.some(c => c.id === action.card.id);
-      return { ...st, selectedCards: isSel ? st.selectedCards.filter(c => c.id !== action.card.id) : [...st.selectedCards, action.card], message: '' };
+    case 'STAGE_CARD': {
+      if (st.phase !== 'solved' || st.hasPlayedCards) return st;
+      if (st.stagedCards.some(c => c.id === action.card.id)) return st;
+      if (action.card.type !== 'number' && action.card.type !== 'operation') return st;
+      // Don't allow staging the card that's committed to the equation
+      if (st.equationOpCard && action.card.id === st.equationOpCard.id) return st;
+      // Max 1 operator in staging zone
+      if (action.card.type === 'operation' && st.stagedCards.some(c => c.type === 'operation')) {
+        return { ...st, message: 'אפשר רק סימן פעולה אחד באזור ההנחה' };
+      }
+      return { ...st, stagedCards: [...st.stagedCards, action.card], message: '' };
     }
-    case 'DISCARD_AND_END': {
+    case 'UNSTAGE_CARD': {
       if (st.phase !== 'solved') return st;
-      if (st.hasPlayedCards || st.selectedCards.length === 0) return st;
-      const nums = st.selectedCards.filter(c => c.type === 'number');
-      if (nums.length !== st.selectedCards.length) return st;
-      const sum = nums.reduce((s, c) => s + (c.value ?? 0), 0);
-      if (st.equationResult !== null && sum !== st.equationResult) return st;
-      if (!st.validTargets.some(t => t.result === sum)) return st;
-      const ids = new Set(st.selectedCards.map(c => c.id));
-      const cp = st.players[st.currentPlayerIndex];
-      const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => !ids.has(c.id)) } : p);
-      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, ...st.selectedCards], selectedCards: [], identicalPlayCount: 0, hasPlayedCards: true, lastCardValue: nums[nums.length - 1].value ?? null, message: '' };
-      ns = checkWin(ns);
-      if (ns.phase === 'game-over') return ns;
-      return endTurnLogic(ns);
+      return { ...st, stagedCards: st.stagedCards.filter(c => c.id !== action.card.id), message: '' };
+    }
+    case 'CONFIRM_STAGED': {
+      if (st.phase !== 'solved' || st.hasPlayedCards) return st;
+      const stNumbers = st.stagedCards.filter(c => c.type === 'number');
+      const stOpCards = st.stagedCards.filter(c => c.type === 'operation');
+      const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
+      if (stNumbers.length === 0) return { ...st, message: 'יש לבחור לפחות קלף מספר אחד' };
+      if (st.equationResult === null) return st;
+      if (!validateStagedCards(stNumbers, stOpCard, st.equationResult)) {
+        return { ...st, message: 'השילוב הזה לא מגיע לתוצאה, נסה לשנות' };
+      }
+      // Valid — remove staged cards + equation operator card from hand
+      const stIds = new Set(st.stagedCards.map(c => c.id));
+      if (st.equationOpCard && st.equationOpPosition !== null) stIds.add(st.equationOpCard.id);
+      const stCp = st.players[st.currentPlayerIndex];
+      const stNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: stCp.hand.filter(c => !stIds.has(c.id)) } : p);
+      // Build discard: number cards first, then operator last (on top)
+      const stDiscard = [...st.discardPile, ...stNumbers];
+      if (stOpCard) stDiscard.push(stOpCard);
+      if (st.equationOpCard && st.equationOpPosition !== null) stDiscard.push(st.equationOpCard);
+      // Determine activeOperation challenge for next player:
+      // Position C (trailing) equation operator takes priority, then staging zone operator
+      const eqChallenge = (st.equationOpCard && st.equationOpPosition === 2) ? st.equationOpCard.operation! : null;
+      const stNewActiveOp = eqChallenge ?? (stOpCard ? stOpCard.operation! : null);
+      const stLastNum = stNumbers[stNumbers.length - 1];
+      const stToast = stNewActiveOp
+        ? `⚔️ ${stCp.name}: הניח סימן ${stNewActiveOp} — אתגר!`
+        : `✅ ${stCp.name}: ${st.lastEquationDisplay || ''} → הניח ${stLastNum.value}`;
+      let stNs: GameState = { ...st, players: stNp, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: stLastNum.value ?? null, activeOperation: stNewActiveOp ?? st.activeOperation, equationOpCard: null, equationOpPosition: null, lastMoveMessage: stToast, lastEquationDisplay: null, message: stNewActiveOp ? `אתגר פעולה ${stNewActiveOp} לשחקן הבא!` : '' };
+      stNs = checkWin(stNs);
+      if (stNs.phase === 'game-over') return stNs;
+      return endTurnLogic(stNs);
     }
     case 'PLAY_IDENTICAL': {
       if (st.phase !== 'pre-roll') return st;
+      if (st.consecutiveIdenticalPlays >= 2) return st;
       const td = st.discardPile[st.discardPile.length - 1];
       if (!validateIdenticalPlay(action.card, td)) return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], hasPlayedCards: true, lastCardValue: action.card.type === 'number' ? action.card.value ?? null : null, message: '' };
+      const newConsecutive = st.consecutiveIdenticalPlays + 1;
+      const cardDisplay = action.card.type === 'number' ? `${action.card.value}` :
+                          action.card.type === 'fraction' ? action.card.fraction! :
+                          action.card.type === 'operation' ? action.card.operation! : 'ג׳וקר';
+      let ns: GameState = {
+        ...st, players: np, discardPile: [...st.discardPile, action.card],
+        selectedCards: [], hasPlayedCards: true,
+        consecutiveIdenticalPlays: newConsecutive,
+        lastCardValue: action.card.type === 'number' ? action.card.value ?? null : null,
+        identicalAlert: { playerName: cp.name, cardDisplay, consecutive: newConsecutive },
+        message: '',
+      };
       ns = checkWin(ns);
-      if (ns.phase === 'game-over') return ns;
-      return endTurnLogic(ns);
+      if (ns.phase === 'game-over') return { ...ns, identicalAlert: null };
+      return ns; // Stay — modal shown, DISMISS_IDENTICAL_ALERT will call endTurnLogic
+    }
+    case 'DISMISS_IDENTICAL_ALERT': {
+      const idToast = st.identicalAlert
+        ? `🔄 ${st.identicalAlert.playerName}: הניח קלף זהה (${st.identicalAlert.cardDisplay}) — דילוג על קוביות`
+        : null;
+      return endTurnLogic({ ...st, identicalAlert: null, lastMoveMessage: idToast });
     }
     case 'PLAY_OPERATION': {
-      if (st.phase !== 'pre-roll' && st.phase !== 'solved' && st.phase !== 'building') return st;
+      if (st.phase !== 'pre-roll' && st.phase !== 'solved') return st;
       if (st.hasPlayedCards || action.card.type !== 'operation') return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
       let ns: GameState = { ...st, players: np, discardPile: [...st.discardPile, action.card], activeOperation: action.card.operation!, selectedCards: [], hasPlayedCards: true, message: '' };
       ns = checkWin(ns);
       return ns;
+    }
+    // ── Equation operator placement (building phase only) ──
+    case 'SELECT_EQ_OP': {
+      console.log('[REDUCER] SELECT_EQ_OP', 'phase=', st.phase, 'existing=', st.equationOpCard?.operation, 'card=', action.card.operation);
+      if (st.phase !== 'building' || st.equationOpCard) return st;
+      if (action.card.type !== 'operation') return st;
+      return { ...st, equationOpCard: action.card, equationOpPosition: null };
+    }
+    case 'PLACE_EQ_OP': {
+      console.log('[REDUCER] PLACE_EQ_OP', 'pos=', action.position, 'hasCard=', !!st.equationOpCard);
+      if (!st.equationOpCard || action.position < 0 || action.position > 2) return st;
+      return { ...st, equationOpPosition: action.position };
+    }
+    case 'REMOVE_EQ_OP': {
+      console.log('[REDUCER] REMOVE_EQ_OP');
+      return { ...st, equationOpCard: null, equationOpPosition: null };
     }
     case 'PLAY_FRACTION': {
       if (st.hasPlayedCards) return st;
@@ -489,10 +615,12 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         return {
           ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
           currentPlayerIndex: next, phase: 'turn-transition', dice: null,
-          selectedCards: [], equationResult: null, validTargets: [],
-          activeOperation: null, activeFraction: null, identicalPlayCount: 0,
+          selectedCards: [], stagedCards: [], equationResult: null, validTargets: [],
+          activeOperation: null, activeFraction: null, consecutiveIdenticalPlays: 0,
           hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
           pendingFractionTarget: newTarget, fractionPenalty: denom,
+          fractionAttackResolved: false,
+          lastMoveMessage: `⚔️ ${cp.name}: חסם בשבר ${action.card.fraction} — אתגר!`,
           message: `${cp.name} חסם/ה בשבר ${action.card.fraction}!`,
         };
       }
@@ -509,10 +637,12 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       return {
         ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
         currentPlayerIndex: next, phase: 'turn-transition', dice: null,
-        selectedCards: [], equationResult: null, validTargets: [],
-        activeOperation: null, activeFraction: null, identicalPlayCount: 0,
+        selectedCards: [], stagedCards: [], equationResult: null, validTargets: [],
+        activeOperation: null, activeFraction: null, consecutiveIdenticalPlays: 0,
         hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
         pendingFractionTarget: newTarget, fractionPenalty: denom,
+        fractionAttackResolved: false,
+        lastMoveMessage: `⚔️ ${cp.name}: הניח שבר ${action.card.fraction} — אתגר!`,
         message: `${cp.name} שיחק/ה שבר ${action.card.fraction}!`,
       };
     }
@@ -521,7 +651,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (action.card.type !== 'number' || action.card.value !== st.pendingFractionTarget) return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], pendingFractionTarget: null, fractionPenalty: 0, lastCardValue: action.card.value ?? null, message: 'הגנה מוצלחת!' });
+      let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastCardValue: action.card.value ?? null, message: 'הגנה מוצלחת!' });
       if (ns.phase === 'game-over') return ns;
       return { ...ns, phase: 'pre-roll', hasPlayedCards: false };
     }
@@ -529,7 +659,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (st.pendingFractionTarget === null) return st;
       const cp = st.players[st.currentPlayerIndex];
       let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
-      s = { ...s, pendingFractionTarget: null, fractionPenalty: 0, message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.` };
+      s = { ...s, pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastMoveMessage: `📥 ${cp.name}: שלף ${st.fractionPenalty} קלפי עונשין`, message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.` };
       return endTurnLogic(s);
     }
     case 'OPEN_JOKER_MODAL': return { ...st, jokerModalOpen: true, selectedCards: [action.card] };
@@ -543,11 +673,12 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     }
     case 'DRAW_CARD': {
       if (st.hasPlayedCards || st.hasDrawnCard) return st;
+      const drawCp = st.players[st.currentPlayerIndex];
       let s = reshuffleDiscard(st);
       if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: '' };
       const drawnCard = s.drawPile[0];
       s = drawFromPile(s, 1, s.currentPlayerIndex);
-      s = { ...s, hasDrawnCard: true };
+      s = { ...s, hasDrawnCard: true, lastMoveMessage: `📥 ${drawCp.name}: שלף קלף מהחבילה` };
       return endTurnLogic(s);
     }
     case 'CALL_LOLOS': {
@@ -557,6 +688,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     }
     case 'END_TURN': return endTurnLogic(st);
     case 'SET_MESSAGE': return { ...st, message: action.message };
+    case 'CLEAR_TOAST': return { ...st, lastMoveMessage: null };
     case 'RESET_GAME': return initialState;
     default: return st;
   }
@@ -626,120 +758,303 @@ const glowActive = () => Platform.select({
 }) as any;
 
 // ═══════════════════════════════════════════════════════════════
-//  BASE CARD — 3D plastic edge, active glow, thick colored border
+//  3D TEXT HELPERS
 // ═══════════════════════════════════════════════════════════════
 
-function BaseCard({ children, gradient=['#FFFFFF','#F3F4F6'], edgeColor='#D1D5DB', borderColor, selected=false, active=false, onPress, faceDown=false, small=false }: {
-  children: React.ReactNode; gradient?: [string,string]; edgeColor?: string; borderColor?: string; selected?: boolean; active?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
+function interpolateColor(hex1: string, hex2: string, steps: number): string[] {
+  const parse = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const [r1, g1, b1] = parse(hex1);
+  const [r2, g2, b2] = parse(hex2);
+  return Array.from({ length: steps }, (_, i) => {
+    const t = steps <= 1 ? 0 : i / (steps - 1);
+    const r = Math.round(r1 + (r2 - r1) * t);
+    const g = Math.round(g1 + (g2 - g1) * t);
+    const b = Math.round(b1 + (b2 - b1) * t);
+    return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+  });
+}
+
+function Text3D({ text, fontSize, faceColor, darkColor, lightColor, maxOffset = 10 }: {
+  text: string; fontSize: number; faceColor: string; darkColor: string; lightColor: string; maxOffset?: number;
 }) {
-  const w = small ? 56 : 76;
-  const h = small ? 80 : 110;
+  const colors = interpolateColor(darkColor, lightColor, maxOffset);
+  return (
+    <View>
+      {colors.map((color, i) => (
+        <Text key={i} style={{
+          position: 'absolute', top: maxOffset - i, left: maxOffset - i,
+          color, fontSize, fontFamily: 'Fredoka_700Bold',
+        }}>{text}</Text>
+      ))}
+      <Text style={{ color: faceColor, fontSize, fontFamily: 'Fredoka_700Bold' }}>{text}</Text>
+    </View>
+  );
+}
+
+function Line3D({ width, height, faceColor, darkColor, lightColor, layers = 3 }: {
+  width: number; height: number; faceColor: string; darkColor: string; lightColor: string; layers?: number;
+}) {
+  const colors = interpolateColor(darkColor, lightColor, layers);
+  return (
+    <View style={{ width: width + layers, height: height + layers }}>
+      {colors.map((color, i) => (
+        <View key={i} style={{
+          position: 'absolute', top: layers - i, left: layers - i,
+          width, height, backgroundColor: color, borderRadius: height / 2,
+        }} />
+      ))}
+      <View style={{ width, height, backgroundColor: faceColor, borderRadius: height / 2 }} />
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  JESTER SVG
+// ═══════════════════════════════════════════════════════════════
+
+function JesterSvg({ size = 45 }: { size?: number }) {
+  const h = size * 1.4;
+  return (
+    <Svg width={size} height={h} viewBox="0 0 60 84">
+      {/* Hat - 3 sharp triangles with bells */}
+      <SvgPolygon points="30,28 8,4 25,26" fill="#EA4335" />
+      <SvgPolygon points="30,28 30,0 35,26" fill="#4285F4" />
+      <SvgPolygon points="30,28 52,4 35,26" fill="#34A853" />
+      <SvgCircle cx={8} cy={4} r={3.5} fill="#FBBC05" />
+      <SvgCircle cx={30} cy={0} r={3.5} fill="#FBBC05" />
+      <SvgCircle cx={52} cy={4} r={3.5} fill="#FBBC05" />
+      {/* Face */}
+      <SvgCircle cx={30} cy={38} r={11} fill="#FFE0B2" />
+      {/* Evil eyebrows */}
+      <SvgPath d="M 23 34 L 28 32" stroke="#333" strokeWidth={2} strokeLinecap="round" />
+      <SvgPath d="M 37 34 L 32 32" stroke="#333" strokeWidth={2} strokeLinecap="round" />
+      {/* Eyes */}
+      <SvgCircle cx={26} cy={37} r={2} fill="#333" />
+      <SvgCircle cx={34} cy={37} r={2} fill="#333" />
+      {/* Wide mischievous grin */}
+      <SvgPath d="M 23 43 Q 26 49 30 46 Q 34 49 37 43" stroke="#333" strokeWidth={1.8} strokeLinecap="round" fill="none" />
+      {/* Scalloped yellow collar */}
+      <SvgPath d="M 17 50 Q 21 46 25 50 Q 29 46 33 50 Q 37 46 41 50 L 41 53 L 17 53 Z" fill="#FBBC05" />
+      {/* Split body — red left, green right */}
+      <SvgRect x={19} y={53} width={11} height={16} fill="#EA4335" />
+      <SvgRect x={30} y={53} width={11} height={16} fill="#34A853" />
+      {/* Yellow diamonds */}
+      <SvgPolygon points="25,58 27,55 29,58 27,61" fill="#FBBC05" />
+      <SvgPolygon points="31,58 33,55 35,58 33,61" fill="#FBBC05" />
+      <SvgPolygon points="25,65 27,62 29,65 27,68" fill="#FBBC05" />
+      <SvgPolygon points="31,65 33,62 35,65 33,68" fill="#FBBC05" />
+      {/* Legs — blue left, orange right */}
+      <SvgRect x={20} y={69} width={9} height={11} rx={2} fill="#4285F4" />
+      <SvgRect x={31} y={69} width={9} height={11} rx={2} fill="#F97316" />
+      {/* Pointed shoes */}
+      <SvgPath d="M 16 80 L 29 80 L 25 77" fill="#4285F4" />
+      <SvgPath d="M 44 80 L 31 80 L 35 77" fill="#F97316" />
+    </Svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  BASE CARD — 3D white gradient, gloss sheen, colored border
+// ═══════════════════════════════════════════════════════════════
+
+function BaseCard({ children, borderColor = '#9CA3AF', selected = false, active = false, onPress, faceDown = false, small = false }: {
+  children: React.ReactNode; borderColor?: string; selected?: boolean; active?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
+}) {
+  const w = small ? 80 : 110;
+  const h = small ? 115 : 158;
   const fade = useRef(new Animated.Value(0)).current;
-  useEffect(() => { Animated.timing(fade, { toValue:1, duration:200, useNativeDriver:true }).start(); }, []);
+  useEffect(() => { Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start(); }, []);
 
   // Face-down card (draw pile)
   if (faceDown) return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
-      <View style={[{ width:w, borderRadius:12, borderBottomWidth:6, borderBottomColor:'#1E1B4B' }, shadow3D('#000')]}>
-        <LinearGradient colors={['#4338CA','#312E81']} style={{ width:w, height:h, borderRadius:10, alignItems:'center', justifyContent:'center', borderWidth:1.5, borderColor:'rgba(129,140,248,0.3)' }}>
-          <View style={{ width:30, height:30, borderRadius:15, borderWidth:2.5, borderColor:'rgba(165,180,252,0.5)' }} />
-          <View style={{ position:'absolute', top:6, left:6, width:10, height:10, borderRadius:5, backgroundColor:'rgba(165,180,252,0.15)' }} />
-          <View style={{ position:'absolute', bottom:6, right:6, width:10, height:10, borderRadius:5, backgroundColor:'rgba(165,180,252,0.15)' }} />
+      <View style={[{ width: w, borderRadius: 12, borderBottomWidth: 6, borderBottomColor: '#1E1B4B' }, shadow3D('#000')]}>
+        <LinearGradient colors={['#4338CA', '#312E81']} style={{ width: w, height: h, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(129,140,248,0.3)' }}>
+          <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 3, borderColor: 'rgba(165,180,252,0.5)' }} />
+          <View style={{ position: 'absolute', top: 8, left: 8, width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(165,180,252,0.15)' }} />
+          <View style={{ position: 'absolute', bottom: 8, right: 8, width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(165,180,252,0.15)' }} />
         </LinearGradient>
       </View>
     </TouchableOpacity>
   );
 
-  // Compute border/shadow for selected, active, or normal
-  const outerBorderWidth = selected ? 3 : (borderColor ? 4 : 0);
-  const outerBorderColor = selected ? '#FACC15' : (borderColor || 'transparent');
-  const bottomEdge = selected ? '#B45309' : (active ? '#15803D' : edgeColor);
+  // Face-up card — white gradient + gloss sheen
+  const bottomEdge = selected ? '#B45309' : (active ? '#15803D' : borderColor);
   const shadowStyle = active ? glowActive() : (selected ? shadow3D('#FACC15', 14) : shadow3D('#000', 10));
 
   return (
     <Animated.View style={{ opacity: fade }}>
       <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
         <View style={[{
-          width: w, borderRadius: 12,
+          width: w, height: h, borderRadius: 12,
           borderBottomWidth: 6, borderBottomColor: bottomEdge,
-          borderWidth: outerBorderWidth, borderColor: outerBorderColor,
           transform: [{ translateY: selected ? -8 : (active ? -4 : 0) }],
         }, shadowStyle]}>
-          <LinearGradient colors={gradient} style={{ width: w - (outerBorderWidth * 2), height: h, borderRadius: outerBorderWidth > 0 ? 8 : 10, alignItems:'center', justifyContent:'center' }} start={{x:0.3,y:0}} end={{x:0.7,y:1}}>
-            {children}
-          </LinearGradient>
+          <View style={{
+            width: w, height: h, borderRadius: 12, overflow: 'hidden',
+            borderWidth: selected ? 3 : 2,
+            borderColor: selected ? '#FACC15' : borderColor,
+          }}>
+            {/* White-to-gray gradient background (160deg) */}
+            <LinearGradient
+              colors={['#FFFFFF', '#F5F5F5', '#E8E8E8']}
+              locations={[0, 0.7, 1]}
+              start={{ x: 0.3, y: 0 }}
+              end={{ x: 0.7, y: 1 }}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            />
+            {/* Gloss sheen overlay (radial ellipse approximation) */}
+            <View style={{
+              position: 'absolute', top: -(h * 0.15), left: w * 0.05,
+              width: w * 0.9, height: h * 0.5, borderRadius: w,
+              backgroundColor: 'rgba(255,255,255,0.45)',
+            }} />
+            {/* Card content */}
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              {children}
+            </View>
+          </View>
         </View>
       </TouchableOpacity>
     </Animated.View>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  DIE — gradient + 3D edge
-// ═══════════════════════════════════════════════════════════════
-
-const dotPos: Record<number,[number,number][]> = { 1:[[50,50]], 2:[[25,25],[75,75]], 3:[[25,25],[50,50],[75,75]], 4:[[25,25],[75,25],[25,75],[75,75]], 5:[[25,25],[75,25],[50,50],[25,75],[75,75]], 6:[[25,25],[75,25],[25,50],[75,50],[25,75],[75,75]] };
-const DS = 56;
-
-function Die({ value, rolling }: { value: number|null; rolling?: boolean }) {
-  const spin = useRef(new Animated.Value(0)).current;
-  useEffect(() => { if (rolling) { spin.setValue(0); Animated.timing(spin, { toValue:1, duration:600, useNativeDriver:true }).start(); } }, [rolling]);
-  const rz = spin.interpolate({ inputRange:[0,1], outputRange:['0deg','720deg'] });
-  const dots = value && !rolling ? dotPos[value] || [] : [];
-  return (
-    <Animated.View style={[{ width:DS, borderRadius:12, borderBottomWidth:4, borderBottomColor:'#9CA3AF', overflow:'hidden' }, shadow3D('#000',6), { transform:[{rotateZ: rz as any}] }]}>
-      <LinearGradient colors={['#FFFFFF','#E5E7EB']} style={{ width:DS, height:DS, borderRadius:12, position:'relative' }}>
-        {dots.length > 0
-          ? dots.map(([x,y],i) => <View key={i} style={{ position:'absolute', width:12, height:12, borderRadius:6, backgroundColor:'#1F2937', left:(x/100)*DS-6, top:(y/100)*DS-6 }} />)
-          : <Text style={{ position:'absolute', width:'100%', textAlign:'center', top:14, fontSize:22, fontWeight:'700', color:'#D1D5DB' }}>?</Text>}
-      </LinearGradient>
-    </Animated.View>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════
-//  CARD TYPE COMPONENTS — LinearGradient backgrounds
+//  CARD TYPE COMPONENTS — 3D text on white gradient cards
 // ═══════════════════════════════════════════════════════════════
 
-// Color scheme by number range: blue 0-9, green 10-19, red 20-25
-function getNumStyle(v: number) {
-  if (v <= 9) return { border:'#3B82F6', edge:'#1E40AF', text:'#1E3A8A' };
-  if (v <= 19) return { border:'#22C55E', edge:'#166534', text:'#14532D' };
-  return { border:'#EF4444', edge:'#991B1B', text:'#7F1D1D' };
+function getNumColors(v: number) {
+  if (v <= 9) return { face: '#2196F3', border: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9' };
+  if (v <= 19) return { face: '#FBBC05', border: '#FBBC05', dark: '#8B6800', light: '#DC9E00' };
+  return { face: '#34A853', border: '#34A853', dark: '#1B5E2B', light: '#36944F' };
 }
 
 function NumberCard({ card, selected, active, onPress, small }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean }) {
-  const v = card.value ?? 0; const cl = getNumStyle(v);
-  return <BaseCard gradient={['#FFFFFF','#F8FAFC']} edgeColor={cl.edge} borderColor={small ? cl.border : undefined} selected={selected} active={active} onPress={onPress} small={small}>
-    <View style={{alignItems:'center'}}>
-      <Text style={{color:cl.text, fontSize:small?22:32, fontWeight:'900', letterSpacing:-1}}>{v}</Text>
-      {!small && <Text style={{color:cl.text,fontSize:8,marginTop:2,opacity:0.5,fontWeight:'700'}}>מספר</Text>}
-    </View>
-  </BaseCard>;
+  const v = card.value ?? 0;
+  const cl = getNumColors(v);
+  const fs = small ? 42 : 58;
+  const maxOff = small ? 6 : 12;
+  return (
+    <BaseCard borderColor={cl.border} selected={selected} active={active} onPress={onPress} small={small}>
+      <Text3D text={String(v)} fontSize={fs} faceColor={cl.face} darkColor={cl.dark} lightColor={cl.light} maxOffset={maxOff} />
+    </BaseCard>
+  );
 }
 
-const fDisp: Record<string,{n:string;d:string;s:string}> = { '1/2':{n:'1',d:'2',s:'½'}, '1/3':{n:'1',d:'3',s:'⅓'}, '1/4':{n:'1',d:'4',s:'¼'}, '1/5':{n:'1',d:'5',s:'⅕'} };
+const fracColors: Record<string, { face: string; dark: string; light: string }> = {
+  '2': { face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9' },
+  '3': { face: '#34A853', dark: '#1B5E2B', light: '#36944F' },
+  '4': { face: '#FBBC05', dark: '#8B6800', light: '#DC9E00' },
+  '5': { face: '#EA4335', dark: '#8B1A12', light: '#DC4736' },
+};
+const numRed = { face: '#EA4335', dark: '#8B1A12', light: '#DC4736' };
 
 function FractionCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  const f = fDisp[card.fraction ?? '1/2'];
-  return <BaseCard gradient={['#EDE9FE','#DDD6FE']} edgeColor="#4C1D95" borderColor={small ? '#8B5CF6' : undefined} selected={selected} onPress={onPress} small={small}>
-    <View style={{alignItems:'center'}}>{small
-      ? <Text style={{color:'#5B21B6',fontSize:22,fontWeight:'900'}}>{f.s}</Text>
-      : <><Text style={{color:'#5B21B6',fontSize:22,fontWeight:'900',lineHeight:26}}>{f.n}</Text><View style={{width:26,height:3,backgroundColor:'#7C3AED',marginVertical:2,borderRadius:2}} /><Text style={{color:'#5B21B6',fontSize:22,fontWeight:'900',lineHeight:26}}>{f.d}</Text><Text style={{color:'#7C3AED',fontSize:8,marginTop:2,opacity:0.6,fontWeight:'700'}}>שבר</Text></>
-    }</View>
-  </BaseCard>;
+  const f = card.fraction ?? '1/2';
+  const [num, den] = f.split('/');
+  const denCl = fracColors[den] ?? numRed;
+  const fs = small ? 30 : 42;
+  const maxOff = small ? 4 : 8;
+  const lineW = small ? 30 : 44;
+  const lineH = small ? 4 : 6;
+  return (
+    <BaseCard borderColor={denCl.face} selected={selected} onPress={onPress} small={small}>
+      <View style={{ alignItems: 'center' }}>
+        <Text3D text={num} fontSize={fs} faceColor={numRed.face} darkColor={numRed.dark} lightColor={numRed.light} maxOffset={maxOff} />
+        <View style={{ marginVertical: small ? 2 : 3 }}>
+          <Line3D width={lineW} height={lineH} faceColor={denCl.face} darkColor={denCl.dark} lightColor={denCl.light} layers={3} />
+        </View>
+        <Text3D text={den} fontSize={fs} faceColor={denCl.face} darkColor={denCl.dark} lightColor={denCl.light} maxOffset={maxOff} />
+      </View>
+    </BaseCard>
+  );
 }
+
+const opColors: Record<string, { face: string; dark: string; light: string }> = {
+  '+': { face: '#EA4335', dark: '#8B1A12', light: '#DC4736' },
+  '/': { face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9' },
+  'x': { face: '#34A853', dark: '#1B5E2B', light: '#36944F' },
+  '-': { face: '#FBBC05', dark: '#8B6800', light: '#DC9E00' },
+};
+const opDisplay: Record<string, string> = { 'x': '×', '-': '−', '/': '÷', '+': '+' };
 
 function OperationCardComp({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  return <BaseCard gradient={['#FFF7ED','#FFEDD5']} edgeColor="#7C2D12" borderColor={small ? '#F97316' : undefined} selected={selected} onPress={onPress} small={small}>
-    <View style={{alignItems:'center'}}><Text style={{color:'#9A3412',fontSize:small?24:38,fontWeight:'900'}}>{card.operation}</Text>{!small && <Text style={{color:'#C2410C',fontSize:8,marginTop:2,opacity:0.6,fontWeight:'700'}}>פעולה</Text>}</View>
-  </BaseCard>;
+  const op = card.operation ?? '+';
+  const cl = opColors[op] ?? opColors['+'];
+  const display = opDisplay[op] ?? op;
+  const fs = small ? 38 : 52;
+  const maxOff = small ? 6 : 12;
+  return (
+    <BaseCard borderColor={cl.face} selected={selected} onPress={onPress} small={small}>
+      <Text3D text={display} fontSize={fs} faceColor={cl.face} darkColor={cl.dark} lightColor={cl.light} maxOffset={maxOff} />
+    </BaseCard>
+  );
 }
 
-function JokerCard({ card:_c, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
-  return <BaseCard gradient={['#FFFBEB','#FEF3C7']} edgeColor="#78350F" borderColor={small ? '#EAB308' : undefined} selected={selected} onPress={onPress} small={small}>
-    <View style={{alignItems:'center'}}><Text style={{color:'#92400E',fontSize:small?18:28}}>★</Text><Text style={{color:'#78350F',fontSize:small?10:14,fontWeight:'900'}}>ג'וקר</Text></View>
-  </BaseCard>;
+function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+  const w = small ? 80 : 110;
+  const h = small ? 115 : 158;
+  const bw = 3;
+  const maxOff = small ? 4 : 6;
+  const cornerFs = small ? 13 : 18;
+  const svgSize = small ? 40 : 60;
+  const fade = useRef(new Animated.Value(0)).current;
+  useEffect(() => { Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start(); }, []);
+
+  const corners = [
+    { sym: '+', face: '#EA4335', dark: '#8B1A12', light: '#DC4736', pos: { top: 3, left: 3 } as any, rot: '-12deg' },
+    { sym: '÷', face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9', pos: { top: 3, right: 3 } as any, rot: '10deg' },
+    { sym: '×', face: '#34A853', dark: '#1B5E2B', light: '#36944F', pos: { bottom: 10, left: 3 } as any, rot: '10deg' },
+    { sym: '−', face: '#FBBC05', dark: '#8B6800', light: '#DC9E00', pos: { bottom: 10, right: 3 } as any, rot: '-10deg' },
+  ];
+
+  return (
+    <Animated.View style={{ opacity: fade }}>
+      <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
+        <View style={[{
+          width: w, height: h, borderRadius: 12,
+          transform: [{ translateY: selected ? -8 : 0 }],
+        }, selected ? shadow3D('#FACC15', 14) : shadow3D('#000', 10)]}>
+          {/* Rainbow conic-gradient border (diagonal approximation) */}
+          <LinearGradient
+            colors={['#EA4335', '#4285F4', '#34A853', '#FBBC05', '#EA4335']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ width: w, height: h, borderRadius: 12, padding: bw }}
+          >
+            <View style={{ flex: 1, borderRadius: 12 - bw, overflow: 'hidden' }}>
+              {/* White gradient fill */}
+              <LinearGradient
+                colors={['#FFFFFF', '#F5F5F5', '#E8E8E8']}
+                locations={[0, 0.7, 1]}
+                start={{ x: 0.3, y: 0 }}
+                end={{ x: 0.7, y: 1 }}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+              />
+              {/* Gloss sheen */}
+              <View style={{
+                position: 'absolute', top: -(h * 0.15), left: w * 0.05,
+                width: w * 0.9, height: h * 0.5, borderRadius: w,
+                backgroundColor: 'rgba(255,255,255,0.4)',
+              }} />
+              {/* Jester SVG centered */}
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <JesterSvg size={svgSize} />
+              </View>
+              {/* 3D corner symbols — NO black outline */}
+              {corners.map((c, i) => (
+                <View key={i} style={[{ position: 'absolute', transform: [{ rotate: c.rot }] }, c.pos]}>
+                  <Text3D text={c.sym} fontSize={cornerFs} faceColor={c.face} darkColor={c.dark} lightColor={c.light} maxOffset={maxOff} />
+                </View>
+              ))}
+            </View>
+          </LinearGradient>
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
+  );
 }
 
 function GameCard({ card, selected, active, onPress, small }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean }) {
@@ -769,7 +1084,7 @@ function DrawPile() {
   const layers = Math.min(count, 4);
   return (
     <View style={{ alignItems:'center' }}>
-      <View style={{ width:90, height:130, alignItems:'center', justifyContent:'center' }}>
+      <View style={{ width:96, height:132, alignItems:'center', justifyContent:'center' }}>
         {layers > 0 ? pileRotations.slice(4 - layers).map((r, i) => {
           const isTop = i === layers - 1;
           return (
@@ -799,23 +1114,102 @@ function DiscardPile() {
   const pileSize = state.discardPile.length;
   const top = pileSize > 0 ? state.discardPile[pileSize - 1] : null;
   const layers = Math.min(pileSize, 3);
+
+  // Detect spill: challenge card (fraction/operation) sitting on top
+  const hasSpill = !!top && (
+    (top.type === 'fraction' && state.pendingFractionTarget !== null) ||
+    (top.type === 'operation' && state.activeOperation !== null)
+  );
+  const spillCard = hasSpill ? top : null;
+  const visibleTop = hasSpill && pileSize > 1
+    ? state.discardPile[pileSize - 2]
+    : (hasSpill ? null : top);
+
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (hasSpill) {
+      slideAnim.setValue(0);
+      pulseAnim.setValue(0);
+      Animated.spring(slideAnim, {
+        toValue: 1, tension: 50, friction: 8, useNativeDriver: true,
+      }).start();
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 0, duration: 1000, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    } else {
+      slideAnim.setValue(0);
+      pulseAnim.setValue(0);
+    }
+  }, [hasSpill]);
+
+  // Fractions spill right, operations spill left
+  const spillDir = spillCard?.type === 'operation' ? -1 : 1;
+
   return (
     <View style={{ alignItems:'center', gap:4 }}>
-      <View style={{ width:90, height:130, alignItems:'center', justifyContent:'center' }}>
+      <View style={{ width: hasSpill ? 140 : 96, height: hasSpill ? 148 : 132, alignItems:'center', justifyContent:'center' }}>
+        {/* Pile layers — number card underneath stays visible */}
         {layers > 0 ? discardRotations.slice(3 - layers).map((r, i) => {
-          const isTop = i === layers - 1;
+          const isTopLayer = i === layers - 1;
           return (
             <View key={i} style={{ position:'absolute', transform:[{rotate:r.rotate},{translateX:r.translateX},{translateY:r.translateY}] }}>
-              {isTop && top ? <GameCard card={top} active /> : <BaseCard faceDown small><></></BaseCard>}
+              {isTopLayer && visibleTop
+                ? <GameCard card={visibleTop} active small />
+                : <BaseCard faceDown small><></></BaseCard>}
             </View>
           );
         }) : <View style={dpS.empty}><Text style={{color:'#6B7280',fontSize:11}}>ריק</Text></View>}
+
+        {/* Spill card — slides out half on / half off the pile */}
+        {spillCard && (
+          <Animated.View style={{
+            position:'absolute', zIndex:10,
+            transform: [
+              { translateX: slideAnim.interpolate({
+                inputRange: [0, 1], outputRange: [0, 44 * spillDir],
+              }) },
+              { translateY: slideAnim.interpolate({
+                inputRange: [0, 1], outputRange: [0, -12],
+              }) },
+              { rotate: slideAnim.interpolate({
+                inputRange: [0, 1], outputRange: ['0deg', `${12 * spillDir}deg`],
+              }) as any },
+            ],
+          }}>
+            {/* Pulsing red glow behind card */}
+            <Animated.View style={{
+              position:'absolute', top:-5, left:-5, right:-5, bottom:-5,
+              borderRadius:16, backgroundColor:'rgba(231,76,60,0.25)',
+              opacity: pulseAnim.interpolate({ inputRange:[0,1], outputRange:[0.3, 0.9] }),
+            }} />
+            <GameCard card={spillCard} small />
+            {/* Challenge badge */}
+            <View style={{ position:'absolute', bottom:-11, left:0, right:0, alignItems:'center' }}>
+              <View style={{
+                backgroundColor:'#E74C3C', paddingHorizontal:9, paddingVertical:3, borderRadius:6,
+                ...Platform.select({
+                  ios: { shadowColor:'#E74C3C', shadowOpacity:0.5, shadowRadius:6, shadowOffset:{width:0,height:2} },
+                  android: { elevation:4 },
+                }),
+              }}>
+                <Text style={{color:'#FFF',fontSize:9,fontWeight:'800'}}>⚔️ אתגר!</Text>
+              </View>
+            </View>
+          </Animated.View>
+        )}
       </View>
       <Text style={{color:'#9CA3AF',fontSize:11}}>ערימה</Text>
     </View>
   );
 }
-const dpS = StyleSheet.create({ empty: { width:76, height:110, borderRadius:12, borderWidth:2, borderStyle:'dashed', borderColor:'#4B5563', alignItems:'center', justifyContent:'center' } });
+const dpS = StyleSheet.create({ empty: { width:80, height:115, borderRadius:12, borderWidth:2, borderStyle:'dashed', borderColor:'#4B5563', alignItems:'center', justifyContent:'center' } });
 
 // ═══════════════════════════════════════════════════════════════
 //  DICE AREA
@@ -823,17 +1217,29 @@ const dpS = StyleSheet.create({ empty: { width:76, height:110, borderRadius:12, 
 
 function DiceArea() {
   const { state, dispatch } = useGame();
-  const [rolling, setRolling] = useState(false);
-  const handleRoll = () => { if (state.phase !== 'pre-roll') return; setRolling(true); setTimeout(() => { dispatch({ type:'ROLL_DICE' }); setRolling(false); }, 600); };
-  return (
-    <View style={{alignItems:'center',gap:10}}>
-      <View style={{flexDirection:'row',gap:12}}>
-        <Die value={state.dice?.die1 ?? null} rolling={rolling} />
-        <Die value={state.dice?.die2 ?? null} rolling={rolling} />
-        <Die value={state.dice?.die3 ?? null} rolling={rolling} />
+  const canRoll = state.phase === 'pre-roll' && !state.hasPlayedCards && state.pendingFractionTarget === null && !state.activeOperation;
+
+  // After rolling: show static gold dice
+  if (state.dice) {
+    return (
+      <View style={{alignItems:'center',gap:10}}>
+        <View style={{flexDirection:'row',gap:14}}>
+          <GoldDieFace value={state.dice.die1} />
+          <GoldDieFace value={state.dice.die2} />
+          <GoldDieFace value={state.dice.die3} />
+        </View>
       </View>
-      {state.phase === 'pre-roll' && !state.hasPlayedCards && state.pendingFractionTarget === null && <Btn onPress={handleRoll} variant="primary" disabled={rolling}>{rolling ? 'מגלגל...' : 'הטל קוביות'}</Btn>}
-    </View>
+    );
+  }
+
+  // Pre-roll: show 3D dice with roll button
+  return (
+    <Dice3D
+      onRollComplete={(vals) => {
+        dispatch({ type: 'ROLL_DICE', values: { die1: vals[0], die2: vals[1], die3: vals[2] } });
+      }}
+      disabled={!canRoll}
+    />
   );
 }
 
@@ -854,87 +1260,274 @@ function CelebrationFlash({ onDone }: { onDone: () => void }) {
 //  EQUATION BUILDER
 // ═══════════════════════════════════════════════════════════════
 
-const SLOT_SZ = 46; const OP_SZ = 34;
+const SLOT_SZ = 52; const OP_SZ = 44;
 
 function EquationBuilder() {
   const { state, dispatch } = useGame();
-  const [slots, setSlots] = useState<(number|null)[]>([null,null,null]);
-  const [op1, setOp1] = useState('+');
-  const [op2, setOp2] = useState('+');
-  const [selectedDie, setSelectedDie] = useState<number|null>(null);
+  // slots[i] = index into diceValues, or null if empty
+  const [slots, setSlots] = useState<(number|null)[]>([null, null, null]);
+  const [ops, setOps] = useState<string[]>(['+', '+']);
+  const [resultsOpen, setResultsOpen] = useState(false);
   const diceKey = state.dice ? `${state.dice.die1}-${state.dice.die2}-${state.dice.die3}` : '';
-  useEffect(() => { setSlots([null,null,null]); setOp1('+'); setOp2('+'); setSelectedDie(null); }, [diceKey]);
-  if (state.phase !== 'building' || !state.dice || state.activeOperation || state.pendingFractionTarget !== null) return null;
-  const dv = [state.dice.die1, state.dice.die2, state.dice.die3];
-  const placed = new Set(slots.filter((s):s is number => s!==null));
-  const pool = [0,1,2].filter(i => !placed.has(i));
-  const hPool = (di:number) => { if (selectedDie===di){setSelectedDie(null);return;} const fe=slots.findIndex(s=>s===null); if(fe!==-1){const n=[...slots];n[fe]=di;setSlots(n);setSelectedDie(null);}else{setSelectedDie(di);} };
-  const hSlot = (si:number) => { if(slots[si]!==null){const n=[...slots];n[si]=null;setSlots(n);return;} if(selectedDie!==null){const n=[...slots];n[si]=selectedDie;setSlots(n);setSelectedDie(null);} };
-  const cyc = (c:string) => { const idx = EQ_OPS_STR.indexOf(c); return EQ_OPS_STR[idx === -1 ? 0 : (idx + 1) % EQ_OPS_STR.length]; };
-  const sv = (i:number):number|null => { try { return slots[i]!==null?dv[slots[i]!]:null; } catch { return null; } };
-  const cr = getCurrentResult(sv(0),op1,sv(1),op2,sv(2));
-  const sn = state.selectedCards.filter(c=>c.type==='number');
-  const tc = sn.reduce((s,c)=>s+(c.value??0),0);
-  const ok = cr!==null && Number.isFinite(cr) && sn.length>0 && cr===tc && state.validTargets.some(t=>t.result===cr);
-  // Single atomic dispatch — prevents double-dispatch race condition that caused freeze
-  const hConfirm = () => { if(!ok || cr===null) return; dispatch({type:'CONFIRM_AND_DISCARD',result:cr}); };
+  useEffect(() => { setSlots([null,null,null]); setOps(['+','+']); setResultsOpen(false); }, [diceKey]);
 
-  const renderSlot = (i:number) => (
-    <TouchableOpacity key={`s${i}`} style={[eqS.slot, sv(i)===null?eqS.slotEmpty:eqS.slotFilled]} onPress={()=>hSlot(i)} activeOpacity={0.7}>
-      {sv(i)!==null && <Text style={eqS.slotVal}>{sv(i)}</Text>}
-    </TouchableOpacity>
-  );
-  const opDisplay: Record<string,string> = { '+':'+', '-':'-', '*':'×', '/':'÷' };
-  const renderOp = (v:string,set:(v:string)=>void,k:string) => (
-    <TouchableOpacity key={k} onPress={()=>set(cyc(v))} activeOpacity={0.7}>
-      <LinearGradient colors={['#FB923C','#EA580C']} style={eqS.opC}><Text style={eqS.opT}>{opDisplay[v] ?? v}</Text></LinearGradient>
-    </TouchableOpacity>
-  );
+  // Show in building phase AND in solved phase (Bug 8: keep visible)
+  const showBuilder = (state.phase === 'building' || state.phase === 'solved') && state.dice && !state.activeOperation && state.pendingFractionTarget === null;
+  if (!showBuilder) return null;
+  const isSolved = state.phase === 'solved';
+
+  const diceValues = [state.dice!.die1, state.dice!.die2, state.dice!.die3];
+
+  // Which dice indices are currently placed in slots
+  const usedDice = new Set(slots.filter(s => s !== null) as number[]);
+
+  // Tap a dice button: place in first empty slot, or remove if already placed
+  const hDice = (dIdx: number) => {
+    if (isSolved) return;
+    if (usedDice.has(dIdx)) {
+      // Remove from whichever slot it's in
+      setSlots(prev => prev.map(s => s === dIdx ? null : s));
+    } else {
+      // Place in first empty slot
+      setSlots(prev => {
+        const n = [...prev];
+        const emptyIdx = n.indexOf(null);
+        if (emptyIdx !== -1) n[emptyIdx] = dIdx;
+        return n;
+      });
+    }
+  };
+
+  // Tap a filled slot: remove the die from it
+  const hSlot = (i: number) => {
+    if (isSolved) return;
+    if (slots[i] !== null) {
+      setSlots(prev => { const n=[...prev]; n[i]=null; return n; });
+    }
+  };
+
+  // Cycle operators on tap: + → − → × → ÷ → '' (empty/skip) → +
+  const OP_CYCLE = ['+', '-', '×', '÷', ''];
+  const cycleOp = (pos: number) => {
+    try {
+      if (isSolved) return;
+      setOps(prev => {
+        const n = [...prev];
+        const ci = OP_CYCLE.indexOf(n[pos]);
+        const next = OP_CYCLE[ci >= 0 ? (ci + 1) % OP_CYCLE.length : 0];
+        console.log('OPERATOR CYCLED TO', next, 'at pos', pos);
+        n[pos] = next;
+        return n;
+      });
+    } catch (e) { console.warn('cycleOp error', e); }
+  };
+
+  // Collect active slots: skip slots cut off by empty '' operator before them
+  // slot[i] is cut off if i > 0 and ops[i-1] === ''
+  const active: {val: number, connectOp: string | null}[] = [];
+  try {
+    for (let i = 0; i < 3; i++) {
+      if (slots[i] === null) continue; // slot empty — skip
+      if (i > 0 && ops[i-1] === '') continue; // cut off by empty operator — skip
+      const val = diceValues[slots[i]!];
+      if (typeof val !== 'number' || !Number.isFinite(val)) continue;
+      if (active.length === 0) {
+        active.push({val, connectOp: null});
+      } else {
+        active.push({val, connectOp: ops[i-1]});
+      }
+    }
+  } catch (e) { console.warn('active collection error', e); }
+
+  let cr: number | null = null;
+  try {
+    if (active.length >= 2) {
+      let r: number | null = active[0].val;
+      for (let k = 1; k < active.length && r !== null; k++) {
+        const op = active[k].connectOp;
+        if (!op || op === '') { r = null; break; }
+        if (op === '+') r = r + active[k].val;
+        else if (op === '-') r = r - active[k].val;
+        else if (op === '×') r = r * active[k].val;
+        else if (op === '÷') r = (active[k].val !== 0 && r % active[k].val === 0) ? r / active[k].val : null;
+        else r = null;
+      }
+      // Guard against NaN, Infinity, undefined
+      if (r !== null && (typeof r !== 'number' || !Number.isFinite(r))) r = null;
+      cr = r;
+    }
+  } catch (e) { console.warn('equation calc error', e); cr = null; }
+
+  const filledCount = slots.filter(s => s !== null).length;
+  const ok = cr !== null && Number.isFinite(cr) && cr >= 0 && Number.isInteger(cr) && filledCount >= 2 && state.validTargets.some(t => t.result === cr);
+  console.log('BTN STATE:', {result: cr, slots, filledCount, ok, activeLen: active.length});
+  const hConfirm = () => {
+    if (!ok || cr === null) return;
+    const parts: string[] = [String(active[0].val)];
+    for (let k = 1; k < active.length; k++) { parts.push(active[k].connectOp || '+'); parts.push(String(active[k].val)); }
+    dispatch({ type: 'CONFIRM_EQUATION', result: cr, equationDisplay: parts.join(' ') + ` = ${cr}` });
+  };
 
   return (
-    <View style={eqS.wrap}>
-      <Text style={eqS.title}>בנה/י משוואה מהקוביות</Text>
-      <View style={eqS.poolR}>
-        {pool.map(i => (
-          <TouchableOpacity key={`p${i}`} style={[eqS.pDie, selectedDie===i&&eqS.pDieSel]} onPress={()=>hPool(i)} activeOpacity={0.7}>
-            <LinearGradient colors={['#FFF','#DBEAFE']} style={eqS.pDieIn}><Text style={eqS.pDieT}>{dv[i]}</Text></LinearGradient>
-          </TouchableOpacity>
-        ))}
-      </View>
+    <View style={[eqS.wrap, isSolved && {opacity: 0.5}]}>
+      <Text style={eqS.title}>בנה/י תרגיל מהקוביות</Text>
+      {!isSolved && <Text style={{color:'#6B7280',fontSize:10,textAlign:'center'}}>לחץ/י על קובייה כדי למקם אותה</Text>}
+
+      {/* Dice pool: 3 tappable dice buttons */}
+      {!isSolved && (
+        <View style={eqS.diceRow}>
+          {diceValues.map((dv, dIdx) => {
+            const isUsed = usedDice.has(dIdx);
+            return (
+              <TouchableOpacity key={dIdx} onPress={() => hDice(dIdx)} activeOpacity={0.7}
+                style={[eqS.diceBtn, isUsed && eqS.diceBtnUsed]}>
+                <Text style={[eqS.diceBtnT, isUsed && eqS.diceBtnUsedT]}>{dv}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Equation row: slot — op — slot — op — slot */}
       <View style={eqS.eqR}>
-        {renderSlot(0)}{renderOp(op1,setOp1,'o1')}{renderSlot(1)}{renderOp(op2,setOp2,'o2')}{renderSlot(2)}
-        <Text style={eqS.eq}>=</Text>
-        <View style={[eqS.rBox, cr!==null&&eqS.rBoxOk]}><Text style={eqS.rT}>{cr!==null?cr:'?'}</Text></View>
-        <TouchableOpacity onPress={hConfirm} disabled={!ok} activeOpacity={0.7}>
-          <LinearGradient colors={ok?['#22C55E','#15803D']:['#4B5563','#374151']} style={[eqS.cBtn, !ok&&{opacity:0.5}]}><Text style={eqS.cT}>אשר</Text></LinearGradient>
-        </TouchableOpacity>
+        {[0,1,2].map(i => (
+          <React.Fragment key={i}>
+            {i > 0 && (
+              <TouchableOpacity onPress={() => cycleOp(i-1)} activeOpacity={0.5}
+                style={[eqS.opTouchWrap, eqS.opC, ops[i-1] === '' ? eqS.opEmpty : eqS.opDefault]}>
+                {ops[i-1] !== '' && <Text style={eqS.opDefaultT}>{ops[i-1]}</Text>}
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[eqS.slot, slots[i] !== null ? eqS.slotFilled : eqS.slotEmpty]}
+              onPress={() => hSlot(i)} activeOpacity={0.7} disabled={isSolved}>
+              {slots[i] !== null
+                ? <Text style={eqS.slotVal}>{diceValues[slots[i]!]}</Text>
+                : null}
+            </TouchableOpacity>
+          </React.Fragment>
+        ))}
+        {/* Result after slots */}
+        {active.length >= 2 && cr !== null && Number.isFinite(cr) && (
+          <>
+            <Text style={eqS.eqEqualSign}>=</Text>
+            <Text style={[eqS.eqResultNum, ok && {color:'#4ADE80'}]}>{cr}</Text>
+          </>
+        )}
       </View>
-      {state.validTargets.length>0 && <Text style={eqS.hint}>תוצאות אפשריות: {state.validTargets.map(t=>t.result).join(', ')}</Text>}
+
+      {/* Solved phase: show green instruction below equation */}
+      {isSolved && state.equationResult !== null && !state.hasPlayedCards && (
+        <View style={{alignItems:'center',gap:6}}>
+          <Text style={{color:'#4ADE80',fontSize:15,fontWeight:'800',textAlign:'center'}}>
+            ✅ בחר קלפים שסכומם {state.equationResult}
+          </Text>
+        </View>
+      )}
+
+      {/* Confirm button — only in building phase */}
+      {!isSolved && (
+        <TouchableOpacity onPress={hConfirm} disabled={!ok} activeOpacity={0.7}>
+          <LinearGradient colors={ok?['#22C55E','#15803D']:['#4B5563','#374151']} style={[eqS.cBtn, !ok&&{opacity:0.5}]}><Text style={eqS.cT}>בחר קלפים</Text></LinearGradient>
+        </TouchableOpacity>
+      )}
+
+      {/* Possible results toggle */}
+      {!isSolved && state.validTargets.length>0 && (
+        <View style={{width:'100%',alignItems:'flex-start'}}>
+          <TouchableOpacity onPress={()=>setResultsOpen(o=>!o)} activeOpacity={0.7} style={{flexDirection:'row',alignItems:'center',gap:4}}>
+            <Text style={eqS.hint}>{resultsOpen ? '▼' : '▶'} תוצאות אפשריות</Text>
+          </TouchableOpacity>
+          {resultsOpen && (
+            <View style={{flexDirection:'row',flexWrap:'wrap',justifyContent:'flex-start',gap:6,marginTop:6}}>
+              {state.validTargets.map(t => {
+                const v = t.result;
+                const cp = state.players[state.currentPlayerIndex];
+                const hasCard = cp?.hand.some(c => c.type === 'number' && c.value === v);
+                const color = hasCard ? (v <= 9 ? '#4ADE80' : v <= 19 ? '#FACC15' : '#60A5FA') : '#6B7280';
+                return <Text key={v} style={{color, fontSize:11, fontWeight: hasCard ? '700' : '400'}}>{v}</Text>;
+              })}
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 }
 const eqS = StyleSheet.create({
-  wrap:{backgroundColor:'rgba(31,41,55,0.7)',borderRadius:14,padding:14,alignItems:'center',gap:10,borderWidth:1,borderColor:'rgba(75,85,99,0.4)'},
-  title:{color:'#93C5FD',fontSize:14,fontWeight:'800',textAlign:'center'},
-  poolR:{flexDirection:'row',gap:10,justifyContent:'center',alignItems:'center',minHeight:42},
-  pDie:{width:42,height:42,borderRadius:10,borderWidth:2,borderColor:'#93C5FD',overflow:'hidden'},
-  pDieSel:{borderColor:'#FACC15',borderWidth:2.5},
-  pDieIn:{width:'100%',height:'100%',alignItems:'center',justifyContent:'center'},
-  pDieT:{fontSize:18,fontWeight:'800',color:'#1E40AF'},
-  eqR:{flexDirection:'row',direction:'ltr' as any,alignItems:'center',gap:5},
+  wrap:{backgroundColor:'transparent',borderRadius:0,padding:14,alignItems:'center',gap:10,borderWidth:0,borderColor:'transparent'},
+  title:{color:'#93C5FD',fontSize:15,fontWeight:'800',textAlign:'center'},
+  diceRow:{flexDirection:'row',gap:12,justifyContent:'center',direction:'ltr' as any},
+  diceBtn:{width:52,height:52,borderRadius:12,backgroundColor:'#FFF',alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#3B82F6',...Platform.select({ios:{shadowColor:'#3B82F6',shadowOffset:{width:0,height:2},shadowOpacity:0.3,shadowRadius:4},android:{elevation:4}})},
+  diceBtnUsed:{backgroundColor:'rgba(55,65,81,0.4)',borderColor:'#4B5563',opacity:0.4,...Platform.select({ios:{shadowOpacity:0},android:{elevation:0}})},
+  diceBtnT:{fontSize:24,fontWeight:'900',color:'#1F2937'},
+  diceBtnUsedT:{color:'#6B7280'},
+  eqR:{flexDirection:'row',direction:'ltr' as any,alignItems:'center',gap:6,justifyContent:'center'},
   slot:{width:SLOT_SZ,height:SLOT_SZ,borderRadius:10,alignItems:'center',justifyContent:'center'},
-  slotEmpty:{backgroundColor:'rgba(55,65,81,0.4)',borderWidth:2,borderStyle:'dashed',borderColor:'#6B7280'},
   slotFilled:{backgroundColor:'#FFF',borderWidth:2,borderColor:'#3B82F6'},
-  slotVal:{fontSize:20,fontWeight:'900',color:'#1F2937'},
+  slotEmpty:{borderWidth:2,borderStyle:'dashed' as any,borderColor:'rgba(255,255,255,0.3)',backgroundColor:'rgba(55,65,81,0.25)'},
+  slotVal:{fontSize:22,fontWeight:'900',color:'#1F2937'},
+  opTouchWrap:{minWidth:44,minHeight:44,alignItems:'center',justifyContent:'center'},
   opC:{width:OP_SZ,height:OP_SZ,borderRadius:OP_SZ/2,alignItems:'center',justifyContent:'center'},
-  opT:{fontSize:16,fontWeight:'800',color:'#FFF'},
-  eq:{fontSize:22,fontWeight:'900',color:'#9CA3AF',marginHorizontal:2},
-  rBox:{width:SLOT_SZ,height:SLOT_SZ,borderRadius:10,backgroundColor:'#1F2937',borderWidth:2,borderColor:'#4B5563',alignItems:'center',justifyContent:'center'},
-  rBoxOk:{borderColor:'#22C55E'},
-  rT:{color:'#FFF',fontSize:20,fontWeight:'900'},
-  cBtn:{paddingHorizontal:14,height:SLOT_SZ,borderRadius:10,alignItems:'center',justifyContent:'center'},
-  cT:{color:'#FFF',fontSize:13,fontWeight:'700'},
+  opDefault:{backgroundColor:'rgba(75,85,99,0.5)'},
+  opDefaultT:{fontSize:26,fontWeight:'900',color:'#F9A825'},
+  opEmpty:{backgroundColor:'rgba(55,65,81,0.25)',borderWidth:1.5,borderStyle:'dashed' as any,borderColor:'#4B5563'},
+  eqEqualSign:{fontSize:28,fontWeight:'900',color:'#FFD700',marginLeft:6},
+  eqResultNum:{fontSize:24,fontWeight:'900',color:'#FFD700',marginLeft:4},
+  cBtn:{paddingHorizontal:20,paddingVertical:12,borderRadius:10,alignItems:'center',justifyContent:'center'},
+  cT:{color:'#FFF',fontSize:15,fontWeight:'700'},
   hint:{color:'#6B7280',fontSize:11,textAlign:'center'},
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  STAGING ZONE
+// ═══════════════════════════════════════════════════════════════
+
+function StagingZone() {
+  const { state, dispatch } = useGame();
+  if (state.phase !== 'solved' || state.equationResult === null || state.hasPlayedCards || state.pendingFractionTarget !== null) return null;
+
+  const target = state.equationResult;
+  const staged = state.stagedCards;
+  const numberCards = staged.filter(c => c.type === 'number');
+  const sum = numberCards.reduce((s, c) => s + (c.value ?? 0), 0);
+  const hasCards = staged.length > 0;
+  const matches = hasCards && sum === target;
+
+  const clearAll = () => { staged.forEach(c => dispatch({type:'UNSTAGE_CARD',card:c})); };
+
+  return (
+    <View style={szS.wrap}>
+      {hasCards && (
+        <View style={{alignItems:'center',gap:6}}>
+          <View style={{flexDirection:'row',alignItems:'center',gap:8,direction:'ltr' as any}}>
+            <Text style={{color:'#9CA3AF',fontSize:13,fontWeight:'600'}}>נבחר:</Text>
+            {numberCards.map((c, i) => (
+              <React.Fragment key={c.id}>
+                {i > 0 && <Text style={{color:'#FDD835',fontSize:16,fontWeight:'900'}}>+</Text>}
+                <Text style={{color:'#FFF',fontSize:16,fontWeight:'900'}}>{c.value}</Text>
+              </React.Fragment>
+            ))}
+            <Text style={{color:'#FFD700',fontSize:16,fontWeight:'900'}}>=</Text>
+            <Text style={{color: matches ? '#4ADE80' : '#FCA5A5',fontSize:18,fontWeight:'900'}}>{sum}</Text>
+            {matches && <Text style={{color:'#4ADE80',fontSize:16}}>✓</Text>}
+            <TouchableOpacity onPress={clearAll} hitSlop={{top:8,bottom:8,left:8,right:8}} style={szS.undoBtn}>
+              <Text style={{color:'#FCA5A5',fontSize:18,fontWeight:'900'}}>↩</Text>
+            </TouchableOpacity>
+          </View>
+          {!matches && sum !== target && (
+            <Text style={{color:'#FCA5A5',fontSize:12,textAlign:'center'}}>הסכום לא תואם! צריך {target}, נבחר {sum}</Text>
+          )}
+        </View>
+      )}
+      {!hasCards && <Text style={szS.hint}>לחץ/י על קלפי מספר מהיד למטה</Text>}
+    </View>
+  );
+}
+const szS = StyleSheet.create({
+  wrap:{backgroundColor:'transparent',borderRadius:0,padding:12,alignItems:'center',gap:8,borderWidth:0,borderColor:'transparent'},
+  hint:{color:'#6B7280',fontSize:12,textAlign:'center'},
+  undoBtn:{marginLeft:4,width:32,height:32,borderRadius:16,backgroundColor:'rgba(239,68,68,0.2)',alignItems:'center',justifyContent:'center'},
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -947,17 +1540,12 @@ function ActionBar() {
   const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved', hp=state.hasPlayedCards;
   const opCh=pr&&!!state.activeOperation&&!hp;
   const hasFracDefense = state.pendingFractionTarget !== null;
-  const sn=state.selectedCards.filter(c=>c.type==='number');
-  const ss=sn.reduce((s,c)=>s+(c.value??0),0);
-  const canDis=so&&!hp&&sn.length>0&&sn.length===state.selectedCards.length;
   const canLol=(pr||bl||so)&&cp.hand.length<=2&&!cp.calledLolos&&!opCh&&!hasFracDefense;
   return (
     <View style={{width:'100%',gap:10}}>
       {opCh && !hasFracDefense && <View style={aS.opS}><Text style={aS.opT}>אתגר פעולה: {state.activeOperation}</Text><Text style={aS.opH}>הגן/י עם קלף פעולה תואם או ג'וקר.</Text><Btn variant="danger" size="sm" onPress={()=>dispatch({type:'END_TURN'})}>קבל/י עונש</Btn></View>}
-      {hasFracDefense && <View style={aS.opS}><Text style={aS.opT}>התקפת שבר! נדרש: {state.pendingFractionTarget}</Text><Text style={{color:'#FDBA74',fontSize:11,marginBottom:6}}>הנח קלף מספר {state.pendingFractionTarget} להגנה, שבר לחסימה, או קבל עונש.</Text><Btn variant="danger" size="sm" onPress={()=>dispatch({type:'DEFEND_FRACTION_PENALTY'})}>{`שלוף ${state.fractionPenalty} קלפי עונשין`}</Btn></View>}
-      {bl&&!hp&&!hasFracDefense && <View style={{flexDirection:'row',gap:8}}><Btn variant="secondary" size="sm" onPress={()=>dispatch({type:'DRAW_CARD'})}>שלוף קלף (ויתור)</Btn></View>}
-      {canDis&&!hasFracDefense && <View style={{flexDirection:'row',gap:8}}><Btn variant="success" onPress={()=>dispatch({type:'DISCARD_AND_END'})}>{`אשר והנח (${ss})`}</Btn></View>}
-      {(pr||so)&&hp&&!hasFracDefense && <View style={{flexDirection:'row',gap:8}}><Btn variant="secondary" onPress={()=>dispatch({type:'END_TURN'})}>סיים תור</Btn></View>}
+      {(bl||so)&&!hp&&!hasFracDefense && <View style={{flexDirection:'row',gap:8}}><Btn variant="secondary" size="sm" onPress={()=>dispatch({type:'DRAW_CARD'})}>שלוף קלף (ויתור)</Btn></View>}
+      {(pr||bl||so)&&hp&&!hasFracDefense && <View style={{flexDirection:'row',gap:8}}><Btn variant="secondary" onPress={()=>dispatch({type:'END_TURN'})}>סיים תור</Btn></View>}
       {canLol && <View style={{flexDirection:'row',gap:8}}><Btn variant="gold" size="lg" onPress={()=>dispatch({type:'CALL_LOLOS'})}>לולוס!</Btn></View>}
       {!!state.message && <View style={aS.msg}><Text style={aS.msgT}>{state.message}</Text></View>}
       <AppModal visible={state.jokerModalOpen} onClose={()=>dispatch({type:'CLOSE_JOKER_MODAL'})} title="בחר/י פעולה לג'וקר">
@@ -968,7 +1556,7 @@ function ActionBar() {
     </View>
   );
 }
-const aS = StyleSheet.create({ opS:{backgroundColor:'rgba(154,52,18,0.2)',borderWidth:1,borderColor:'rgba(249,115,22,0.3)',borderRadius:10,padding:12}, opT:{color:'#FDBA74',fontSize:13,fontWeight:'600',marginBottom:4}, opH:{color:'#9CA3AF',fontSize:11,marginBottom:8}, msg:{backgroundColor:'rgba(234,179,8,0.1)',borderRadius:10,padding:10,alignItems:'center'}, msgT:{color:'#FDE68A',fontSize:13,textAlign:'center'} });
+const aS = StyleSheet.create({ opS:{backgroundColor:'transparent',borderWidth:0,borderColor:'transparent',borderRadius:0,padding:12}, opT:{color:'#FDBA74',fontSize:13,fontWeight:'600',marginBottom:4}, opH:{color:'#9CA3AF',fontSize:11,marginBottom:8}, msg:{backgroundColor:'rgba(234,179,8,0.1)',borderRadius:10,padding:10,alignItems:'center'}, msgT:{color:'#FDE68A',fontSize:13,textAlign:'center'} });
 
 // ═══════════════════════════════════════════════════════════════
 //  PLAYER HAND
@@ -984,7 +1572,8 @@ function PlayerHand() {
   const sorted = [...cp.hand].sort((a,b) => { const o={number:0,fraction:1,operation:2,joker:3} as const; if(o[a.type]!==o[b.type]) return o[a.type]-o[b.type]; if(a.type==='number'&&b.type==='number') return (a.value??0)-(b.value??0); return 0; });
 
   const tap = (card:Card) => {
-    if (state.hasPlayedCards) return;
+    console.log('CARD TAP', card.id, card.type, card.type==='operation'?card.operation:'', 'phase=', state.phase, 'hp=', state.hasPlayedCards, 'activeOp=', state.activeOperation);
+    if (state.hasPlayedCards) { console.log('BLOCKED: hasPlayedCards'); return; }
 
     // ── Fraction defense: ONLY solve (number) or block (fraction) allowed ──
     if (hasFracDefense) {
@@ -993,31 +1582,75 @@ function PlayerHand() {
       } else if (card.type === 'fraction') {
         dispatch({ type: 'PLAY_FRACTION', card });
       }
-      // Operators, jokers, non-matching numbers — all BANNED during fraction attack
       return;
     }
 
     if (pr) {
       if (opCh) { if(card.type==='operation'&&card.operation===state.activeOperation) dispatch({type:'PLAY_OPERATION',card}); else if(card.type==='joker') dispatch({type:'OPEN_JOKER_MODAL',card}); return; }
-      if (validateIdenticalPlay(card,td)) dispatch({type:'PLAY_IDENTICAL',card}); return;
+      if (state.consecutiveIdenticalPlays < 2 && validateIdenticalPlay(card,td)) dispatch({type:'PLAY_IDENTICAL',card}); return;
     }
-    if (bl||so) {
-      if(card.type==='number') dispatch({type:'SELECT_CARD',card});
+    if (bl) {
+      // Building phase: fraction, joker only (operators cycle locally in equation)
+      if(card.type==='fraction') dispatch({type:'PLAY_FRACTION',card});
+      else if(card.type==='joker') dispatch({type:'OPEN_JOKER_MODAL',card});
+      return;
+    }
+    if (so) {
+      // Solved phase: number + operation → stage/unstage, fraction, joker
+      if(card.type==='number' || card.type==='operation') {
+        const isStaged = state.stagedCards.some(c => c.id === card.id);
+        if (isStaged) dispatch({type:'UNSTAGE_CARD',card});
+        else dispatch({type:'STAGE_CARD',card});
+      }
       else if(card.type==='fraction') dispatch({type:'PLAY_FRACTION',card});
-      else if(card.type==='operation') dispatch({type:'PLAY_OPERATION',card});
       else if(card.type==='joker') dispatch({type:'OPEN_JOKER_MODAL',card});
     }
   };
+
+  const stagedSum = so ? state.stagedCards.filter(c=>c.type==='number').reduce((s,c)=>s+(c.value??0),0) : 0;
+  const target = state.equationResult;
+  const sumMatches = so && target !== null && stagedSum === target && state.stagedCards.length > 0;
 
   return (
     <View style={{width:'100%'}}>
       <View style={{flexDirection:'row',alignItems:'center',gap:6,marginBottom:8}}>
         <Text style={{color:'#D1D5DB',fontSize:13,fontWeight:'600'}}>היד של {cp.name}</Text>
         <Text style={{color:'#6B7280',fontSize:11}}>({cp.hand.length} קלפים)</Text>
+        {so && target !== null && !state.hasPlayedCards && (
+          <View style={{flexDirection:'row',alignItems:'center',gap:4,marginLeft:'auto',backgroundColor:'rgba(34,197,94,0.15)',borderRadius:8,paddingHorizontal:8,paddingVertical:3}}>
+            <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'600'}}>יעד:</Text>
+            <Text style={{color:'#FFF',fontSize:14,fontWeight:'900'}}>{target}</Text>
+            {state.stagedCards.length > 0 && <Text style={{color: sumMatches ? '#4ADE80' : '#FCA5A5',fontSize:11,fontWeight:'700'}}> ({stagedSum})</Text>}
+          </View>
+        )}
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:6,paddingHorizontal:4,paddingBottom:4}}>
-        {sorted.map(card => <GameCard key={card.id} card={card} selected={state.selectedCards.some(c=>c.id===card.id)} small onPress={()=>tap(card)} />)}
+        {sorted.map(card => {
+          const isStaged = state.stagedCards.some(c => c.id === card.id);
+          const isIdentical = pr && !state.hasPlayedCards && state.consecutiveIdenticalPlays < 2 && td && validateIdenticalPlay(card, td);
+          return (
+            <View key={card.id} style={[
+              isIdentical && {borderWidth:2,borderColor:'#F59E0B',borderRadius:12,...Platform.select({ios:{shadowColor:'#F59E0B',shadowOffset:{width:0,height:0},shadowOpacity:0.7,shadowRadius:10},android:{elevation:10}})},
+              isStaged && {borderWidth:3,borderColor:'#FFD700',borderRadius:12,transform:[{translateY:-10}],...Platform.select({ios:{shadowColor:'#FFD700',shadowOffset:{width:0,height:0},shadowOpacity:0.8,shadowRadius:8},android:{elevation:12}})}
+            ]}>
+              <GameCard card={card} selected={isStaged} small onPress={()=>tap(card)} />
+              {isStaged && <View style={{position:'absolute',top:-6,right:-6,width:20,height:20,borderRadius:10,backgroundColor:'#FFD700',alignItems:'center',justifyContent:'center',zIndex:10}}><Text style={{color:'#000',fontSize:12,fontWeight:'900'}}>✓</Text></View>}
+            </View>
+          );
+        })}
       </ScrollView>
+      {so && !state.hasPlayedCards && state.stagedCards.length > 0 && (
+        <TouchableOpacity onPress={()=>dispatch({type:'CONFIRM_STAGED'})} activeOpacity={0.7} style={{marginTop:8}}>
+          <LinearGradient colors={sumMatches ? ['#22C55E','#15803D'] : ['#3B82F6','#1D4ED8']} style={{paddingVertical:10,borderRadius:10,alignItems:'center'}}>
+            <Text style={{color:'#FFF',fontSize:15,fontWeight:'700'}}>הנח קלפים</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
+      {so && !state.hasPlayedCards && (
+        <TouchableOpacity onPress={()=>dispatch({type:'REVERT_TO_BUILDING'})} activeOpacity={0.7} style={{marginTop:6,alignItems:'center'}}>
+          <Text style={{color:'#93C5FD',fontSize:13,fontWeight:'600',textDecorationLine:'underline'}}>חזרה לתרגיל</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -1049,7 +1682,7 @@ function StartScreen() {
         <Btn variant="success" size="lg" onPress={()=>{const p=Array.from({length:pc},(_,i)=>({name:names[i].trim()||`שחקן ${i+1}`}));dispatch({type:'START_GAME',players:p,difficulty:diff});}} style={{width:'100%',marginTop:12}}>התחל משחק</Btn>
         <Btn variant="secondary" size="sm" onPress={()=>setRules(!rules)} style={{width:'100%',marginTop:8}}>{rules?'הסתר חוקים':'איך משחקים?'}</Btn>
         {rules && <View style={ssS.rBox}><Text style={ssS.rTitle}>איך משחקים לולוס</Text>
-          {['כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!','הטל 3 קוביות וצור מספר יעד באמצעות חשבון (הקובייה השלישית אופציונלית).','בחר/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה — ולחצ/י אשר.','לפני הטלת קוביות: אם יש קלף תואם לערימה — לחץ עליו לסיום תור.','קלפי שבר (1/2, 1/3, 1/4, 1/5): מחלקים את הקלף העליון ומכריחים את היריב להגן.','כשנותר 1-2 קלפים — לחץ "לולוס!" לפני שתסיים, אחרת תשלוף עונשין.'].map((r,i) => <Text key={i} style={ssS.rItem}>{i+1}. {r}</Text>)}
+          {['כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!','הטל 3 קוביות וצור מספר יעד באמצעות חשבון (הקובייה השלישית אופציונלית).','בחר/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה — ולחצ/י אשר.','לפני הטלת קוביות: אם יש קלף תואם לערימה — לחץ עליו לסיום תור.','קלפי שבר (1/2, 1/3, 1/4, 1/5): מחלקים את הקלף העליון ומכריחים את היריב להגן.','כשנותר 1-2 קלפים — לחץ "לולוס!" לפני שתסיים, אחרת תשלוף עונשין.','🔄 קלף זהה: אפשר להניח קלף זהה לערימה ולדלג על הקוביות. מוגבל לפעמיים ברצף!'].map((r,i) => <Text key={i} style={ssS.rItem}>{i+1}. {r}</Text>)}
         </View>}
       </ScrollView>
     </LinearGradient>
@@ -1080,9 +1713,123 @@ function TurnTransition() {
 //  GAME SCREEN
 // ═══════════════════════════════════════════════════════════════
 
-function PlayerInfo() {
+function PlayerSidebar() {
   const { state } = useGame();
-  return <View style={{flexDirection:'row',flexWrap:'wrap',gap:6}}>{state.players.map((p,i) => <View key={p.id} style={[{flexDirection:'row',alignItems:'center',gap:6,backgroundColor:'rgba(55,65,81,0.5)',borderRadius:8,paddingHorizontal:10,paddingVertical:5}, i===state.currentPlayerIndex&&{backgroundColor:'rgba(59,130,246,0.25)',borderWidth:1,borderColor:'rgba(59,130,246,0.4)'}]}><Text style={[{color:'#9CA3AF',fontSize:12,fontWeight:'600',maxWidth:80}, i===state.currentPlayerIndex&&{color:'#FFF'}]} numberOfLines={1}>{p.name}</Text><Text style={{color:'#6B7280',fontSize:11,fontWeight:'700'}}>{p.hand.length}</Text></View>)}</View>;
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [rulesTab, setRulesTab] = useState<'basic'|'attacks'|'special'>('basic');
+
+  const rulesBasic = [
+    'כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!',
+    'הטל 3 קוביות וצור מספר יעד באמצעות חשבון (הקובייה השלישית אופציונלית).',
+    'בחר/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה — ולחצ/י אשר.',
+    'לפני הטלת קוביות: אם יש קלף תואם לערימה — לחץ עליו לסיום תור.',
+    'כשנותר 1-2 קלפים — לחץ "לולוס!" לפני שתסיים, אחרת תשלוף עונשין.',
+  ];
+  const rulesAttacks = [
+    'קלפי שבר (1/2, 1/3, 1/4, 1/5): מחלקים את הקלף העליון ומכריחים את היריב להגן.',
+    'הגנה מהתקפת שבר: הנח קלף מספר בדיוק בערך הנדרש, או חסום עם שבר נוסף.',
+    'אם אין הגנה — שלוף קלפי עונשין (מספר = המכנה של השבר).',
+    'קלפי פעולה (+, -, x, ÷): מכריחים את השחקן הבא להגן עם קלף פעולה תואם או ג\'וקר.',
+  ];
+  const rulesSpecial = [
+    'קלף זהה: אפשר להניח קלף זהה לערימה ולדלג על הקוביות. מוגבל לפעמיים ברצף!',
+    'ג\'וקר: בחר/י פעולה כרצונך — מגן מכל התקפה ומאתגר את השחקן הבא.',
+    'שלישייה בקוביות: כל שאר השחקנים שולפים קלפים כמספר הקובייה!',
+    'אם אין קלפים להניח — שלוף קלף מהחבילה (ויתור על תור).',
+  ];
+
+  const tabContent = rulesTab === 'basic' ? rulesBasic : rulesTab === 'attacks' ? rulesAttacks : rulesSpecial;
+
+  return (
+    <>
+      <View style={sbS.wrap}>
+        {state.players.map((p, i) => (
+          <View key={p.id} style={[sbS.tab, i === state.currentPlayerIndex && sbS.tabActive]}>
+            <Text style={[sbS.tabName, i === state.currentPlayerIndex && sbS.tabNameActive]} numberOfLines={1}>{p.name}</Text>
+            <Text style={[sbS.tabCount, i === state.currentPlayerIndex && sbS.tabCountActive]}>{p.hand.length}</Text>
+          </View>
+        ))}
+        <TouchableOpacity onPress={() => setRulesOpen(true)} activeOpacity={0.7}>
+          <LinearGradient colors={['#1E88E5','#1565C0']} style={sbS.rulesBtn}>
+            <Text style={sbS.rulesBtnT}>📖 חוקים</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+      <AppModal visible={rulesOpen} onClose={() => setRulesOpen(false)} title="חוקי לולוס">
+        <View style={{gap:12}}>
+          <View style={{flexDirection:'row',gap:6,justifyContent:'center'}}>
+            {([['basic','בסיסי'],['attacks','התקפות'],['special','מיוחד']] as const).map(([key, label]) => (
+              <TouchableOpacity key={key} onPress={() => setRulesTab(key)} activeOpacity={0.7}
+                style={{paddingHorizontal:14,paddingVertical:6,borderRadius:8,backgroundColor: rulesTab===key ? '#2563EB' : '#374151'}}>
+                <Text style={{color: rulesTab===key ? '#FFF' : '#9CA3AF',fontSize:13,fontWeight:'700'}}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={{gap:8}}>
+            {tabContent.map((r, i) => (
+              <Text key={i} style={{color:'#D1D5DB',fontSize:13,lineHeight:20,textAlign:'right'}}>{i+1}. {r}</Text>
+            ))}
+          </View>
+        </View>
+      </AppModal>
+    </>
+  );
+}
+const sbS = StyleSheet.create({
+  wrap:{position:'absolute',top:56,right:8,flexDirection:'column',gap:5,zIndex:50,width:100},
+  tab:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:4,backgroundColor:'rgba(255,255,255,0.08)',borderRadius:10,paddingHorizontal:10,paddingVertical:6,borderWidth:1,borderColor:'rgba(255,255,255,0.15)'},
+  tabActive:{backgroundColor:'#2E7D32',borderColor:'#66BB6A'},
+  tabName:{color:'rgba(255,255,255,0.5)',fontSize:11,fontWeight:'700',maxWidth:60},
+  tabCount:{color:'#6B7280',fontSize:11,fontWeight:'700'},
+  tabNameActive:{color:'#FFF',fontWeight:'700' as any},
+  tabCountActive:{color:'#C8E6C9'},
+  rulesBtn:{borderRadius:20,paddingVertical:6,paddingHorizontal:12,alignItems:'center',borderWidth:1.5,borderColor:'#42A5F5',...Platform.select({ios:{shadowColor:'rgba(33,150,243,0.3)',shadowOffset:{width:0,height:2},shadowOpacity:1,shadowRadius:4},android:{elevation:4}})},
+  rulesBtnT:{color:'#FFF',fontSize:11,fontWeight:'700'},
+});
+
+function MoveToast() {
+  const { state, dispatch } = useGame();
+  const translateY = useRef(new Animated.Value(40)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const [visible, setVisible] = useState(false);
+  const [text, setText] = useState('');
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (state.lastMoveMessage) {
+      setText(state.lastMoveMessage);
+      setVisible(true);
+      translateY.setValue(40);
+      opacity.setValue(0);
+      // Slide up + fade in
+      Animated.parallel([
+        Animated.timing(translateY, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+      // Auto-dismiss after 4s
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+          setVisible(false);
+          dispatch({ type: 'CLEAR_TOAST' });
+        });
+      }, 4000);
+    }
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [state.lastMoveMessage]);
+
+  if (!visible) return null;
+  return (
+    <Animated.View pointerEvents="none" style={{
+      position: 'absolute', bottom: 110, left: 16, right: 16,
+      transform: [{ translateY }], opacity,
+      backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 12,
+      paddingVertical: 12, paddingHorizontal: 20, alignItems: 'center',
+      zIndex: 999,
+    }}>
+      <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '600', textAlign: 'center' }}>{text}</Text>
+    </Animated.View>
+  );
 }
 
 function GameScreen() {
@@ -1091,39 +1838,68 @@ function GameScreen() {
   const [showCel,setShowCel] = useState(false);
   const prevJ = useRef(state.jokerModalOpen);
   useEffect(() => { if(prevJ.current&&!state.jokerModalOpen&&state.hasPlayedCards) setShowCel(true); prevJ.current=state.jokerModalOpen; }, [state.jokerModalOpen,state.hasPlayedCards]);
+  const td = state.discardPile[state.discardPile.length - 1];
   return (
     <LinearGradient colors={['#0F172A','#1E293B']} style={{flex:1,paddingTop:50}}>
       <View style={{flexDirection:'row',alignItems:'center',paddingHorizontal:16,paddingBottom:8,gap:10}}>
         <TouchableOpacity style={{backgroundColor:'#DC2626',paddingHorizontal:14,paddingVertical:6,borderRadius:8}} onPress={()=>dispatch({type:'RESET_GAME'})}><Text style={{color:'#FFF',fontSize:13,fontWeight:'700'}}>יציאה</Text></TouchableOpacity>
         <Text style={{color:'#F59E0B',fontSize:20,fontWeight:'900',letterSpacing:2,flex:1,textAlign:'center'}}>לולוס</Text>
-        <Text style={{color:'#D1D5DB',fontSize:13}}>תורו/ה של <Text style={{color:'#FFF',fontWeight:'700'}}>{cp?.name}</Text></Text>
+        <View style={{width:13}} />
       </View>
-      <ScrollView style={{flex:1}} contentContainerStyle={{padding:12,gap:14,paddingBottom:20}} showsVerticalScrollIndicator={false}>
-        <PlayerInfo />
+      <PlayerSidebar />
+      <ScrollView style={{flex:1}} contentContainerStyle={{padding:12,paddingRight:116,gap:14,paddingBottom:20}} showsVerticalScrollIndicator={false}>
 
         {/* ── Fraction Attack Warning Banner ── */}
         {state.pendingFractionTarget !== null && (
           <LinearGradient colors={['#7C2D12','#9A3412']} style={{borderRadius:12,padding:14,borderWidth:2,borderColor:'#F97316',alignItems:'center',gap:6}}>
-            <Text style={{color:'#FFF',fontSize:22,fontWeight:'900'}}>⚠️ הותקפת!</Text>
+            <Text style={{color:'#FFF',fontSize:22,fontWeight:'900'}}>⚠️ אותגרת!</Text>
             <Text style={{color:'#FDE68A',fontSize:16,fontWeight:'700',textAlign:'center'}}>
               הנח קלף {state.pendingFractionTarget} או חסום עם שבר
             </Text>
             <Text style={{color:'#FDBA74',fontSize:12,textAlign:'center'}}>
               עונש: שליפת {state.fractionPenalty} קלפים
             </Text>
+            <Btn variant="danger" size="sm" onPress={()=>dispatch({type:'DEFEND_FRACTION_PENALTY'})}>{`שלוף ${state.fractionPenalty} קלפי עונשין`}</Btn>
           </LinearGradient>
         )}
 
-        {/* ── Centered Target Card Stack ── */}
-        <View style={{alignItems:'center',gap:6}}>
-          <Text style={{color:'#9CA3AF',fontSize:13,fontWeight:'600',textAlign:'center'}}>קלפים שנותרו בחבילה: {state.drawPile.length}</Text>
-          <DiscardPile />
+        {/* ── Dice + Deck side by side (RTL: first child = right) ── */}
+        <View style={{flexDirection:'row',alignItems:'flex-start',gap:12}}>
+          <View style={{alignItems:'center',gap:4}}>
+            <DiscardPile />
+            <Text style={{color:'#6B7280',fontSize:10}}>{state.drawPile.length} בחבילה</Text>
+          </View>
+          <View style={{flex:1,alignItems:'center'}}><DiceArea /></View>
         </View>
 
-        <DiceArea /><EquationBuilder /><ActionBar />
+        <EquationBuilder /><StagingZone /><ActionBar />
       </ScrollView>
-      <View style={{backgroundColor:'rgba(15,23,42,0.8)',paddingHorizontal:12,paddingVertical:10,paddingBottom:24,borderTopWidth:1,borderTopColor:'rgba(75,85,99,0.3)'}}><PlayerHand /></View>
+      <View style={{backgroundColor:'transparent',paddingHorizontal:12,paddingVertical:10,paddingBottom:24,borderTopWidth:0,borderTopColor:'transparent'}}><PlayerHand /></View>
       {showCel && <CelebrationFlash onDone={()=>setShowCel(false)} />}
+      {/* Identical card play warning modal (red theme) */}
+      <RNModal visible={!!state.identicalAlert} transparent animationType="fade" onRequestClose={() => dispatch({type:'DISMISS_IDENTICAL_ALERT'})}>
+        <View style={{flex:1,backgroundColor:'rgba(0,0,0,0.7)',justifyContent:'center',alignItems:'center',padding:24}}>
+          <View style={{backgroundColor:'#1C1014',borderRadius:20,padding:28,width:'88%',alignItems:'center',borderWidth:2,borderColor:'#E74C3C'}}>
+            <Text style={{fontSize:40,marginBottom:8}}>🔄</Text>
+            <Text style={{color:'#E74C3C',fontSize:22,fontWeight:'900',marginBottom:10,textAlign:'center'}}>קלף זהה!</Text>
+            <Text style={{color:'#FCA5A5',fontSize:16,fontWeight:'700',textAlign:'center',lineHeight:26,marginBottom:6}}>
+              {state.identicalAlert?.playerName} הניח קלף זהה ({state.identicalAlert?.cardDisplay}) — דילוג על קוביות!
+            </Text>
+            {state.identicalAlert?.consecutive === 1 && (
+              <Text style={{color:'#FDBA74',fontSize:14,textAlign:'center',marginBottom:14}}>נותר עוד שימוש אחד בקלף זהה</Text>
+            )}
+            {(state.identicalAlert?.consecutive ?? 0) >= 2 && (
+              <View style={{backgroundColor:'rgba(231,76,60,0.15)',borderRadius:10,padding:10,marginBottom:14,borderWidth:1,borderColor:'rgba(231,76,60,0.3)'}}>
+                <Text style={{color:'#EF4444',fontSize:14,fontWeight:'800',textAlign:'center'}}>⚠️ זה השימוש האחרון! השחקן הבא חייב להטיל קוביות</Text>
+              </View>
+            )}
+            <TouchableOpacity style={{backgroundColor:'#E74C3C',borderRadius:12,paddingHorizontal:32,paddingVertical:12}} onPress={() => dispatch({type:'DISMISS_IDENTICAL_ALERT'})}>
+              <Text style={{color:'#FFF',fontSize:16,fontWeight:'700'}}>הבנתי!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
+      <MoveToast />
     </LinearGradient>
   );
 }
@@ -1173,6 +1949,8 @@ function GameRouter() {
 }
 
 function App() {
+  const [fontsLoaded] = useFonts({ Fredoka_700Bold });
+  if (!fontsLoaded) return null;
   return <GameProvider><StatusBar style="light" /><GameRouter /></GameProvider>;
 }
 
