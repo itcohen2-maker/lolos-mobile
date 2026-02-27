@@ -4,7 +4,7 @@
 
 import type { Card, DiceResult, EquationOption, Fraction, Operation } from '../../shared/types';
 
-// ── Arithmetic — strict left-to-right ──
+// ── Arithmetic ──
 
 export function applyOperation(a: number, op: Operation | string, b: number): number | null {
   switch (op) {
@@ -14,6 +14,22 @@ export function applyOperation(a: number, op: Operation | string, b: number): nu
     case '÷': case '/': return b !== 0 && a % b === 0 ? a / b : null;
     default: return null;
   }
+}
+
+function isHighPrecedence(op: string): boolean {
+  return op === 'x' || op === '×' || op === '*' || op === '÷' || op === '/';
+}
+
+/** Evaluate a op1 b op2 c with standard order of operations (× ÷ before + −) */
+export function evalThreeTerms(a: number, op1: string, b: number, op2: string, c: number): number | null {
+  if (isHighPrecedence(op2) && !isHighPrecedence(op1)) {
+    const right = applyOperation(b, op2, c);
+    if (right === null) return null;
+    return applyOperation(a, op1, right);
+  }
+  const left = applyOperation(a, op1, b);
+  if (left === null) return null;
+  return applyOperation(left, op2, c);
 }
 
 export function fractionDenominator(f: Fraction): number {
@@ -37,14 +53,13 @@ export function getCurrentResult(
 ): number | null {
   try {
     if (s1 === null || s2 === null) return null;
-    const intermediate = applyOperation(s1, op1, s2);
-    if (intermediate === null) return null;
     if (s3 !== null) {
-      const final = applyOperation(intermediate, op2, s3);
-      if (final === null || !Number.isFinite(final)) return null;
-      return final;
+      const result = evalThreeTerms(s1, op1, s2, op2, s3);
+      if (result === null || !Number.isFinite(result)) return null;
+      return result;
     }
-    if (!Number.isFinite(intermediate)) return null;
+    const intermediate = applyOperation(s1, op1, s2);
+    if (intermediate === null || !Number.isFinite(intermediate)) return null;
     return intermediate;
   } catch {
     return null;
@@ -85,17 +100,14 @@ export function generateValidTargets(dice: DiceResult): EquationOption[] {
   const seen = new Set<string>();
   const results: EquationOption[] = [];
 
-  // 3-dice combinations
+  // 3-dice combinations (standard order of operations)
   for (const [a, b, c] of perms) {
     for (const op1 of ALL_OPS) {
       for (const op2 of ALL_OPS) {
-        const ab = applyOperation(a, op1, b);
-        if (ab !== null) {
-          const r = applyOperation(ab, op2, c);
-          if (r !== null && r >= 0 && Number.isInteger(r)) {
-            const eq = `${a} ${op1} ${b} ${op2} ${c} = ${r}`;
-            if (!seen.has(`${r}:${eq}`)) { seen.add(`${r}:${eq}`); results.push({ equation: eq, result: r }); }
-          }
+        const r = evalThreeTerms(a, op1, b, op2, c);
+        if (r !== null && r >= 0 && Number.isInteger(r)) {
+          const eq = `${a} ${op1} ${b} ${op2} ${c} = ${r}`;
+          if (!seen.has(`${r}:${eq}`)) { seen.add(`${r}:${eq}`); results.push({ equation: eq, result: r }); }
         }
       }
     }
