@@ -1,102 +1,23 @@
-import React, { useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
-import { WebView } from 'react-native-webview';
-
-interface DiceWebViewProps {
-  onResult?: (results: number[], total: number) => void;
-  height?: number;
-}
-
-export interface DiceWebViewRef {
-  throwDice: () => void;
-}
-
-const DICE_VERSION = 9; // bump to force WebView re-mount
-
-const DiceWebViewComponent = forwardRef<DiceWebViewRef, DiceWebViewProps>(
-  ({ onResult, height = 220 }, ref) => {
-    const webViewRef = useRef<WebView>(null);
-
-    console.log('[DiceWebView] Rendering v' + DICE_VERSION + ', HTML length=' + DICE_HTML.length);
-
-    const throwDice = useCallback(() => {
-      webViewRef.current?.injectJavaScript(`
-        if (window.doThrow) window.doThrow();
-        true;
-      `);
-    }, []);
-
-    useImperativeHandle(ref, () => ({ throwDice }));
-
-    const onMessage = useCallback((event: any) => {
-      try {
-        const data = JSON.parse(event.nativeEvent.data);
-        if (data.type === 'debug') {
-          console.log('[DiceWV]', data.msg);
-          return;
-        }
-        if (data.type === 'diceResult' && onResult) {
-          onResult(data.results, data.total);
-        }
-      } catch (e) {}
-    }, [onResult]);
-
-    return (
-      <View style={[styles.container, { height: height as any }]}>
-        <WebView
-          key={'dice-wv-v' + DICE_VERSION}
-          ref={webViewRef}
-          source={{ html: DICE_HTML }}
-          style={styles.webview}
-          scrollEnabled={false}
-          bounces={false}
-          onMessage={onMessage}
-          javaScriptEnabled={true}
-          allowsInlineMediaPlayback={true}
-          mediaPlaybackRequiresUserAction={false}
-          originWhitelist={['*']}
-          transparent={true}
-          androidLayerType="hardware"
-        />
-      </View>
-    );
-  }
-);
-
-DiceWebViewComponent.displayName = 'DiceWebView';
-export const DiceWebView = DiceWebViewComponent;
-
-const styles = StyleSheet.create({
-  container: {
-    overflow: 'hidden',
-    borderRadius: 0,
-    alignSelf: 'stretch',
-    backgroundColor: 'transparent',
-  },
-  webview: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-});
-
-const DICE_HTML = `
 <!DOCTYPE html>
-<html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lulos Dice</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;background:transparent;touch-action:none}
-#cw{width:100%;height:100%}
+body{background:#0a0f1e;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+#cw{width:100vw;height:100vh;cursor:pointer}
+/* No result slots */
 </style>
-</head><body>
+</head>
+<body>
 <div id="cw"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>
+<!-- NO BUTTON — doThrow() is exposed globally for external triggering -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 // === PIP LAYOUT ===
 var PL={1:[[0,0]],2:[[-0.25,-0.25],[0.25,0.25]],3:[[-0.25,-0.25],[0,0],[0.25,0.25]],4:[[-0.25,-0.25],[0.25,-0.25],[-0.25,0.25],[0.25,0.25]],5:[[-0.25,-0.25],[0.25,-0.25],[0,0],[-0.25,0.25],[0.25,0.25]],6:[[-0.25,-0.25],[0.25,-0.25],[-0.25,0],[0.25,0],[-0.25,0.25],[0.25,0.25]]};
-
-// === DEBUG / RN MESSAGING ===
-function dbg(m){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({type:"debug",msg:m}))}
 
 // === DICE FACE TEXTURE ===
 function mkTex(n){
@@ -201,7 +122,7 @@ wanderTimer:0,wanderDur:2+Math.random()*3,
 moveSpeed:pers.spd,bob:pers.bob,sway:pers.sway,
 pChance:pers.pChance,wanderR:pers.wanderR,turnSpd:pers.turnSpd,
 isPaused:false,pauseT:0,wOff:Math.random()*Math.PI*2,
-actionState:"walk",actionTimer:0,bumpDir:1,
+actionState:"walk",actionTimer:0,
 flyTimer:0,flyStart:null,slotIdx:-1,rollStyle:"",rollTarget:null,rollDuration:2,arcDir:1
 }}
 
@@ -245,9 +166,10 @@ dice.forEach(function(d,i){d.root.position.set(d.wx,0.44,d.wz);d.root.rotation.y
 var GRV=14,FLY=-1.3,FRC=0.97,GY=FLY+0.5+1.24;
 var STT={I:0,T:1,F:2,D:3};var state=STT.I,tT=0,resShown=false;
 
-// === SOUND ENGINE ===
+// === SOUND ENGINE — shuffle during roll + landing at end ===
 var ac=null;
-function gc(){if(!ac)ac=new(window.AudioContext||window.webkitAudioContext)();if(ac.state==="suspended")ac.resume();return ac}
+function gc(){if(!ac)ac=new(window.AudioContext||window.webkitAudioContext)();return ac}
+// Continuous dice clacking — short percussive hits, no wind
 var shuffleNode=null,shuffleGain=null,shuffleInterval=null;
 function sShuffleStart(){
 var c=gc();if(shuffleInterval)return;
@@ -256,6 +178,7 @@ shuffleGain.connect(c.destination);
 shuffleInterval=setInterval(function(){
 try{
 var c2=gc(),t=c2.currentTime;
+// Random wooden clack
 var o=c2.createOscillator(),g=c2.createGain();
 o.type="triangle";
 var freq=150+Math.random()*250;
@@ -280,27 +203,29 @@ shuffleGain=null;
 function sLandFinal(){
 sShuffleStop();
 var c=gc(),t=c.currentTime;
+// Clean deep thud
 var o1=c.createOscillator(),g1=c.createGain();
 o1.type="sine";o1.frequency.setValueAtTime(80,t);o1.frequency.exponentialRampToValueAtTime(30,t+0.2);
 g1.gain.setValueAtTime(0.25,t);g1.gain.exponentialRampToValueAtTime(0.001,t+0.25);
 o1.connect(g1);g1.connect(c.destination);o1.start(t);o1.stop(t+0.3);
+// Wooden tap
 var o2=c.createOscillator(),g2=c.createGain();
 o2.type="triangle";o2.frequency.setValueAtTime(300,t);o2.frequency.exponentialRampToValueAtTime(100,t+0.05);
 g2.gain.setValueAtTime(0.12,t);g2.gain.exponentialRampToValueAtTime(0.001,t+0.06);
 o2.connect(g2);g2.connect(c.destination);o2.start(t);o2.stop(t+0.08);
+// Second lighter tap
 var o3=c.createOscillator(),g3=c.createGain();
 o3.type="triangle";o3.frequency.setValueAtTime(250,t+0.08);o3.frequency.exponentialRampToValueAtTime(80,t+0.13);
 g3.gain.setValueAtTime(0.06,t+0.08);g3.gain.exponentialRampToValueAtTime(0.001,t+0.14);
 o3.connect(g3);g3.connect(c.destination);o3.start(t+0.08);o3.stop(t+0.16);
 }
 
+// === UI — no DOM slots, dice stay in 3D ===
 function clearSlots(){}
 
-// === THROW ===
-window.doThrow=function(){
-if(state!==STT.I)return;
-dbg("doThrow");
-clearSlots();resShown=false;
+// === THROW — exposed globally for external trigger ===
+function doThrow(){
+if(state!==STT.I)return;clearSlots();resShown=false;
 dice.forEach(function(d,i){
 var r=Math.floor(Math.random()*6)+1;
 d.throwResult=r;d.throwPhase="tumble";d.bounceCount=0;
@@ -309,9 +234,14 @@ d.px=d.wx;d.py=GY;d.pz=d.wz;
 d.vx=(i-1)*1.5+(Math.random()-0.5);
 d.vy=3.5+Math.random()*1;
 d.vz=(5+Math.random()*1)});
-state=STT.T;sShuffleStart()};
+state=STT.T;sShuffleStart()}
+// Expose globally so it can be called from outside
+window.doThrow=doThrow;
 
-cw.addEventListener("click",function(){if(state===STT.I)window.doThrow()});
+// Click to throw
+cw.addEventListener("click",function(){
+if(state===STT.I)doThrow();
+});
 
 var cPos=new THREE.Vector3(0,5,10),cLk=new THREE.Vector3(0,0,0);
 var cTP=new THREE.Vector3(0,5,10),cTL=new THREE.Vector3(0,0,0);
@@ -369,6 +299,7 @@ if(d.actionState==="pushing"){d.actionTimer-=dt;var pP=1-d.actionTimer/0.5;var p
 // Walking
 var dx=d.targetX-d.wx,dz=d.targetZ-d.wz,dist=Math.sqrt(dx*dx+dz*dz);
 if(dist>0.15){var spd=d.moveSpeed*dt;d.wx+=dx/dist*spd;d.wz+=dz/dist*spd;var targetAng=Math.atan2(dx,dz);d.heading=lerpAngle(d.heading,targetAng,dt*d.turnSpd)}else{pickNewTarget(d)}
+// Clamp wander to boundaries
 var WB_X=4.5,WB_Z=8;d.wx=Math.max(-WB_X,Math.min(WB_X,d.wx));d.wz=Math.max(-WB_Z,Math.min(WB_Z,d.wz));
 var sc=t*d.moveSpeed*6+d.wOff;
 d.root.position.set(d.wx,GY-Math.abs(Math.sin(sc))*d.bob+Math.max(0,Math.sin(sc*2-0.5))*0.02,d.wz);
@@ -387,7 +318,7 @@ d.glow.material.opacity=0.05+Math.sin(t*1.5+d.wOff)*0.02;
 });
 
 // Idle collision
-for(var ci=0;ci<dice.length;ci++){for(var cj=ci+1;cj<dice.length;cj++){var a=dice[ci],b=dice[cj];var cdx=b.wx-a.wx,cdz=b.wz-a.wz;var cdist=Math.sqrt(cdx*cdx+cdz*cdz);var minD=1.4;if(cdist<minD&&cdist>0.01){var overlap=(minD-cdist)/2;var cnx=cdx/cdist,cnz=cdz/cdist;a.wx-=cnx*overlap*0.5;a.wz-=cnz*overlap*0.5;b.wx+=cnx*overlap*0.5;b.wz+=cnz*overlap*0.5;if(cdist<1.2&&a.actionState!=="bumped"&&b.actionState!=="bumped"){var pusher=Math.random()>0.5?a:b;var stumbler=pusher===a?b:a;stumbler.actionState="bumped";stumbler.actionTimer=0.8+Math.random()*0.6;stumbler.bumpDir=pusher===a?1:-1;pusher.actionState="pushing";pusher.actionTimer=0.5}}}}
+for(var ci=0;ci<dice.length;ci++){for(var cj=ci+1;cj<dice.length;cj++){var a=dice[ci],b=dice[cj];var cdx=b.wx-a.wx,cdz=b.wz-a.wz;var cdist=Math.sqrt(cdx*cdx+cdz*cdz);var minD=1.4;if(cdist<minD&&cdist>0.01){var overlap=(minD-cdist)/2;var cnx=cdx/cdist,cnz=cdz/cdist;a.wx-=cnx*overlap*0.5;a.wz-=cnz*overlap*0.5;b.wx+=cnx*overlap*0.5;b.wz+=cnz*overlap*0.5;if(cdist<1.2&&a.actionState!=="bumped"&&b.actionState!=="bumped"){var pusher=Math.random()>0.5?a:b;var stumbler=pusher===a?b:a;stumbler.actionState="bumped";stumbler.actionTimer=0.8+Math.random()*0.6;stumbler.bumpDir=pusher===a?1:-1;stumbler.bumpAngle=Math.atan2(cdx,cdz)*(pusher===a?1:-1);pusher.actionState="pushing";pusher.actionTimer=0.5;pusher.pushTarget=stumbler===a?ci:cj}}}}
 cTP.set(Math.sin(t*0.08)*0.5,4.5,9);cTL.set(0,GY-0.3,0);
 }
 
@@ -396,6 +327,7 @@ if(state===STT.T){
 var allS=true;
 dice.forEach(function(d,i){
 if(d.throwPhase==="tumble"){allS=false;d.vy-=GRV*dt;d.px+=d.vx*dt;d.py+=d.vy*dt;d.pz+=d.vz*dt;d.vx*=FRC;d.vz*=FRC;
+// Boundary walls — bounce off edges
 var BX=5,BZ=9;
 if(d.px>BX){d.px=BX;d.vx=-Math.abs(d.vx)*0.5}
 if(d.px<-BX){d.px=-BX;d.vx=Math.abs(d.vx)*0.5}
@@ -410,7 +342,7 @@ if(allS&&!resShown){resShown=true;state=STT.F;var stys=["rollStraight","rollArc"
 cTP.set(0,4,5);cTL.set(0,0.5,0);
 }
 
-// ========== FLY/ROLL STATE ==========
+// ========== FLY/ROLL TO EQUATION STATE ==========
 if(state===STT.F){
 var allL=true;
 dice.forEach(function(d,i){
@@ -423,12 +355,14 @@ else if(sty==="zigzag"){var zig=Math.sin(p*Math.PI*5)*1.5*(1-p);px=sx+(ex-sx)*e+
 else{if(p<0.25){var bp2=p/0.25;px=sx;pz=sz;py=ey+Math.sin(bp2*Math.PI)*1.5;bRX=-bp2*Math.PI*2;lA=0.1;aS=0.8}else{var rp3=(p-0.25)/0.75,re2=rp3<0.5?2*rp3*rp3:1-Math.pow(-2*rp3+2,2)/2;px=sx+(ex-sx)*re2;pz=sz+(ez-sz)*re2;py=ey+Math.abs(Math.sin(rp3*Math.PI*5))*0.06;bRX=rp3*Math.PI*3;lA=0.6;ws=10}}
 d.root.position.set(px,py,pz);d.root.rotation.y=Math.atan2(ex-sx,ez-sz)+bRY;d.bp.rotation.x=bRX;d.bp.rotation.z=0;var wt=t*ws;d.ll.rotation.x=Math.sin(wt)*lA;d.rl.rotation.x=Math.sin(wt+Math.PI)*lA;if(d.ll.userData.shin)d.ll.userData.shin.rotation.x=Math.max(0,Math.sin(wt))*lA*0.8;if(d.rl.userData.shin)d.rl.userData.shin.rotation.x=Math.max(0,Math.sin(wt+Math.PI))*lA*0.8;var lp2=wt+Math.PI,rp4=wt;d.la.rotation.x=Math.sin(lp2)*aS;d.ra.rotation.x=Math.sin(rp4)*aS;d.la.rotation.z=-0.25;d.ra.rotation.z=0.25;if(d.la.userData.forearm)d.la.userData.forearm.rotation.x=0.1+Math.sin(lp2)*0.15;if(d.ra.userData.forearm)d.ra.userData.forearm.rotation.x=0.1+Math.sin(rp4)*0.15;aF(d.la,Math.max(0,Math.sin(lp2)),Math.max(0,-Math.sin(lp2)));aF(d.ra,Math.max(0,Math.sin(rp4)),Math.max(0,-Math.sin(rp4)));
 if(p>=1){
+// Fly up but DON'T show result yet — hover with face hidden
 d.throwPhase="flyUp";d.flyTimer=0;
 d.flyStart={x:px,y:py,z:pz};
 d.flyTarget={x:(i-1)*2.2,y:2.2+i*0.2,z:0.5};
 d.landTarget=fUR(d.throwResult);
 }}
 else if(d.throwPhase==="flyUp"){
+// Rise up, spread out — but stop BEFORE revealing face (0.8s)
 allL=false;d.flyTimer+=dt;
 var dur1=0.8,p2=Math.min(d.flyTimer/dur1,1);
 var e2=p2<0.5?2*p2*p2:1-Math.pow(-2*p2+2,2)/2;
@@ -439,9 +373,11 @@ sx2+(tx-sx2)*e2,
 sy2+(ty-sy2)*e2+Math.sin(p2*Math.PI)*0.8,
 sz2+(tz-sz2)*e2
 );
+// Keep spinning — don't settle to result face yet
 d.bp.rotation.x+=dt*3;
 d.bp.rotation.y+=dt*2;
 d.root.rotation.y*=(1-dt*1.5);
+// Tuck limbs
 d.la.rotation.x*=(1-dt*3);d.ra.rotation.x*=(1-dt*3);
 d.la.rotation.z+=(-0.3-d.la.rotation.z)*dt*3;
 d.ra.rotation.z+=(0.3-d.ra.rotation.z)*dt*3;
@@ -450,9 +386,13 @@ if(d.la.userData.forearm)d.la.userData.forearm.rotation.x*=(1-dt*3);
 if(d.ra.userData.forearm)d.ra.userData.forearm.rotation.x*=(1-dt*3);
 aF(d.la,0,0);aF(d.ra,0,0);
 d.glow.material.opacity=0.06+e2*0.08;
-if(p2>=1){d.throwPhase="waiting"}
+if(p2>=1){
+// STOP HERE — waiting state, face NOT revealed
+d.throwPhase="waiting";
+}
 }
 else if(d.throwPhase==="waiting"){
+// Hover in place, slow gentle spin — result face hidden
 var tx3=d.flyTarget.x,ty3=d.flyTarget.y,tz3=d.flyTarget.z;
 d.root.position.set(
 tx3+Math.sin(t*0.8+i*2)*0.05,
@@ -472,7 +412,6 @@ state=STT.D;sShuffleStop();sLandFinal();
 // Send results to React Native
 var results=dice.map(function(d){return d.throwResult});
 var total=results[0]+results[1]+results[2];
-dbg("diceResult: "+results.join(",")+", total="+total);
 try{
 window.ReactNativeWebView.postMessage(JSON.stringify({
   type:"diceResult",
@@ -480,6 +419,7 @@ window.ReactNativeWebView.postMessage(JSON.stringify({
   total:total
 }));
 }catch(e){
+// Fallback for testing in browser
 console.log("diceResult",results,total);
 }
 // Return to idle after 2s (RN will hide the WebView)
@@ -519,9 +459,7 @@ cam.position.copy(cPos);cam.lookAt(cLk);
 ren.render(scene,cam);
 }
 anim();
-window.addEventListener("resize",function(){
-  var w=cw.clientWidth,h=cw.clientHeight;
-  ren.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()});
-<\/script>
-</body></html>
-`;
+window.addEventListener("resize",function(){ren.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+</script>
+</body>
+</html>
