@@ -1107,22 +1107,30 @@ function getTipOfTheTurn(st: GameState): string {
   return 'המשחק ינחה אותך בכל תור.';
 }
 
+function getDeckCounts(numberRange: 'easy' | 'full', fractions: boolean) {
+  const numCount = numberRange === 'easy' ? 52 : 104;
+  const fracCount = fractions ? 15 : 0;
+  return { numCount, fracCount, opCount: 16, jokerCount: 4, wildCount: 4 };
+}
+
 function CardsCatalogContent({ numberRange, fractions }: { numberRange: 'easy' | 'full'; fractions: boolean }) {
   const rangeLabel = numberRange === 'easy' ? '0–12' : '0–25';
-  const items: { title: string; body: string }[] = [
-    { title: `🃏 קלפי מספר (${rangeLabel})`, body: `כל קלף עם ערך מספרי מהטווח ${rangeLabel}. משמשים בתרגיל או להגנה מאתגר שבר.` },
-    { title: '➕ קלף פעולה (+, −, ×, ÷)', body: 'מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר עם קלף פעולה מקביל.' },
-    { title: '🃏 ג\'וקר', body: 'בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.' },
-    { title: '★ קלף פרא', body: 'נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.' },
+  const counts = getDeckCounts(numberRange, fractions);
+  const items: { title: string; body: string; count: number }[] = [
+    { title: `🃏 קלפי מספר (${rangeLabel})`, body: `כל קלף עם ערך מספרי מהטווח ${rangeLabel}. משמשים בתרגיל או להגנה מאתגר שבר.`, count: counts.numCount },
+    { title: '➕ קלף פעולה (+, −, ×, ÷)', body: 'מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר עם קלף פעולה מקביל.', count: counts.opCount },
+    { title: '🃏 ג\'וקר', body: 'בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.', count: counts.jokerCount },
+    { title: '★ קלף פרא', body: 'נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.', count: counts.wildCount },
   ];
   if (fractions) {
-    items.splice(2, 0, { title: '½ ⅓ ¼ ⅕ קלף שבר', body: 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף.' });
+    items.splice(2, 0, { title: '½ ⅓ ¼ ⅕ קלף שבר', body: 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף.\nבחפיסה: ½ — 6 קלפים, ⅓ — 4, ¼ — 3, ⅕ — 2 (סה"כ 15).', count: counts.fracCount });
   }
   return (
     <ScrollView style={{ maxHeight: 420 }}>
       <Text style={{ fontSize: 13, color: '#9CA3AF', marginBottom: 12, textAlign: 'right' }}>לפי ההגדרות הנוכחיות: טווח {rangeLabel}{fractions ? ', עם שברים' : ', בלי שברים'}.</Text>
       {items.map((item, i) => (
         <View key={i} style={{ marginBottom: 14, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#93C5FD', marginBottom: 4, textAlign: 'right' }}>{item.count} קלפים</Text>
           <Text style={{ fontSize: 15, fontWeight: '800', color: '#E2E8F0', marginBottom: 4, textAlign: 'right' }}>{item.title}</Text>
           <Text style={{ fontSize: 13, color: '#CBD5E1', lineHeight: 20, textAlign: 'right' }}>{item.body}</Text>
         </View>
@@ -1135,6 +1143,15 @@ function RulesContent({ state, onOpenCardsCatalog, numberRange, fractions }: { s
   const tip = state ? getTipOfTheTurn(state) : 'התחל משחק כדי לראות טיפים בהתאם לתור.';
   const range = numberRange ?? state?.difficulty ?? 'full';
   const frac = fractions ?? state?.showFractions ?? true;
+  const counts = getDeckCounts(range, frac);
+  const cardTypeLines: { text: string; count: number; detail?: string }[] = [
+    { text: '🃏 קלף מספר — משמש בתרגיל או להגנה מאתגר שבר.', count: counts.numCount },
+    { text: '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף עונש.', count: counts.fracCount, detail: '½×6, ⅓×4, ¼×3, ⅕×2' },
+    { text: '➕ קלף פעולה (+, −, ×, ÷) — מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר את האתגר עם קלף פעולה מקביל.', count: counts.opCount },
+    { text: '🃏 ג\'וקר — בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.', count: counts.jokerCount },
+    { text: '★ קלף פרא — נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.', count: counts.wildCount },
+  ];
+  const cardTypesToShow = frac ? cardTypeLines : cardTypeLines.filter((_, i) => i !== 1);
   return (
     <ScrollView style={{ maxHeight: 400 }}>
       {/* טיפ של התור */}
@@ -1146,15 +1163,15 @@ function RulesContent({ state, onOpenCardsCatalog, numberRange, fractions }: { s
         <Text style={{ fontSize: 15, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: 'right' }}>👋 משתמש חדש?</Text>
         <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 22, textAlign: 'right' }}>המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל ובוחרים קלפים שסכומם מתאים. למטה: סוגי הקלפים ואתגרים.</Text>
       </View>
-      <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: 'right' }}>סוגי קלפים</Text>
-      {[
-        '🃏 קלף מספר — משמש בתרגיל או להגנה מאתגר שבר.',
-        '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף עונש.',
-        '➕ קלף פעולה (+, −, ×, ÷) — מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר את האתגר עם קלף פעולה מקביל.',
-        '🃏 ג\'וקר — בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.',
-        '★ קלף פרא — נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.',
-      ].map((r, i) => (
-        <Text key={`cards${i}`} style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, marginBottom: 6, textAlign: 'right' }}>{r}</Text>
+      <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: 'right' }}>סוגי קלפים (מה החפיסה מכילה)</Text>
+      {cardTypesToShow.map((item, i) => (
+        <View key={`cards${i}`} style={{ marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: '#93C5FD', marginLeft: 8 }}>{item.count} קלפים</Text>
+            <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, textAlign: 'right', flex: 1 }}>{item.text}</Text>
+          </View>
+          {item.detail != null && <Text style={{ fontSize: 11, color: '#9CA3AF', textAlign: 'right', marginTop: 2 }}>{item.detail}</Text>}
+        </View>
       ))}
       <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginTop: 12, marginBottom: 8, textAlign: 'right' }}>בסיסי</Text>
       {[
@@ -3367,7 +3384,7 @@ function StartScreen() {
     <View style={{ flex: 1 }}>
       {/* כפתור חוקים — בצד למעלה */}
       <View style={{ position: 'absolute', top: safe.insets.top || 12, right: 16, zIndex: 20 }}>
-        <LulosButton text="חוקים" color="blue" width={72} height={32} fontSize={11} onPress={() => setRulesOpen(true)} />
+        <LulosButton text="חוקים" color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
       </View>
       <AppModal visible={rulesOpen} onClose={() => setRulesOpen(false)} title="איך משחקים — מסך כללים">
         <RulesContent state={null} numberRange={numberRange} fractions={fractions} onOpenCardsCatalog={() => { setRulesOpen(false); setCardsCatalogOpen(true); }} />
@@ -3595,37 +3612,6 @@ function TurnTransition() {
     });
   }, [state.roundsPlayed]);
 
-  // Deal sound — מופעל בכניסה למסך השחקן כדי לתת תחושת \"חילקו את היד\"
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          playsInSilentMode: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-        const { sound } = await Audio.Sound.createAsync(require('./assets/possible_results_sound.mov'));
-        if (!mounted) {
-          await sound.unloadAsync();
-          return;
-        }
-        await sound.playAsync();
-        sound.setOnPlaybackStatusUpdate((s: any) => {
-          if (s.didJustFinish || (s as any).didJustFinishNotify) {
-            sound.unloadAsync();
-          }
-        });
-      } catch {
-        // ignore sound errors
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const dismissWelcome = () => setShowWelcome(false);
 
   if (!cp) return null;
@@ -3838,7 +3824,7 @@ function PlayerSidebar({ secsLeft, timerTotal, timerRunning }: { secsLeft?: numb
         )}
       </View>
       <View style={{flexShrink:0}}>
-        <LulosButton text="חוקים" color="blue" width={72} height={32} fontSize={11} onPress={() => setRulesOpen(true)} />
+        <LulosButton text="חוקים" color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
       </View>
       <AppModal visible={rulesOpen} onClose={() => setRulesOpen(false)} title="איך משחקים — מסך כללים">
         <RulesContent state={state} numberRange={state.difficulty} fractions={state.showFractions} onOpenCardsCatalog={() => { setRulesOpen(false); setCardsCatalogOpen(true); }} />
