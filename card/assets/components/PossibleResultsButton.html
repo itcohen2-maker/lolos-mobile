@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>תוצאות אפשריות</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden}
+canvas{display:block}
+</style>
+</head>
+<body>
+<div class="btn-wrap"><canvas id="cv"></canvas></div>
+<script>
+(function(){
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var S=70;
+
+  function squirclePath(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.lineTo(x+w-r,y);
+    ctx.bezierCurveTo(x+w-r*0.1,y,x+w,y+r*0.1,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r);
+    ctx.bezierCurveTo(x+w,y+h-r*0.1,x+w-r*0.1,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h);
+    ctx.bezierCurveTo(x+r*0.1,y+h,x,y+h-r*0.1,x,y+h-r);
+    ctx.lineTo(x,y+r);
+    ctx.bezierCurveTo(x,y+r*0.1,x+r*0.1,y,x+r,y);
+    ctx.closePath();
+  }
+
+  function makeBg(){
+    var bc=document.createElement('canvas');
+    bc.width=S*dpr; bc.height=S*dpr;
+    var c=bc.getContext('2d'); c.scale(dpr,dpr);
+    var pad=3, r=36;
+
+    squirclePath(c,0,0,S,S,r+4);
+    c.fillStyle="#3A2504"; c.fill();
+
+    squirclePath(c,0,2,S,S-1,r+3);
+    c.fillStyle="#6B4A08"; c.fill();
+
+    squirclePath(c,0,1,S,S-0.5,r+3.5);
+    c.fillStyle="#8A6010"; c.fill();
+
+    squirclePath(c,1,1,S-2,S-2,r+3);
+    var goldRim=c.createLinearGradient(0,0,S,S);
+    goldRim.addColorStop(0,"#FFF0A0");
+    goldRim.addColorStop(0.12,"#F5D45A");
+    goldRim.addColorStop(0.28,"#E8BC28");
+    goldRim.addColorStop(0.50,"#D4A010");
+    goldRim.addColorStop(0.70,"#C09018");
+    goldRim.addColorStop(0.85,"#E8C030");
+    goldRim.addColorStop(1,"#F5D860");
+    c.fillStyle=goldRim; c.fill();
+
+    c.save(); squirclePath(c,1,1,S-2,S-2,r+3); c.clip();
+    var rs=c.createRadialGradient(S*0.22,S*0.15,1,S*0.25,S*0.18,S*0.28);
+    rs.addColorStop(0,"rgba(255,255,220,0.55)");
+    rs.addColorStop(0.5,"rgba(255,240,160,0.15)");
+    rs.addColorStop(1,"rgba(255,220,80,0)");
+    c.fillStyle=rs; c.fillRect(0,0,S,S);
+    c.restore();
+
+    squirclePath(c,pad+5,pad+5,S-pad*2-10,S-pad*2-10,r-2);
+    c.fillStyle="#0A1A0E"; c.fill();
+
+    var fp=pad+7, fr=r-4;
+    squirclePath(c,fp,fp,S-fp*2,S-fp*2,fr);
+    var felt=c.createRadialGradient(S*0.4,S*0.35,4,S*0.5,S*0.52,S*0.55);
+    felt.addColorStop(0,"#2D6B48");
+    felt.addColorStop(0.3,"#245C3C");
+    felt.addColorStop(0.6,"#1C4C30");
+    felt.addColorStop(1,"#143824");
+    c.fillStyle=felt; c.fill();
+
+    c.save(); squirclePath(c,fp,fp,S-fp*2,S-fp*2,fr); c.clip();
+
+    for(var ni=0;ni<4500;ni++){
+      var rx=Math.random();
+      c.fillStyle=rx>0.72?"rgba(80,160,100,"+Math.random()*0.07+")":
+                  rx>0.44?"rgba(20,70,40,"+Math.random()*0.09+")":
+                  "rgba(10,40,22,"+Math.random()*0.08+")";
+      c.fillRect(Math.random()*S,Math.random()*S,1,1);
+    }
+
+    var syms=['\u2660','\u2665','\u2666','\u2663'];
+    c.font="bold 7px Arial";
+    c.textAlign="center"; c.textBaseline="middle";
+    var ts=13;
+    for(var ty=fp+4;ty<S-fp;ty+=ts){
+      for(var tx=fp+4;tx<S-fp;tx+=ts){
+        var sym=syms[Math.floor((tx/ts+ty/ts*2))%4];
+        c.globalAlpha=(sym==='\u2665'||sym==='\u2666')?0.09:0.07;
+        c.fillStyle=(sym==='\u2665'||sym==='\u2666')?"#6ABB80":"#3A8855";
+        c.fillText(sym,tx,ty);
+        c.globalAlpha=0.05;
+        c.beginPath();
+        c.moveTo(tx+ts/2,ty-ts/2+2);
+        c.lineTo(tx+ts/2+4,ty);
+        c.lineTo(tx+ts/2,ty+ts/2-2);
+        c.lineTo(tx+ts/2-4,ty);
+        c.closePath();
+        c.strokeStyle="#4A9960"; c.lineWidth=0.4; c.stroke();
+      }
+    }
+    c.globalAlpha=1;
+
+    var ch=c.createRadialGradient(S*0.5,S*0.38,2,S*0.5,S*0.42,S*0.32);
+    ch.addColorStop(0,"rgba(120,210,140,0.12)");
+    ch.addColorStop(1,"rgba(20,80,40,0)");
+    c.fillStyle=ch; c.fillRect(0,0,S,S);
+
+    var ev=c.createRadialGradient(S*0.5,S*0.5,S*0.15,S*0.5,S*0.5,S*0.48);
+    ev.addColorStop(0,"rgba(0,0,0,0)");
+    ev.addColorStop(0.6,"rgba(0,0,0,0)");
+    ev.addColorStop(1,"rgba(0,0,0,0.35)");
+    c.fillStyle=ev; c.fillRect(0,0,S,S);
+
+    c.restore();
+
+    squirclePath(c,fp,fp,S-fp*2,S-fp*2,fr);
+    c.strokeStyle="rgba(80,180,100,0.25)"; c.lineWidth=0.8; c.stroke();
+
+    squirclePath(c,pad+4,pad+4,S-pad*2-8,S-pad*2-8,r-1);
+    c.strokeStyle="rgba(0,0,0,0.45)"; c.lineWidth=1.5; c.stroke();
+
+    squirclePath(c,1.5,1.5,S-3,S-3,r+2.5);
+    c.strokeStyle="rgba(255,248,180,0.30)"; c.lineWidth=1; c.stroke();
+
+    return bc;
+  }
+
+  var bgCanvas=makeBg();
+
+  var fp2=3+7, twinkles=[];
+  for(var ti=0;ti<18;ti++){
+    twinkles.push({
+      x:fp2+4+Math.random()*(S-fp2*2-8),
+      y:fp2+4+Math.random()*(S-fp2*2-8),
+      phase:Math.random()*Math.PI*2,
+      speed:0.8+Math.random()*1.4,
+      size:0.5+Math.random()*1.1
+    });
+  }
+
+  var cv=document.getElementById('cv');
+  cv.width=S*dpr; cv.height=S*dpr;
+  cv.style.width=S+"px"; cv.style.height=S+"px";
+  var ctx=cv.getContext('2d');
+  var isHover=false, t=0, gp=0;
+  var wrap=cv.closest('.btn-wrap');
+  wrap.addEventListener('mouseenter',function(){isHover=true;});
+  wrap.addEventListener('mouseleave',function(){isHover=false;});
+
+  function loop(){
+    requestAnimationFrame(loop);
+    var dt=1/60; t+=dt; gp+=dt*(isHover?4:1.6);
+    var pulse=Math.sin(gp)*0.5+0.5;
+    var pulse2=Math.sin(gp*1.73+1.1)*0.5+0.5;
+
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.save(); ctx.scale(dpr,dpr);
+
+    ctx.save();
+    squirclePath(ctx,3,4,S-6,S-4,36);
+    ctx.shadowColor="rgba(0,15,8,0.75)"; ctx.shadowBlur=18; ctx.shadowOffsetY=6;
+    ctx.fillStyle="rgba(0,0,0,0)"; ctx.fill();
+    ctx.restore();
+
+    ctx.drawImage(bgCanvas,0,0,S*dpr,S*dpr,0,0,S,S);
+
+    ctx.save();
+    squirclePath(ctx,fp2,fp2,S-fp2*2,S-fp2*2,32); ctx.clip();
+    twinkles.forEach(function(tw){
+      var a=Math.pow(Math.max(0,Math.sin(t*tw.speed+tw.phase)),3);
+      if(a<0.04) return;
+      var sz=tw.size*(1+a*0.5);
+      ctx.save(); ctx.translate(tw.x,tw.y); ctx.globalAlpha=a*0.75;
+      var gr=ctx.createRadialGradient(0,0,0,0,0,sz*5);
+      gr.addColorStop(0,"rgba(220,255,230,0.6)");
+      gr.addColorStop(1,"rgba(100,210,140,0)");
+      ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(0,0,sz*5,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle="rgba(240,255,245,"+(a*0.9)+")";
+      ctx.beginPath();
+      for(var si=0;si<8;si++){
+        var ang=si*Math.PI/4, rad=si%2===0?sz*2.8:sz*0.7;
+        si===0?ctx.moveTo(Math.cos(ang)*rad,Math.sin(ang)*rad):ctx.lineTo(Math.cos(ang)*rad,Math.sin(ang)*rad);
+      }
+      ctx.closePath(); ctx.fill(); ctx.restore();
+    });
+    ctx.restore();
+
+    ctx.save();
+    squirclePath(ctx,fp2,fp2,S-fp2*2,S-fp2*2,32); ctx.clip();
+
+    var cx=S/2, cy=S/2;
+    var maxW=S-fp2*2-8;
+
+    var fs=8;
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    for(var f=28;f>=8;f--){
+      ctx.font="bold "+f+"px Arial";
+      if(ctx.measureText("אפשריות").width<=maxW){ fs=f; break; }
+    }
+    var lineH=fs*1.2;
+
+    ctx.font="bold "+fs+"px Arial";
+
+    ctx.fillStyle="rgba(0,0,0,0.6)";
+    ctx.fillText("תוצאות",  cx+1, cy-lineH/2+1);
+    ctx.fillText("אפשריות", cx+1, cy+lineH/2+1);
+
+    var sg=ctx.createLinearGradient(cx-maxW/2,0,cx+maxW/2,0);
+    var sp=pulse;
+    sg.addColorStop(0,"#F0C830");
+    sg.addColorStop(Math.max(0,sp-0.12),"#ECC030");
+    sg.addColorStop(sp,"#FFFBE0");
+    sg.addColorStop(Math.min(1,sp+0.12),"#ECC030");
+    sg.addColorStop(1,"#F0C830");
+    ctx.fillStyle=sg;
+    ctx.fillText("תוצאות",  cx, cy-lineH/2);
+    ctx.fillText("אפשריות", cx, cy+lineH/2);
+
+    ctx.fillStyle="rgba(255,248,180,"+(0.18+pulse2*0.12)+")";
+    ctx.fillText("תוצאות",  cx, cy-lineH/2-0.5);
+    ctx.fillText("אפשריות", cx, cy+lineH/2-0.5);
+
+    ctx.restore();
+
+    ctx.save();
+    squirclePath(ctx,3,3,S-6,S-6,36); ctx.clip();
+    var glo=ctx.createLinearGradient(0,3,0,S*0.48);
+    glo.addColorStop(0,"rgba(255,255,255,0.20)");
+    glo.addColorStop(0.45,"rgba(200,240,210,0.08)");
+    glo.addColorStop(1,"rgba(100,180,120,0)");
+    ctx.beginPath(); ctx.ellipse(S/2,S*0.2,S*0.4,S*0.24,0,0,Math.PI*2);
+    ctx.fillStyle=glo; ctx.fill();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  loop();
+})();
+</script>
+</body>
+</html>
