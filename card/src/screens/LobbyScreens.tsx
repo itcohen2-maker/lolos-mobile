@@ -55,10 +55,11 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
           <TextInput
             style={styles.input}
             value={playerName}
-            onChangeText={setPlayerName}
-            placeholder="השם שלי"
+            onChangeText={(t) => setPlayerName(t.slice(0, 7))}
+            placeholder="השם שלי (עד 7 אותיות)"
             placeholderTextColor="#6B7280"
             textAlign="right"
+            maxLength={7}
           />
           {step === 'create' && (
             <TouchableOpacity

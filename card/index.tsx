@@ -125,12 +125,16 @@ interface GameState {
   diceMode: '2' | '3';
   showFractions: boolean;
   showPossibleResults: boolean;
-  timerSetting: '30' | '45' | 'off';
+  showSolveExercise: boolean;
+  timerSetting: '30' | '45' | 'off' | 'custom';
+  timerCustomSeconds: number;
   winner: Player | null;
   message: string;
   roundsPlayed: number;
   notifications: Notification[];
   moveHistory: MoveHistoryEntry[];
+  /** למשתמש חדש — הדרכה מופעלת; משמש לעדיפות להתראות onb/guidance ב־NotificationZone */
+  guidanceEnabled: boolean | null;
 }
 
 interface Notification {
@@ -151,7 +155,7 @@ interface MoveHistoryEntry {
 }
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; diceMode: '2' | '3'; fractions: boolean; showPossibleResults: boolean; timerSetting: '30' | '45' | 'off' }
+  | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; diceMode: '2' | '3'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '45' | 'off' | 'custom'; timerCustomSeconds?: number }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
   | { type: 'ROLL_DICE'; values?: DiceResult }
@@ -183,6 +187,7 @@ type GameAction =
   | { type: 'PUSH_NOTIFICATION'; payload: Notification }
   | { type: 'DISMISS_NOTIFICATION'; id: string }
   | { type: 'RESTORE_NOTIFICATIONS'; payload: Notification[] }
+  | { type: 'SET_GUIDANCE_ENABLED'; enabled: boolean }
   | { type: 'UPDATE_PLAYER_NAME'; playerIndex: number; name: string }
   | { type: 'RESET_GAME' };
 
@@ -592,10 +597,11 @@ const initialState: GameState = {
   fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
   consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
-  difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, timerSetting: 'off', winner: null, message: '',
+  difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, showSolveExercise: true, timerSetting: 'off', timerCustomSeconds: 60, winner: null, message: '',
   roundsPlayed: 0,
   notifications: [],
   moveHistory: [],
+  guidanceEnabled: null,
 };
 
 function reshuffleDiscard(st: GameState): GameState {
@@ -676,7 +682,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (!firstDiscard) { firstDiscard = drawPile[0]; drawPile = drawPile.slice(1); }
       return {
         ...initialState, phase: 'turn-transition', difficulty: action.difficulty, diceMode: action.diceMode,
-        showFractions: action.fractions, showPossibleResults: action.showPossibleResults, timerSetting: action.timerSetting,
+        showFractions: action.fractions, showPossibleResults: action.showPossibleResults, showSolveExercise: action.showSolveExercise,
+        timerSetting: action.timerSetting, timerCustomSeconds: action.timerCustomSeconds ?? 60,
         players: action.players.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false })),
         drawPile, discardPile: firstDiscard ? [firstDiscard] : [],
       };
@@ -1113,7 +1120,9 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     case 'RESTORE_NOTIFICATIONS':
       return { ...st, notifications: action.payload };
     case 'UPDATE_PLAYER_NAME':
-      return { ...st, players: st.players.map((p, i) => i === action.playerIndex ? { ...p, name: action.name } : p) };
+      return { ...st, players: st.players.map((p, i) => i === action.playerIndex ? { ...p, name: action.name.slice(0, 7) } : p) };
+    case 'SET_GUIDANCE_ENABLED':
+      return { ...st, guidanceEnabled: action.enabled };
     case 'RESET_GAME':
       AsyncStorage.removeItem('lulos_guidance_notifications');
       return initialState;
@@ -1503,7 +1512,7 @@ function NumberCard({ card, selected, active, onPress, small }: { card: Card; se
 const MINI_W = 36;
 const MINI_H = 48;
 const MINI_R = 8;
-function MiniResultCard({ value, index = 0 }: { value: number; index?: number }) {
+function MiniResultCard({ value, index = 0, onPress }: { value: number; index?: number; onPress?: () => void }) {
   const cl = getNumColors(value);
   const flipAnim = useRef(new Animated.Value(0)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -1519,26 +1528,29 @@ function MiniResultCard({ value, index = 0 }: { value: number; index?: number })
   }, [index]);
   const rotateY = flipAnim.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '0deg'] });
   const scale = flipAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.85, 1.05, 1] });
+  const cardContent = (
+    <View style={{
+      width: MINI_W, height: MINI_H, borderRadius: MINI_R, overflow: 'hidden',
+      borderWidth: 1.5, borderColor: cl.border,
+      backgroundColor: 'rgba(255,255,255,0.95)',
+    }}>
+      <LinearGradient
+        colors={['rgba(255,255,255,0.9)', 'rgba(248,248,248,0.85)', 'rgba(240,240,240,0.9)']}
+        locations={[0, 0.6, 1]}
+        start={{ x: 0.3, y: 0 }} end={{ x: 0.7, y: 1 }}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+      />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{
+          fontSize: 18, fontWeight: '900', color: cl.face,
+          textShadowColor: 'rgba(0,0,0,0.15)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1,
+        }}>{value}</Text>
+      </View>
+    </View>
+  );
   return (
     <Animated.View style={{ opacity: opacityAnim, transform: [{ perspective: 800 }, { rotateY }, { scale }] }}>
-      <View style={{
-        width: MINI_W, height: MINI_H, borderRadius: MINI_R, overflow: 'hidden',
-        borderWidth: 1.5, borderColor: cl.border,
-        backgroundColor: 'rgba(255,255,255,0.95)',
-      }}>
-        <LinearGradient
-          colors={['rgba(255,255,255,0.9)', 'rgba(248,248,248,0.85)', 'rgba(240,240,240,0.9)']}
-          locations={[0, 0.6, 1]}
-          start={{ x: 0.3, y: 0 }} end={{ x: 0.7, y: 1 }}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-        />
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{
-            fontSize: 18, fontWeight: '900', color: cl.face,
-            textShadowColor: 'rgba(0,0,0,0.15)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 1,
-          }}>{value}</Text>
-        </View>
-      </View>
+      {onPress ? <TouchableOpacity onPress={onPress} activeOpacity={0.8}>{cardContent}</TouchableOpacity> : cardContent}
     </Animated.View>
   );
 }
@@ -1875,8 +1887,9 @@ const dpS = StyleSheet.create({ empty: { width:80, height:115, borderRadius:12, 
 const CHIP_W = 76;
 const CHIP_H = 68;
 const CHIP_R = 14;
+const SOLVE_CHIP_W = CHIP_W + 30;
 
-function ResultsSlot({ onToggle, filteredResults, matchCount }: { onToggle: () => void; filteredResults: { result: number }[]; matchCount: number }) {
+function ResultsSlot({ onToggle, filteredResults, matchCount }: { onToggle: () => void; filteredResults: EquationOption[]; matchCount: number }) {
   return (
     <View style={{flexShrink:0}}>
       <ResultsChip onPress={onToggle} matchCount={filteredResults.length === 0 ? 0 : matchCount} />
@@ -1884,7 +1897,7 @@ function ResultsSlot({ onToggle, filteredResults, matchCount }: { onToggle: () =
   );
 }
 
-function ResultsStripNearPile({ resultsOpen, filteredResults }: { resultsOpen: boolean; filteredResults: { result: number }[] }) {
+function ResultsStripNearPile({ resultsOpen, filteredResults, onSelectEquation }: { resultsOpen: boolean; filteredResults: EquationOption[]; onSelectEquation?: (eq: EquationOption) => void }) {
   const stripSlide = useRef(new Animated.Value(0)).current;
   const stripOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -1902,8 +1915,8 @@ function ResultsStripNearPile({ resultsOpen, filteredResults }: { resultsOpen: b
     <Animated.View style={{flexShrink:0,flex:1,minWidth:0,opacity:stripOpacity,transform:[{translateY:stripSlide}]}}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:10,paddingHorizontal:6,alignItems:'center',justifyContent:'flex-start'}}>
         {filteredResults.map((t, i) => (
-          <View key={t.result} style={{width:MINI_W + 14}}>
-            <MiniResultCard value={t.result} index={i} />
+          <View key={`${t.equation}-${t.result}-${i}`} style={{width:MINI_W + 14}}>
+            <MiniResultCard value={t.result} index={i} onPress={onSelectEquation ? () => onSelectEquation(t) : undefined} />
           </View>
         ))}
       </ScrollView>
@@ -1911,7 +1924,7 @@ function ResultsStripNearPile({ resultsOpen, filteredResults }: { resultsOpen: b
   );
 }
 
-function ResultsStripBelowTable({ resultsOpen, filteredResults }: { resultsOpen: boolean; filteredResults: { result: number }[] }) {
+function ResultsStripBelowTable({ resultsOpen, filteredResults, onSelectEquation }: { resultsOpen: boolean; filteredResults: EquationOption[]; onSelectEquation?: (eq: EquationOption) => void }) {
   const stripSlide = useRef(new Animated.Value(0)).current;
   const stripOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -1930,8 +1943,8 @@ function ResultsStripBelowTable({ resultsOpen, filteredResults }: { resultsOpen:
       <View style={{minHeight:MINI_H + 16,backgroundColor:'transparent',paddingVertical:10,paddingHorizontal:12,width:'100%',maxWidth:360,alignItems:'center'}}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:10,paddingHorizontal:6,alignItems:'center',justifyContent:'center'}}>
           {filteredResults.map((t, i) => (
-            <View key={t.result} style={{width:MINI_W + 14}}>
-              <MiniResultCard value={t.result} index={i} />
+            <View key={`${t.equation}-${t.result}-${i}`} style={{width:MINI_W + 14}}>
+              <MiniResultCard value={t.result} index={i} onPress={onSelectEquation ? () => onSelectEquation(t) : undefined} />
             </View>
           ))}
         </ScrollView>
@@ -2063,6 +2076,87 @@ function ResultsChip({ onPress, matchCount }: { onPress: () => void; matchCount:
           <Text style={{ color: '#1a1a2e', fontSize: 11, fontWeight: '900' }}>{matchCount}</Text>
         </View>
       )}
+    </View>
+  );
+}
+
+function SolveExerciseChip({ equation, onPress }: { equation: string; onPress: () => void }) {
+  const pressAnim = useRef(new Animated.Value(0)).current;
+  const handlePressIn = useCallback(() => {
+    Animated.timing(pressAnim, { toValue: 1, duration: 80, useNativeDriver: true }).start();
+  }, []);
+  const handlePressOut = useCallback(() => {
+    Animated.timing(pressAnim, { toValue: 0, duration: 120, useNativeDriver: true }).start();
+  }, []);
+  const scale = pressAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.93] });
+  const translateY = pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 2] });
+  const rim = 4;
+  const inset = 2;
+  const innerR = CHIP_R - 3;
+  const feltPad = rim + inset;
+  return (
+    <View style={{ width: SOLVE_CHIP_W, height: CHIP_H + 6 }}>
+      <TouchableOpacity activeOpacity={0.8} onPress={onPress} onPressIn={handlePressIn} onPressOut={handlePressOut}>
+        <Animated.View style={{ width: SOLVE_CHIP_W, height: CHIP_H + 4, transform: [{ scale }, { translateY }] }}>
+          <View style={{
+            position: 'absolute', bottom: 0, left: 2, right: 2, height: CHIP_H,
+            borderRadius: CHIP_R + 2, backgroundColor: '#1A0D00',
+            ...Platform.select({
+              ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.6, shadowRadius: 10 },
+              android: { elevation: 10 },
+            }),
+          }} />
+          <View style={{
+            position: 'absolute', bottom: 2, left: 1, right: 1, height: CHIP_H,
+            borderRadius: CHIP_R + 2, backgroundColor: '#3A1515',
+          }} />
+          <LinearGradient
+            colors={['#FCA5A5', '#F87171', '#EF4444', '#DC2626', '#B91C1C', '#E85C5C', '#F87272']}
+            locations={[0, 0.15, 0.35, 0.55, 0.75, 0.9, 1]}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, height: CHIP_H, borderRadius: CHIP_R + 2 }}
+          />
+          <View style={{
+            position: 'absolute', top: 1, left: CHIP_R, right: CHIP_R,
+            height: CHIP_H * 0.3, borderBottomLeftRadius: CHIP_H, borderBottomRightRadius: CHIP_H,
+            backgroundColor: 'rgba(255,230,230,0.2)',
+          }} />
+          <View style={{
+            position: 'absolute', top: rim - 1, left: rim - 1, right: rim - 1, bottom: rim + 2,
+            borderRadius: CHIP_R - 1, backgroundColor: '#1C0A0A',
+          }} />
+          <LinearGradient
+            colors={['#7F1D1D', '#991B1B', '#B91C1C', '#991B1B']}
+            start={{ x: 0.3, y: 0.2 }} end={{ x: 0.7, y: 0.9 }}
+            style={{
+              position: 'absolute', top: feltPad, left: feltPad, right: feltPad, bottom: feltPad + 1,
+              borderRadius: innerR, overflow: 'hidden',
+            }}
+          >
+            <View style={{
+              ...StyleSheet.absoluteFillObject, borderRadius: innerR,
+              borderWidth: 6, borderColor: 'rgba(0,0,0,0.2)',
+            }} />
+          </LinearGradient>
+          <View style={{
+            position: 'absolute', top: feltPad, left: feltPad, right: feltPad, bottom: feltPad + 1,
+            borderRadius: innerR, borderWidth: 0.7, borderColor: 'rgba(248,113,113,0.25)',
+          }} />
+          <View style={{
+            position: 'absolute', top: 0, left: 0, right: 0, height: CHIP_H,
+            borderRadius: CHIP_R + 2, borderWidth: 0.8, borderColor: 'rgba(254,202,202,0.3)',
+          }} />
+          <View style={{
+            position: 'absolute', top: 0, left: 0, right: 0, height: CHIP_H,
+            alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
+          }}>
+            <Text numberOfLines={3} style={{
+              color: '#FECACA', fontSize: 10, fontWeight: '900', textAlign: 'center', lineHeight: 12,
+              textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
+            }}>{equation}</Text>
+          </View>
+        </Animated.View>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -3487,7 +3581,10 @@ function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
   const [numberRange, setNumberRange] = useState<'easy' | 'full'>('full');
   const [fractions, setFractions] = useState(true);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
-  const [timer, setTimer] = useState<'30' | '45' | 'off'>('off');
+  const [showSolveExercise, setShowSolveExercise] = useState(true);
+  const [timer, setTimer] = useState<'30' | '45' | 'off' | 'custom'>('off');
+  const [customTimerSeconds, setCustomTimerSeconds] = useState(60);
+  const [timerCustomModalOpen, setTimerCustomModalOpen] = useState(false);
   const [guidanceOn, setGuidanceOn] = useState(true); // הדרכה והסברים — משתמש חוזר יכול לכבות
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
@@ -3531,7 +3628,7 @@ function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
   const startGame = () => {
     // שמות יוכנסו במסך השחקן — כל שחקן מזין את שמו בתורו
     const players = Array.from({ length: playerCount }, (_, i) => ({ name: `שחקן ${i + 1}` }));
-    dispatch({ type: 'START_GAME', players, difficulty: numberRange, diceMode, fractions, showPossibleResults, timerSetting: timer });
+    dispatch({ type: 'START_GAME', players, difficulty: numberRange, diceMode, fractions, showPossibleResults, showSolveExercise, timerSetting: timer, timerCustomSeconds: timer === 'custom' ? customTimerSeconds : 60 });
   };
 
   // תחתית מסע — תפריט קומפקטי כדי שהג'וקר (פנים/מותג) יופיע במלואו
@@ -3811,18 +3908,79 @@ function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
             </View>
           </View>
 
+          {/* פתרון התרגיל — הצגת תרגיל בלחיצה על מיני-קלף */}
+          <View style={hsS.row}>
+            <Text style={hsS.rowLabel}>פתרון התרגיל</Text>
+            <View style={hsS.toggleGroup}>
+              {([[false, 'כבוי'], [true, 'מופעל']] as const).map(([key, label]) => (
+                <TouchableOpacity key={String(key)} onPress={() => setShowSolveExercise(key as boolean)} activeOpacity={0.7}
+                  style={[hsS.toggleBtn, showSolveExercise === key ? hsS.toggleOn : hsS.toggleOff]}>
+                  <Text style={showSolveExercise === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
           {/* Timer */}
           <View style={hsS.row}>
             <Text style={hsS.rowLabel}>טיימר</Text>
             <View style={hsS.toggleGroup}>
-              {([['45', '45 שנ׳'], ['30', '30 שנ׳'], ['off', 'כבוי']] as const).map(([key, label]) => (
-                <TouchableOpacity key={key} onPress={() => setTimer(key)} activeOpacity={0.7}
-                  style={[hsS.toggleBtn, timer === key ? hsS.toggleOn : hsS.toggleOff]}>
+              {([['45', '45 שנ׳'], ['30', '30 שנ׳'], ['off', 'כבוי'], ['custom', 'התאמה אישית']] as const).map(([key, label]) => (
+                <TouchableOpacity
+                  key={key}
+                  onPress={() => (key === 'custom' ? setTimerCustomModalOpen(true) : setTimer(key))}
+                  activeOpacity={0.7}
+                  style={[hsS.toggleBtn, timer === key ? hsS.toggleOn : hsS.toggleOff]}
+                >
                   <Text style={timer === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
+          {timer === 'custom' && (
+            <View style={[hsS.row, { marginTop: -4 }]}>
+              <Text style={[hsS.rowLabel, { fontSize: 12, color: 'rgba(255,255,255,0.7)' }]}>
+                {customTimerSeconds >= 60 ? `${Math.floor(customTimerSeconds / 60)} דק' ${customTimerSeconds % 60} שנ'` : `${customTimerSeconds} שנ'`}
+              </Text>
+            </View>
+          )}
+          <RNModal visible={timerCustomModalOpen} transparent animationType="fade">
+            <TouchableOpacity activeOpacity={1} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setTimerCustomModalOpen(false)}>
+              <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#1F2937', borderRadius: 16, padding: 20, width: '100%', maxWidth: 320 }}>
+                <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>זמן לתור</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>דק׳</Text>
+                    <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
+                      {Array.from({ length: 6 }, (_, i) => i).map((m) => (
+                        <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FACC15' : '#9CA3AF' : m === 0 ? '#FACC15' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>שנ׳</Text>
+                    <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
+                      {Array.from({ length: 60 }, (_, i) => i).map((s) => (
+                        <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ color: (customTimerSeconds % 60) === s ? '#FACC15' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'center' }}>
+                  <TouchableOpacity onPress={() => setTimerCustomModalOpen(false)} style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '700' }}>ביטול</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => { setTimer('custom'); setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#22C55E', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '700' }}>התחלה</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </RNModal>
 
           {/* הדרכה והסברים — כבוי למשתמש חוזר שלא רוצה הסברים */}
           <View style={hsS.row}>
@@ -3836,9 +3994,9 @@ function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
               ))}
             </View>
           </View>
-          {/* הצג שוב ברוכים — רק מפתח ההתראה, בלי איפוס כל ההדרכה */}
-          <TouchableOpacity style={[hsS.row, { marginTop: 4 }]} onPress={() => { AsyncStorage.removeItem('lulos_welcome_player_screen_seen'); alert('בפעם הבאה שתגיע לתורך — תופיע שוב הודעת ברוכים הבאים.'); }} activeOpacity={0.7}>
-            <Text style={[hsS.rowLabel, { color: 'rgba(255,255,255,0.5)', fontSize: 12 }]}>הצג שוב ברוכים הבאים</Text>
+          {/* הצג שוב מוקאפ שם שחקן — מוחק את המפתח בלבד */}
+          <TouchableOpacity style={[hsS.row, { marginTop: 4 }]} onPress={() => { AsyncStorage.removeItem(PLAYER_NAME_MODAL_SEEN_KEY); alert('בפעם הבאה שתגיע לתורך — יופיע שוב מוקאפ הכנסת השם.'); }} activeOpacity={0.7}>
+            <Text style={[hsS.rowLabel, { color: 'rgba(255,255,255,0.5)', fontSize: 12 }]}>הצג שוב מוקאפ שם שחקן</Text>
           </TouchableOpacity>
         </View>
         </ScrollView>
@@ -3848,7 +4006,7 @@ function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
         </View>
         <TouchableOpacity
           onLongPress={() => {
-            const allKeys = [...ONB_KEYS, ...GUIDANCE_KEYS, 'lulos_tutorial_done', 'lulos_tip1_done', 'lulos_tip2_done', 'lulos_frac_arrow_seen', 'lulos_ident_arrow_seen', 'lulos_find_cards_sum_alert_seen', 'onb_first_discard', 'onb_welcome_screen', 'lulos_welcome_player_screen_seen'];
+            const allKeys = [...ONB_KEYS, ...GUIDANCE_KEYS, 'lulos_tutorial_done', 'lulos_tip1_done', 'lulos_tip2_done', 'lulos_frac_arrow_seen', 'lulos_ident_arrow_seen', 'lulos_find_cards_sum_alert_seen', 'lulos_solve_exercise_mini_card_tip_seen', 'onb_first_discard', 'onb_welcome_screen', PLAYER_NAME_MODAL_SEEN_KEY];
             Promise.all(allKeys.map(k => AsyncStorage.removeItem(k))).then(() => {
               console.log('[DEV] Cleared all onboarding keys:', allKeys);
               alert('Onboarding reset! Restart the game to see onboarding again.');
@@ -3923,38 +4081,63 @@ const hsS = StyleSheet.create({
 //  TURN TRANSITION
 // ═══════════════════════════════════════════════════════════════
 
-// התראת משתמש חדש — פעם אחת אי־פעם (נשמר ב־AsyncStorage, לא נעלמת)
-const WELCOME_PLAYER_KEY = 'lulos_welcome_player_screen_seen';
+// מוקאפ שם שחקן — מופיע פעם אחת, נשמר ב־AsyncStorage ולא מופיע שוב
+const PLAYER_NAME_MODAL_SEEN_KEY = 'lulos_player_name_modal_seen';
 
-/** מוקאפ הכנסת שם — קומפוננטה נפרדת כדי שההקלדה לא תגרום לרינדור ב־TurnTransition ולא תפעיל effects שסוגרים את המודל */
-function WelcomeNameModal({
-  visible,
+/** האם השם הוא ברירת מחדל (שחקן N) — אם כן, תמיד להציג את המוקאפ גם אם המפתח נשמר (ועדת חקירה: מונע "הוא לא מופיע") */
+function isDefaultPlayerName(name: string): boolean {
+  return /^שחקן \d+$/.test((name || '').trim());
+}
+
+/** מוקאפ חדש להכנסת שם — מנהל visibility בעצמו מ־AsyncStorage, state מקומי לשם בלבד (לא סוגר בהקלדה) */
+function PlayerNameModal({
   initialName,
   onConfirm,
 }: {
-  visible: boolean;
   initialName: string;
   onConfirm: (name: string) => void;
 }) {
+  const [show, setShow] = useState<boolean>(true);
   const [name, setName] = useState(initialName);
-  useEffect(() => {
-    if (visible) setName(initialName);
-  }, [visible, initialName]);
 
-  if (!visible) return null;
+  useEffect(() => {
+    AsyncStorage.getItem(PLAYER_NAME_MODAL_SEEN_KEY).then((v) => {
+      // הצג תמיד כשהשם עדיין ברירת מחדל — גם אם אי־פעם נשמר "נראה" (מניעת באג "הוא לא מופיע")
+      const shouldShow = v !== 'true' || isDefaultPlayerName(initialName);
+      setShow(shouldShow);
+    });
+  }, [initialName]);
+
+  useEffect(() => {
+    if (show) setName(initialName);
+  }, [show, initialName]);
+
+  const handleConfirm = () => {
+    const finalName = (name.trim() || initialName).slice(0, 7);
+    AsyncStorage.setItem(PLAYER_NAME_MODAL_SEEN_KEY, 'true');
+    setShow(false);
+    onConfirm(finalName);
+  };
+
+  if (!show) return null;
+
   return (
-    <RNModal transparent animationType="fade" onRequestClose={() => Keyboard.dismiss()} statusBarTranslucent visible>
+    <RNModal transparent animationType="fade" onRequestClose={() => Keyboard.dismiss()} statusBarTranslucent visible={true}>
       <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}>
         <View style={{flex:1,backgroundColor:'rgba(0,0,0,0.5)',justifyContent:'center',alignItems:'center',paddingHorizontal:24}}>
           <ScrollView contentContainerStyle={{flexGrow:1,justifyContent:'center',alignItems:'center'}} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={{backgroundColor:'rgba(30,41,59,0.98)',borderRadius:16,paddingHorizontal:20,paddingVertical:16,borderWidth:2,borderColor:'#FACC15',maxWidth:340,width:'100%'}}>
-              <Text style={{color:'#FDE68A',fontSize:18,fontWeight:'800',textAlign:'center',marginBottom:10}}>👋 ברוכים/ות למשחק!</Text>
-              <Text style={{color:'#E2E8F0',fontSize:14,fontWeight:'600',textAlign:'center',lineHeight:22,marginBottom:8}}>זה התור שלך. מלא/י את שמך:</Text>
+              <Text style={{color:'#FDE68A',fontSize:18,fontWeight:'800',textAlign:'center',marginBottom:10}}>👋 מה השם שלך?</Text>
+              <Text style={{color:'#E2E8F0',fontSize:14,fontWeight:'600',textAlign:'center',lineHeight:22,marginBottom:8}}>מלא/י את שמך להצגה במשחק (פעם אחת):</Text>
               <TextInput
                 value={name}
-                onChangeText={setName}
-                placeholder="מלא את שמך"
+                onChangeText={(t) => setName(t.slice(0, 7))}
+                onFocus={() => {
+                  if (/^שחקן \d+$/.test(name)) setName('');
+                }}
+                placeholder="השם שלי (עד 7 אותיות)"
                 placeholderTextColor="rgba(255,255,255,0.4)"
+                maxLength={7}
                 editable
                 blurOnSubmit={false}
                 style={{
@@ -3971,10 +4154,9 @@ function WelcomeNameModal({
                   marginBottom: 14,
                 }}
               />
-              <Text style={{color:'#E2E8F0',fontSize:12,fontWeight:'600',textAlign:'center',lineHeight:20,marginBottom:14}}>
-                הכר את הקלפים ולחץ/י "אני מוכן" כשאת/ה מוכן/ה להתחיל.
-              </Text>
-              <CasinoButton text="הבנתי" width={160} height={44} onPress={() => onConfirm(name.trim() || initialName)} />
+              <View style={{ alignItems: 'center', marginTop: 4 }}>
+                <CasinoButton text="אישור" width={220} height={48} fontSize={19} onPress={handleConfirm} />
+              </View>
             </View>
           </ScrollView>
         </View>
@@ -3989,8 +4171,6 @@ function TurnTransition() {
   const cp = state.players[state.currentPlayerIndex];
   const currentIdx = state.currentPlayerIndex;
   const [tooltipCard, setTooltipCard] = useState<Card | null>(null);
-  // הצגה פעם אחת למשתמש חדש — נקבע אחרי טעינת WELCOME_PLAYER_KEY (ללא תלות בהדרכה)
-  const [showWelcome, setShowWelcome] = useState<boolean>(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const emptySet = useMemo(() => new Set<string>(), []);
@@ -4034,25 +4214,8 @@ function TurnTransition() {
     })();
   }, []);
 
-  // הצגת מוקאפ ברוכים הבאים — בודקים AsyncStorage פעם אחת בטעינה בלבד (לא אחרי עדכון שם)
-  const welcomeCheckedRef = useRef(false);
-  useEffect(() => {
-    if (state.roundsPlayed !== 0) {
-      setShowWelcome(false);
-      return;
-    }
-    if (welcomeCheckedRef.current) return;
-    welcomeCheckedRef.current = true;
-    AsyncStorage.getItem(WELCOME_PLAYER_KEY).then((v) => {
-      if (v === 'true') setShowWelcome(false);
-      else setShowWelcome(true);
-    });
-  }, [state.roundsPlayed]);
-
-  const handleWelcomeConfirm = useCallback((name: string) => {
+  const handlePlayerNameConfirm = useCallback((name: string) => {
     dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: currentIdx, name });
-    AsyncStorage.setItem(WELCOME_PLAYER_KEY, 'true');
-    setShowWelcome(false);
   }, [dispatch, currentIdx]);
 
   // עד 3 שחקנים — ראשון = מוביל (כמות קלפים מינימלית)
@@ -4060,11 +4223,6 @@ function TurnTransition() {
   const visiblePlayers = sortedByCards.slice(0, 3);
 
   if (!cp) return null;
-
-  const updateName = (name: string) => {
-    dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: currentIdx, name });
-  };
-  const isDefaultName = /^שחקן \d+$/.test(cp.name);
 
   // Sort cards identically to PlayerHand
   const sorted = [...cp.hand].sort((a,b) => { const o={number:0,fraction:1,operation:2,joker:3} as const; if(o[a.type]!==o[b.type]) return o[a.type]-o[b.type]; if(a.type==='number'&&b.type==='number') return (a.value??0)-(b.value??0); return 0; });
@@ -4108,8 +4266,13 @@ function TurnTransition() {
               <Text style={{color:'#BFDBFE',fontSize:11,fontWeight:'700'}}>{cp?.hand.length} קלפים</Text>
             </View>
             <View style={{backgroundColor:'rgba(234,179,8,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#FACC15'}}>
-              <Text style={{color:'#FDE68A',fontSize:11,fontWeight:'700'}}>{state.timerSetting === 'off' ? 'ללא טיימר' : `${state.timerSetting} שנ׳`}</Text>
+              <Text style={{color:'#FDE68A',fontSize:11,fontWeight:'700'}}>{state.timerSetting === 'off' ? 'ללא טיימר' : state.timerSetting === 'custom' ? (state.timerCustomSeconds >= 60 ? `${Math.floor(state.timerCustomSeconds / 60)} דק' ${state.timerCustomSeconds % 60} שנ'` : `${state.timerCustomSeconds} שנ'`) : `${state.timerSetting} שנ׳`}</Text>
             </View>
+            {state.showSolveExercise && (
+              <View style={{backgroundColor:'rgba(168,85,247,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#A78BFA'}}>
+                <Text style={{color:'#C4B5FD',fontSize:11,fontWeight:'700'}}>פתרון תרגיל</Text>
+              </View>
+            )}
             {state.showFractions && (
               <View style={{backgroundColor:'rgba(34,197,94,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#4ADE80'}}>
                 <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'700'}}>שברים</Text>
@@ -4131,48 +4294,22 @@ function TurnTransition() {
       </View>
 
       <View style={{flex:1,paddingBottom:BTN_STRIP_H + HAND_STRIP_HEIGHT,overflow:'hidden'}}>
-      {/* ── הכנסת שם — מיקום קבוע בראש התוכן, גלוי תמיד כשיש שם ברירת מחדל ── */}
-      {isDefaultName && (
-      <View style={{position:'absolute',top:0,left:0,right:0,zIndex:15,elevation:15,paddingHorizontal:20,paddingVertical:8,backgroundColor:'transparent'}} pointerEvents="box-none" collapsable={false}>
-        <TextInput
-          value={cp.name}
-          onChangeText={updateName}
-          placeholder="מלא את שמך"
-          placeholderTextColor="rgba(255,255,255,0.4)"
-          editable
-          style={{
-            backgroundColor: 'rgba(15,23,42,0.95)',
-            borderRadius: 12,
-            borderWidth: 2,
-            borderColor: 'rgba(255,215,0,0.4)',
-            paddingHorizontal: 16,
-            paddingVertical: 12,
-            color: '#FFF',
-            fontSize: 18,
-            fontWeight: '700',
-            textAlign: 'center',
-          }}
-        />
-      </View>
-      )}
-
       {/* ── מידע — הודעות וטולטיפ (תגיות הועברו ל־Header) ── */}
       <View style={{flex:1,minHeight:60,paddingHorizontal:24,alignItems:'center',justifyContent:'center'}}>
         {/* Last move summary — הודעות צבעוניות (ללא כפילות במצב אתגר שבר) */}
         {!!state.lastMoveMessage && state.pendingFractionTarget === null && (
           state.lastDiscardCount > 0 && state.lastEquationDisplay ? (
-            <View style={{alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%'}}>
+            <View style={{alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%',alignItems:'center'}}>
               <View style={alertBubbleStyle.box}>
-                <Text style={alertBubbleStyle.title}>{state.players[(currentIdx - 1 + state.players.length) % state.players.length].name} הניח {state.lastDiscardCount} קלפים</Text>
+                <Text style={[alertBubbleStyle.title, {textAlign:'center'}]}>{state.players[(currentIdx - 1 + state.players.length) % state.players.length].name} הניח {state.lastDiscardCount} קלפים</Text>
                 <Text style={[alertBubbleStyle.body, {marginTop:6,textAlign:'center'}]}>{state.lastEquationDisplay}</Text>
               </View>
             </View>
           ) : (
-            <View style={{flexDirection:'row',alignItems:'center',gap:8,alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%',justifyContent:'center'}}>
+            <View style={{alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%',alignItems:'center'}}>
               <View style={alertBubbleStyle.box}>
-                <Text style={alertBubbleStyle.title}>{state.lastMoveMessage}</Text>
+                <Text style={[alertBubbleStyle.title, {textAlign:'center'}]}>{state.lastMoveMessage}</Text>
               </View>
-              <GoldArrow direction="right" size={48} />
             </View>
           )
         )}
@@ -4216,11 +4353,7 @@ function TurnTransition() {
         <CardsCatalogContent numberRange={state.difficulty} fractions={state.showFractions} />
       </AppModal>
 
-      <WelcomeNameModal
-        visible={showWelcome && !tooltipCard && !!cp}
-        initialName={cp?.name ?? ''}
-        onConfirm={handleWelcomeConfirm}
-      />
+      {cp && <PlayerNameModal initialName={cp.name} onConfirm={handlePlayerNameConfirm} />}
     </View>
   );
 }
@@ -4356,7 +4489,7 @@ function GameScreen() {
   // ── Timer countdown ──
   const [secsLeft, setSecsLeft] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
-  const TIMER_TOTAL = state.timerSetting === '30' ? 30 : 45;
+  const TIMER_TOTAL = state.timerSetting === 'custom' ? state.timerCustomSeconds : (state.timerSetting === '30' ? 30 : 45);
 
   useEffect(() => {
     if (state.timerSetting === 'off') {
@@ -4458,6 +4591,9 @@ function GameScreen() {
 
   // "מצא קלפים שסכומם" alert — only in SLOT 2 next to תוצאות אפשריות, first time in solved phase
   const [findCardsAlertSeen, setFindCardsAlertSeen] = useState(true);
+  const [solveExerciseTipSeen, setSolveExerciseTipSeen] = useState(false);
+  const [solveExerciseTipDismissing, setSolveExerciseTipDismissing] = useState(false);
+  const solveExerciseTipY = useRef(new Animated.Value(300)).current;
   const identArrowLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   // ── Contextual onboarding system ──
@@ -4486,6 +4622,7 @@ function GameScreen() {
 
   const guidanceEnabledRef = useRef(true);
   useEffect(() => {
+    let cancelled = false;
     Promise.all([
       AsyncStorage.getItem('lulos_guidance_enabled'),
       AsyncStorage.getItem('lulos_tutorial_done'),
@@ -4494,27 +4631,73 @@ function GameScreen() {
       AsyncStorage.getItem('lulos_frac_arrow_seen'),
       AsyncStorage.getItem('lulos_ident_arrow_seen'),
       AsyncStorage.getItem('lulos_find_cards_sum_alert_seen'),
+      AsyncStorage.getItem('lulos_solve_exercise_mini_card_tip_seen'),
       ...ONB_KEYS.map(k => AsyncStorage.getItem(k)),
       ...GUIDANCE_KEYS.map(k => AsyncStorage.getItem(k)),
-    ]).then(([guidance, tut, tip1, tip2, arrow, identArrow, findCardsAlert, ...rest]) => {
-      guidanceEnabledRef.current = guidance !== 'false';
-      const onbResults = rest.slice(0, ONB_KEYS.length);
-      const guidanceResults = rest.slice(ONB_KEYS.length);
-      let step = guidanceEnabledRef.current ? 1 : 4;
-      if (tut === 'true') step = 4;
-      else if (guidance !== 'false') { if (tip2 === 'true') step = 3; else if (tip1 === 'true') step = 2; }
-      setTutStep(step);
-      setFracArrowSeen(arrow === 'true' || guidance === 'false');
-      setIdentArrowSeen(identArrow === 'true' || guidance === 'false');
-      setFindCardsAlertSeen(findCardsAlert === 'true');
-      if (guidance === 'false') {
-        ONB_KEYS.forEach(k => onbSeen.current.add(k));
-        GUIDANCE_KEYS.forEach(k => guidanceSeen.current.add(k));
-      } else {
-        ONB_KEYS.forEach((k, i) => { if (onbResults[i] === 'true') onbSeen.current.add(k); });
-        GUIDANCE_KEYS.forEach((k, i) => { if (guidanceResults[i] === 'true') guidanceSeen.current.add(k); });
-      }
-      setTutLoaded(true);
+    ])
+      .then(([guidance, tut, tip1, tip2, arrow, identArrow, findCardsAlert, solveExerciseTip, ...rest]) => {
+        if (cancelled) return;
+        const enabled = guidance !== 'false';
+        guidanceEnabledRef.current = enabled;
+        dispatch({ type: 'SET_GUIDANCE_ENABLED', enabled });
+        const onbResults = rest.slice(0, ONB_KEYS.length);
+        const guidanceResults = rest.slice(ONB_KEYS.length);
+        let step = guidanceEnabledRef.current ? 1 : 4;
+        if (tut === 'true') step = 4;
+        else if (guidance !== 'false') { if (tip2 === 'true') step = 3; else if (tip1 === 'true') step = 2; }
+        setTutStep(step);
+        setFracArrowSeen(arrow === 'true' || guidance === 'false');
+        setIdentArrowSeen(identArrow === 'true' || guidance === 'false');
+        setFindCardsAlertSeen(findCardsAlert === 'true');
+        setSolveExerciseTipSeen(solveExerciseTip === 'true');
+        if (guidance === 'false') {
+          ONB_KEYS.forEach(k => onbSeen.current.add(k));
+          GUIDANCE_KEYS.forEach(k => guidanceSeen.current.add(k));
+        } else {
+          ONB_KEYS.forEach((k, i) => { if (onbResults[i] === 'true') onbSeen.current.add(k); });
+          GUIDANCE_KEYS.forEach((k, i) => { if (guidanceResults[i] === 'true') guidanceSeen.current.add(k); });
+        }
+        setTutLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTutLoaded(true);
+          setSolveExerciseTipSeen(false);
+        }
+      });
+    const t = setTimeout(() => {
+      if (!cancelled) setTutLoaded(prev => { if (!prev) return true; return prev; });
+    }, 2500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, []);
+
+  const solveExerciseTipVisible = tutLoaded && !solveExerciseTipSeen && state.showSolveExercise && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && resultsOpen && state.validTargets.length > 0;
+  const shouldShowSolveTipOnce = tutLoaded && !solveExerciseTipSeen && state.showSolveExercise && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && state.validTargets.length > 0;
+  useEffect(() => {
+    if (state.phase === 'pre-roll') {
+      AsyncStorage.getItem('lulos_solve_exercise_mini_card_tip_seen').then(v => setSolveExerciseTipSeen(v === 'true'));
+      Promise.all(ONB_KEYS.map(k => AsyncStorage.getItem(k))).then(results => {
+        ONB_KEYS.forEach((k, i) => {
+          if (results[i] === 'true') onbSeen.current.add(k);
+          else onbSeen.current.delete(k);
+        });
+      });
+    }
+  }, [state.phase]);
+  useEffect(() => {
+    if (shouldShowSolveTipOnce && !resultsOpen) setResultsOpenState(true);
+  }, [shouldShowSolveTipOnce, resultsOpen]);
+  useEffect(() => {
+    if (!solveExerciseTipVisible || solveExerciseTipDismissing) return;
+    solveExerciseTipY.setValue(300);
+    Animated.timing(solveExerciseTipY, { toValue: 0, duration: 280, useNativeDriver: true }).start();
+  }, [solveExerciseTipVisible, solveExerciseTipDismissing]);
+  const dismissSolveExerciseTip = useCallback(() => {
+    setSolveExerciseTipDismissing(true);
+    Animated.timing(solveExerciseTipY, { toValue: 300, duration: 250, useNativeDriver: true }).start(() => {
+      setSolveExerciseTipSeen(true);
+      setSolveExerciseTipDismissing(false);
+      AsyncStorage.setItem('lulos_solve_exercise_mini_card_tip_seen', 'true');
     });
   }, []);
 
@@ -4645,7 +4828,12 @@ function GameScreen() {
 
   // Possible results toggle: לחיצה ראשונה — הצגת מיני קלפים, לחיצה שנייה — הסתרה
   const [resultsOpen, setResultsOpenState] = useState(false);
-  const toggleResultsBadges = () => setResultsOpenState(prev => !prev);
+  const toggleResultsBadges = useCallback(() => {
+    if (resultsOpen) setSelectedEquationForDisplay(null);
+    setResultsOpenState(prev => !prev);
+  }, [resultsOpen]);
+  // תרגיל נבחר להצגה באזור האפור (רק כש־showSolveExercise מופעל)
+  const [selectedEquationForDisplay, setSelectedEquationForDisplay] = useState<EquationOption | null>(null);
 
   // Challenge sheet dismiss state
   const [challengeMinimized, setChallengeMinimized] = useState(false);
@@ -4831,11 +5019,11 @@ function GameScreen() {
       jokerGuidanceShown.current = true;
       showGuidance('guidance_joker', {
         message: '', emoji: '🃏',
-        title: 'יש לך ג׳וקר!',
-        body: '⚔️ בחר סימן (+, −, ×, ÷) כדי לאתגר את השחקן הבא\n🛡️ מגן מכל התקפת שבר או פעולה',
+        title: 'יש לך ג׳וקר — תוכל להשתמש בו כדי…',
+        body: 'בחר/י סימן (+, −, ×, ÷) ואתגר/י את השחקן הבא. מגן מפני התקפת פעולה; לא מגן מפני התקפת שבר.',
         style: 'info', autoDismissMs: 8000,
       }, {
-        message: '🃏 ג׳וקר! בחר סימן לאתגר',
+        message: '🃏 ג׳וקר — תוכל להשתמש בו כדי לבחור סימן לאתגר',
         style: 'info', autoDismissMs: 4000,
       });
     }
@@ -4969,31 +5157,32 @@ function GameScreen() {
         );
       })()}
 
-      {/* ── SLOT 3: Game area — שולחן ירוק + תרגיל + טיימר ── */}
-      <View style={{flexGrow:1,flexShrink:1,minHeight:200,paddingHorizontal:12,zIndex:2}}>
-        <ImageBackground
-          source={pokerTableImg}
-          style={{
-            alignSelf:'center',
-            width:'100%',
-            height:240,
-            justifyContent:'center',
-            alignItems:'center',
-            paddingVertical:10,
-            paddingHorizontal:8,
-            overflow:'hidden',
-          }}
-          resizeMode="stretch"
-        >
-          <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} onResultChange={setEqResult} />
-          {state.timerSetting !== 'off' && (
-            <View style={{ position: 'absolute', bottom: 28, alignSelf: 'center' }}>
-              <TimerBar totalTime={TIMER_TOTAL} secsLeft={secsLeft} running={timerRunning} />
-            </View>
-          )}
-        </ImageBackground>
-        {/* Operation card hints — בוטלו כדי לא להציג הודעות באזור 365–465 */}
-        <StagingZone />
+      {/* ── SLOT 3: שולחן ירוק + תרגיל + טיימר (מוקאפ תרגיל הועבר ליד תוצאות אפשריות) ── */}
+      <View style={{flexGrow:1,flexShrink:1,minHeight:200,paddingHorizontal:12,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0}}>
+        <View style={{flex:1,minWidth:0}}>
+          <ImageBackground
+            source={pokerTableImg}
+            style={{
+              alignSelf:'center',
+              width:'100%',
+              height:240,
+              justifyContent:'center',
+              alignItems:'center',
+              paddingVertical:10,
+              paddingHorizontal:8,
+              overflow:'hidden',
+            }}
+            resizeMode="stretch"
+          >
+            <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} onResultChange={setEqResult} />
+            {state.timerSetting !== 'off' && (
+              <View style={{ position: 'absolute', bottom: 28, alignSelf: 'center' }}>
+                <TimerBar totalTime={TIMER_TOTAL} secsLeft={secsLeft} running={timerRunning} />
+              </View>
+            )}
+          </ImageBackground>
+          <StagingZone />
+        </View>
       </View>
 
       {/* ── SLOT 4: רווח 100px ── */}
@@ -5009,13 +5198,27 @@ function GameScreen() {
         </View>
       </View>
 
-      {/* תוצאות אפשריות — מיני-קלפים באזור 365–415px מהתחתית */}
+      {/* תוצאות אפשריות — מיני-קלפים במיקום המקורי (365px מהתחתית) */}
       {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
         <View style={{position:'absolute',bottom:365,left:0,right:0,height:50,zIndex:5,alignItems:'center',justifyContent:'center'}} pointerEvents="box-none">
-          <ResultsStripBelowTable resultsOpen={resultsOpen} filteredResults={(() => {
-            const handValuesForStrip = new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []);
-            return state.validTargets.filter(t => handValuesForStrip.has(t.result));
-          })()} />
+          <ResultsStripBelowTable
+            resultsOpen={resultsOpen}
+            filteredResults={(() => {
+              const handValuesForStrip = new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []);
+              return state.validTargets.filter(t => handValuesForStrip.has(t.result));
+            })()}
+            onSelectEquation={state.showSolveExercise ? setSelectedEquationForDisplay : undefined}
+          />
+        </View>
+      )}
+
+      {/* כפתור פתרון תרגיל — מופיע רק אחרי לחיצה על מיני-קלף, 700px מהתחתית, גובה כמו הכפתור הירוק (CHIP_H) */}
+      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && state.showSolveExercise && selectedEquationForDisplay !== null && (
+        <View style={{position:'absolute',bottom:700,left:210,zIndex:5}} pointerEvents="box-none">
+          <SolveExerciseChip
+            equation={selectedEquationForDisplay.equation}
+            onPress={() => setSelectedEquationForDisplay(null)}
+          />
         </View>
       )}
 
@@ -5136,6 +5339,28 @@ function GameScreen() {
             <Text style={{color:'rgba(255,255,255,0.5)',fontSize:14,fontWeight:'700'}}>הבנתי 👍</Text>
           </TouchableOpacity>
         </Animated.View>
+      )}
+
+      {/* ── וילון הסבר חד־פעמי: רק כשהמיני-קלפים מופיעים, חץ למיני-קלפים, אפשר להמשיך לשחק (מעבר אירועים) ── */}
+      {(solveExerciseTipVisible || solveExerciseTipDismissing) && (
+        <View style={{position:'absolute',bottom:0,left:0,right:0,top:0,zIndex:38}} pointerEvents="box-none">
+          <Animated.View style={{position:'absolute',bottom:0,left:0,right:0,backgroundColor:'rgba(15,23,42,0.97)',borderTopLeftRadius:24,borderTopRightRadius:24,borderTopWidth:2,borderColor:'rgba(248,113,113,0.5)',padding:20,paddingHorizontal:24,paddingBottom:28,transform:[{translateY:solveExerciseTipY}]}} pointerEvents="auto">
+            <View style={{alignSelf:'center',width:40,height:4,backgroundColor:'rgba(255,255,255,0.25)',borderRadius:2,marginBottom:12}} />
+            <View style={{alignSelf:'center',marginBottom:10}}>
+              <Text style={{color:'#FCA5A5',fontSize:28,textAlign:'center'}}>▲</Text>
+              <Text style={{color:'rgba(248,113,113,0.7)',fontSize:11,fontWeight:'700',textAlign:'center'}}>למיני-קלפים כאן</Text>
+            </View>
+            <Text style={{color:'#FCA5A5',fontSize:20,fontWeight:'900',textAlign:'center',marginBottom:12}}>📋 פתרון תרגיל</Text>
+            <Text style={{color:'#E2E8F0',fontSize:16,fontWeight:'600',textAlign:'center',lineHeight:24}}>אפשר ללחוץ על המיני-קלף כדי לראות את פיצוח התרגיל</Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={dismissSolveExerciseTip}
+              style={{alignSelf:'center',marginTop:18,backgroundColor:'rgba(255,255,255,0.08)',borderRadius:10,borderWidth:1,borderColor:'rgba(255,255,255,0.15)',paddingHorizontal:28,paddingVertical:10}}
+            >
+              <Text style={{color:'rgba(255,255,255,0.5)',fontSize:14,fontWeight:'700'}}>הבנתי 👍</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
       )}
 
       {/* Floating 💡 recall button — appears after dismissing fraction hint */}
@@ -5340,10 +5565,13 @@ function NotificationZone() {
   const { state, dispatch } = useGame();
   const insets = useSafeAreaInsets();
   if (__DEV__) console.log('[NZ] render, phase:', state.phase, 'queue length:', state.notifications?.length, 'notifications:', JSON.stringify(state.notifications?.map(n => ({id:n.id,title:n.title,msg:n.message?.slice(0,30)}))));
-  // התראות למשתמש חדש (onboarding) מוצגות בכל שלב — כולל במסך מעבר התור
-  const notif = (state.notifications ?? []).find(n =>
-    !(state.pendingFractionTarget !== null && n.id.startsWith('guidance-guidance_fraction'))
-  ) ?? null;
+  // לוגיקה נפרדת למשתמש חדש: כשהדרכה מופעלת — עדיפות להתראות onb/guidance
+  const list = state.notifications ?? [];
+  const skipFractionGuidance = (n: Notification) => !(state.pendingFractionTarget !== null && n.id.startsWith('guidance-guidance_fraction'));
+  const isGuidanceNotif = (n: Notification) => n.id.startsWith('onb-') || n.id.startsWith('guidance-');
+  const notif = (state.guidanceEnabled === true
+    ? (list.find(n => skipFractionGuidance(n) && isGuidanceNotif(n)) ?? list.find(skipFractionGuidance))
+    : list.find(skipFractionGuidance)) ?? null;
   const NOTIF_STRIP_H = 56;
   const slideY = useRef(new Animated.Value(NOTIF_STRIP_H)).current;
   const prevId = useRef<string | null>(null);
@@ -5399,29 +5627,51 @@ function NotificationZone() {
 //  משחק ברשת — מסך שחקן (היד שלי) + מעבר אוטומטי כשמגיע תורי
 // ═══════════════════════════════════════════════════════════════
 
-/** מסך "המסך שלי" — מציג את היד שלי בלבד; שחקן יכול לעבור לכאן ולחזור לצפייה */
+/** מסך "המסך שלי" — מציג את היד שלי בלבד; פריסה ורקע כמו מסך המשחק (רשת/קבועים זהים) */
 function PlayerWaitingScreen({ myHand, currentTurnName, onBack }: { myHand: Card[]; currentTurnName: string; onBack: () => void }) {
-  const sorted = [...myHand].sort((a, b) => {
+  const safe = useGameSafeArea();
+  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
+  const sorted = useMemo(() => [...myHand].sort((a, b) => {
     const o = { number: 0, fraction: 1, operation: 2, joker: 3 } as const;
     if (o[a.type] !== o[b.type]) return o[a.type] - o[b.type];
     if (a.type === 'number' && b.type === 'number') return (a.value ?? 0) - (b.value ?? 0);
     return 0;
-  });
+  }), [myHand]);
+  const emptySet = useMemo(() => new Set<string>(), []);
   return (
-    <View style={{ flex: 1, backgroundColor: '#0a1628', paddingTop: 56, paddingHorizontal: 16, paddingBottom: 24 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Text style={{ color: '#F59E0B', fontSize: 20, fontWeight: '800' }}>המסך שלי</Text>
-        <TouchableOpacity onPress={onBack} style={{ backgroundColor: '#2563EB', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 }}>
-          <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '700' }}>חזרה לצפייה במשחק</Text>
-        </TouchableOpacity>
+    <View style={{ flex: 1, width: SCREEN_W, minHeight: SCREEN_H, overflow: 'hidden' }}>
+      <ImageBackground source={gameBgImg} resizeMode="cover" style={StyleSheet.absoluteFill} />
+      <View style={{ flex: 1, paddingTop: 8, paddingBottom: bottomPad }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingTop: 4, paddingBottom: 4 }}>
+          <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <Text style={{ color: '#F59E0B', fontSize: 18, fontWeight: '800' }}>המסך שלי</Text>
+            <Text style={{ color: '#9CA3AF', fontSize: 12, textAlign: 'right' }}>תור של {currentTurnName} — צופה מהצד</Text>
+            <View style={{ backgroundColor: 'rgba(59,130,246,0.25)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: '#93C5FD', alignSelf: 'flex-end' }}>
+              <Text style={{ color: '#BFDBFE', fontSize: 11, fontWeight: '700' }}>{myHand.length} קלפים</Text>
+            </View>
+          </View>
+          <LulosButton text="חזרה לצפייה" color="blue" width={120} height={32} fontSize={11} onPress={onBack} />
+        </View>
+        <View style={{ flex: 1, minHeight: 60, paddingHorizontal: 24, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, textAlign: 'center' }}>כשמגיע תורך — תעבור אוטומטית למסך המשחק</Text>
+        </View>
       </View>
-      <Text style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 12, textAlign: 'right' }}>תור של {currentTurnName} — צופה מהצד</Text>
-      <Text style={{ color: '#E2E8F0', fontSize: 14, fontWeight: '600', marginBottom: 8, textAlign: 'right' }}>היד שלי ({myHand.length} קלפים)</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', gap: 8, paddingVertical: 12 }}>
-        {sorted.map((card) => (
-          <GameCard key={card.id} card={card} small />
-        ))}
-      </ScrollView>
+      <View style={{ position: 'absolute', bottom: -safe.insets.bottom, left: 0, right: 0, height: SCREEN_H, zIndex: 5 }} pointerEvents="box-none">
+        <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET + safe.insets.bottom, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+          <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'center' }}>
+            <SimpleHand
+              cards={sorted}
+              stagedCardIds={emptySet}
+              equationOpCardId={null}
+              equationOpPlaced={false}
+              defenseValidCardIds={null}
+              forwardCardId={null}
+              onTap={() => {}}
+              onCenterCard={() => {}}
+            />
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
