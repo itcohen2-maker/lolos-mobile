@@ -3,11 +3,12 @@
 // LinearGradient cards, 3D shadows, rotated deck, thick edges
 // ============================================================
 
-import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, useReducer } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, useReducer, forwardRef, useImperativeHandle } from 'react';
 import type { ReactNode } from 'react';
 import {
   I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground,
-  StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder,
+  StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert,
+  Keyboard, TouchableWithoutFeedback, KeyboardAvoidingView,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
@@ -27,15 +28,31 @@ import GoldArrow from './components/GoldArrow';
 const pokerTableImg = require('./assets/table.png');
 const gameBgImg = require('./assets/bg.jpg');
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-
+import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMultiplayer';
+import { LobbyEntry, LobbyScreen } from './src/screens/LobbyScreens';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-/** גובה אזור היד (מניפה) — זהה במסך השחקן (TurnTransition) ובמסך המשחק (GameScreen) */
+/** גובה אזור היד (מניפה) — זהה במסך השחקן (TurnTransition) ובמסך המשחק (GameScreen)
+ *  HAND_STRIP_HEIGHT = גובה כל האזור (כולל טקסט מעל היד אם יש)
+ *  HAND_INNER_HEIGHT = גובה נטו של המניפה (קלפים) בתוך האזור
+ *  HAND_BOTTOM_OFFSET = מרחק תחתית המסך עד לתחתית אזור היד (מעל פס הכפתורים) — חייב זהה בשני המסכים.
+ *  חשוב: בשני המסכים משתמשים תמיד בקבועים האלה בלבד, בלי מספרים קשיחים.
+ */
 const HAND_STRIP_HEIGHT = 180;
+const HAND_INNER_HEIGHT = 160;
+/** מרחק (px) מתחתית המסך לתחתית פס היד — זהה ב־TurnTransition וב־GameScreen (195px) */
+const HAND_BOTTOM_OFFSET = 195;
+
+function devCheckHandLayout() {
+  if (!__DEV__) return;
+  if (HAND_INNER_HEIGHT >= HAND_STRIP_HEIGHT) {
+    console.warn('[hand-layout] HAND_INNER_HEIGHT חייב להיות קטן מ-HAND_STRIP_HEIGHT כדי להשאיר מקום לטקסט/רווח מעל המניפה.');
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  SHARED SAFE AREA
@@ -113,6 +130,7 @@ interface GameState {
   message: string;
   roundsPlayed: number;
   notifications: Notification[];
+  moveHistory: MoveHistoryEntry[];
 }
 
 interface Notification {
@@ -123,6 +141,13 @@ interface Notification {
   body?: string;
   style: 'success' | 'warning' | 'info' | 'celebration' | 'error';
   autoDismissMs?: number;
+}
+
+/** רשומת היסטוריית מהלך — כל פעם ששחקן מניח קלפים / שולף / מסיים תור */
+interface MoveHistoryEntry {
+  playerIndex: number;
+  cardsDiscarded: number;
+  description: string;
 }
 
 type GameAction =
@@ -405,7 +430,10 @@ function generateValidTargets2Dice(die1: number, die2: number): EquationOption[]
 // ═══════════════════════════════════════════════════════════════
 
 function validateIdenticalPlay(card: Card, topDiscard: Card | undefined): boolean {
-  if (!topDiscard || card.type !== topDiscard.type) return false;
+  if (!topDiscard) return false;
+  // קלף פרא נספר כאותו מספר — מותר להניח פרא כ"זהה" כשראש הערימה קלף מספר (או פרא)
+  if (card.type === 'wild') return topDiscard.type === 'number' || topDiscard.type === 'wild';
+  if (card.type !== topDiscard.type) return false;
   switch (card.type) {
     case 'number': return card.value === topDiscard.value;
     case 'fraction': return card.fraction === topDiscard.fraction;
@@ -567,6 +595,7 @@ const initialState: GameState = {
   difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, timerSetting: 'off', winner: null, message: '',
   roundsPlayed: 0,
   notifications: [],
+  moveHistory: [],
 };
 
 function reshuffleDiscard(st: GameState): GameState {
@@ -588,7 +617,7 @@ function drawFromPile(st: GameState, count: number, pi: number): GameState {
 
 function checkWin(st: GameState): GameState {
   const cp = st.players[st.currentPlayerIndex];
-  if (cp.hand.length === 0)
+  if (cp.hand.length === 2)
     return { ...st, phase: 'game-over', winner: cp };
   return st;
 }
@@ -598,22 +627,22 @@ function endTurnLogic(st: GameState): GameState {
   // Keep activeOperation only if the current player SET a new challenge this turn
   const keepOp = !!s.activeOperation && s.hasPlayedCards;
   const up = s.players[s.currentPlayerIndex];
-  if (up.hand.length === 1 && !up.calledLolos) {
+  if (up.hand.length === 2 && !up.calledLolos) {
     s.message = `${up.name} לא לחץ/ה "כמעט סיימתי" — אין עונש.`;
   }
   const next = (s.currentPlayerIndex + 1) % s.players.length;
-  // Push turn notification from lastMoveMessage for the next player
-  if (s.lastMoveMessage) {
-    console.log('[END_TURN] pushing notification:', s.lastMoveMessage.slice(0, 40));
-    s = { ...s, notifications: [...s.notifications, {
-      id: `turn-${Date.now()}`,
-      message: s.lastMoveMessage,
-      style: 'info' as const,
-      autoDismissMs: 4000,
-    }]};
+  const nextNotifications = [...s.notifications];
+  if (up.hand.length === 3) {
+    nextNotifications.push({
+      id: `three-cards-${up.id}-${Date.now()}`,
+      message: `לשחקן ${up.name} נותרו 3 קלפים — בדרך לניצחון!`,
+      style: 'info',
+      autoDismissMs: 4500,
+    });
   }
   return {
     ...s,
+    notifications: nextNotifications,
     players: s.players.map(p => ({ ...p, calledLolos: false })),
     currentPlayerIndex: next, phase: 'turn-transition', dice: null,
     selectedCards: [], stagedCards: [], equationResult: null, validTargets: [],
@@ -623,7 +652,8 @@ function endTurnLogic(st: GameState): GameState {
     activeFraction: null, identicalAlert: null, hasPlayedCards: false,
     hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null,
     fractionPenalty: 0, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null,
-    lastDiscardCount: 0,
+    lastDiscardCount: s.lastDiscardCount,
+    lastEquationDisplay: s.lastEquationDisplay,
     roundsPlayed: s.roundsPlayed + 1,
   };
 }
@@ -661,7 +691,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       // activeOperation is purely informational — challenge card stays on pile, player plays normally
       // Fraction attack: explicit pending attack (from PLAY_FRACTION)
       if (st.pendingFractionTarget !== null && !st.fractionAttackResolved) {
-        return { ...st, phase: 'pre-roll', message: '' };
+        return { ...st, phase: 'pre-roll', message: '', lastDiscardCount: 0, lastEquationDisplay: null };
       }
       // Fraction attack: auto-detect fraction card on top of discard pile
       // Skip if the fraction was already resolved (penalty taken or defense played)
@@ -669,11 +699,11 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (topDiscard && topDiscard.type === 'fraction' && !st.fractionAttackResolved) {
         const denom = fractionDenominator(topDiscard.fraction!);
 
-        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '' };
+        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null };
       }
-      // Normal turn — reset the resolved flag; notify if fraction chain just ended
+      // Normal turn — reset; clear last-move display (הודעת עדכון רק במסך השחקן); notify if fraction chain just ended
       const fracChainEnded = st.fractionAttackResolved && topDiscard?.type === 'fraction';
-      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? 'סבב השברים הסתיים — הטל קוביות' : '' };
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? 'סבב השברים הסתיים — הטל קוביות' : '', lastDiscardCount: 0, lastEquationDisplay: null };
     }
     case 'ROLL_DICE': {
       if (st.phase !== 'pre-roll') return st;
@@ -699,7 +729,42 @@ function gameReducer(st: GameState, action: GameAction): GameState {
     }
     case 'CONFIRM_EQUATION': {
       if (st.phase !== 'building') return st;
-      return { ...st, phase: 'solved', equationResult: action.result, equationOpsUsed: action.equationOps, lastEquationDisplay: action.equationDisplay, stagedCards: [], message: '' };
+      const hasChallenge = !!st.activeOperation;
+      const usedChallenge = hasChallenge && action.equationOps.includes(st.activeOperation!);
+
+      // לא היה אתגר, או שהשחקן השתמש בסימן האתגר בתרגיל — ממשיכים כרגיל
+      if (!hasChallenge || usedChallenge) {
+        return {
+          ...st,
+          phase: 'solved',
+          equationResult: action.result,
+          equationOpsUsed: action.equationOps,
+          lastEquationDisplay: action.equationDisplay,
+          stagedCards: [],
+          message: '',
+        };
+      }
+
+      // היה אתגר פעולה אבל השחקן לא השתמש בסימן — שליפת קלף עונש וסיום התור
+      const cp = st.players[st.currentPlayerIndex];
+      const penResult = drawFromPile(st, 1, st.currentPlayerIndex);
+      const penMsg = `😬 ${cp.name} לא השתמש/ה בסימן האתגר — קלף עונש!`;
+      let s: GameState = {
+        ...penResult,
+        activeOperation: null,
+        challengeSource: null,
+        equationOpsUsed: [],
+        hasDrawnCard: true,
+        hasPlayedCards: false,
+        lastMoveMessage: penMsg,
+        message: '',
+        moveHistory: [
+          ...st.moveHistory,
+          { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: penMsg },
+        ],
+      };
+      s = endTurnLogic(s);
+      return s;
     }
     case 'REVERT_TO_BUILDING': {
       if (st.phase !== 'solved' || st.hasPlayedCards) return st;
@@ -785,7 +850,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         ? `🎯 ${stCp.name}: אתגר הוטל!`
         : `✅ ${stCp.name}: \u2066${st.lastEquationDisplay || ''}\u2069 → הניח ${stLastNum.type === 'wild' ? `פרא (${lastCardVal})` : stLastNum.value}`;
       // TODO: add dedicated sound effect per discard count
-      let stNs: GameState = { ...st, players: penaltyPlayers, drawPile: penaltyDrawPile, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: stNewActiveOp || null, challengeSource: stNewActiveOp ? stCp.name : null, equationOpsUsed: [], equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: null, message: stNewActiveOp ? `אתגר פעולה ${stNewActiveOp} לשחקן הבא!` : '' };
+      const moveEntry: MoveHistoryEntry = { playerIndex: st.currentPlayerIndex, cardsDiscarded: stIds.size, description: stToast };
+      let stNs: GameState = { ...st, players: penaltyPlayers, drawPile: penaltyDrawPile, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: stNewActiveOp || null, challengeSource: stNewActiveOp ? stCp.name : null, equationOpsUsed: [], equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: st.lastEquationDisplay, message: stNewActiveOp ? `אתגר פעולה ${stNewActiveOp} לשחקן הבא!` : '', moveHistory: [...st.moveHistory, moveEntry] };
       stNs = checkWin(stNs);
       if (stNs.phase === 'game-over') return stNs;
       // Discard celebration notification
@@ -813,7 +879,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       const trapCp = st.players[st.currentPlayerIndex];
       const trapNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: trapCp.hand.filter(c => c.id !== st.equationOpCard!.id) } : p);
       const trapDiscard = [...st.discardPile, st.equationOpCard];
-      let trapNs: GameState = { ...st, players: trapNp, discardPile: trapDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: st.lastCardValue, activeOperation: trapOp, challengeSource: trapCp.name, equationOpsUsed: [], equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, lastMoveMessage: `⚔️ ${trapCp.name}: הניח מלכודת ${trapOp} — אתגר!`, lastEquationDisplay: null, message: `אתגר פעולה ${trapOp} לשחקן הבא!` };
+      const trapMsg = `⚔️ ${trapCp.name}: הניח מלכודת ${trapOp} — אתגר!`;
+      let trapNs: GameState = { ...st, players: trapNp, discardPile: trapDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: st.lastCardValue, activeOperation: trapOp, challengeSource: trapCp.name, equationOpsUsed: [], equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, lastMoveMessage: trapMsg, lastEquationDisplay: null, message: `אתגר פעולה ${trapOp} לשחקן הבא!`, moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: trapMsg }] };
       trapNs = checkWin(trapNs);
       if (trapNs.phase === 'game-over') return trapNs;
       return endTurnLogic(trapNs);
@@ -856,7 +923,9 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         ...st,
         identicalAlert: null,
         lastMoveMessage: idToast,
+        lastDiscardCount: 1,
         notifications: [...st.notifications, encouragement],
+        moveHistory: idToast ? [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: idToast }] : st.moveHistory,
       });
     }
     case 'PLAY_OPERATION': {
@@ -880,13 +949,15 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       const fwdNp = st.players.map((p, i) =>
         i === st.currentPlayerIndex ? { ...p, hand: fwdCp.hand.filter(c => c.id !== action.card.id) } : p);
       const fwdDiscard = [...st.discardPile, action.card];
+      const fwdMsg = `⚔️ ${fwdCp.name} העביר/ה את האתגר עם ${opDisplay[fwdOp!] ?? fwdOp}!`;
       let fwdNs: GameState = {
         ...st, players: fwdNp, discardPile: fwdDiscard,
         activeOperation: fwdOp as Operation,
         challengeSource: fwdCp.name,
         hasPlayedCards: true,
-        lastMoveMessage: `⚔️ ${fwdCp.name} העביר/ה את האתגר עם ${opDisplay[fwdOp!] ?? fwdOp}!`,
+        lastMoveMessage: fwdMsg,
         message: '',
+        moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: fwdMsg }],
       };
       fwdNs = checkWin(fwdNs);
       if (fwdNs.phase === 'game-over') return fwdNs;
@@ -939,6 +1010,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
           fractionAttackResolved: false,
           lastMoveMessage: blockMsg,
           message: `${cp.name} חסם עם שבר — האתגר עובר הלאה!`,
+          moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: blockMsg }],
         };
       }
 
@@ -964,6 +1036,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         fractionAttackResolved: false,
         lastMoveMessage: atkMsg,
         message: `${cp.name} תקף עם שבר!`,
+        moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: atkMsg }],
       };
     }
     case 'DEFEND_FRACTION_SOLVE': {
@@ -972,7 +1045,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (action.card.type !== 'number' || !action.card.value || action.card.value % st.fractionPenalty !== 0) return st;
       const cp = st.players[st.currentPlayerIndex];
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastCardValue: action.card.value ?? null, lastMoveMessage: '🛡️ הגנה מוצלחת — התור עובר לשחקן הבא', message: 'הגנה מוצלחת!' });
+      const defMsg = '🛡️ הגנה מוצלחת — התור עובר לשחקן הבא';
+      let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, action.card], selectedCards: [], pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastCardValue: action.card.value ?? null, lastMoveMessage: defMsg, message: 'הגנה מוצלחת!', moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: defMsg }] });
       if (ns.phase === 'game-over') return ns;
       return endTurnLogic(ns);
     }
@@ -980,7 +1054,8 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (st.pendingFractionTarget === null) return st;
       const cp = st.players[st.currentPlayerIndex];
       let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
-      s = { ...s, pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastMoveMessage: `📥 ${cp.name}: שלף ${st.fractionPenalty} קלפי עונשין`, message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.` };
+      const penMsg = `📥 ${cp.name}: שלף ${st.fractionPenalty} קלפי עונשין`;
+      s = { ...s, pendingFractionTarget: null, fractionPenalty: 0, fractionAttackResolved: true, lastMoveMessage: penMsg, message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.`, moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: penMsg }] };
       return endTurnLogic(s);
     }
     case 'OPEN_JOKER_MODAL': return { ...st, jokerModalOpen: true, selectedCards: [action.card] };
@@ -999,16 +1074,19 @@ function gameReducer(st: GameState, action: GameAction): GameState {
       if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: '' };
       const drawnCard = s.drawPile[0];
       s = drawFromPile(s, 1, s.currentPlayerIndex);
-      s = { ...s, hasDrawnCard: true, activeOperation: null, challengeSource: null, equationOpsUsed: [], lastMoveMessage: `📥 ${drawCp.name}: שלף קלף מהחבילה` };
+      const drawMsg = `📥 ${drawCp.name}: שלף קלף מהחבילה`;
+      s = { ...s, hasDrawnCard: true, activeOperation: null, challengeSource: null, equationOpsUsed: [], lastMoveMessage: drawMsg, moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: drawMsg }] };
       return endTurnLogic(s);
     }
     case 'CALL_LOLOS': {
       const cp = st.players[st.currentPlayerIndex];
       if (cp.hand.length > 2) return st;
+      const lolosMsg = `${cp.name} הכריז/ה על סיום!`;
       return {
         ...st,
         players: st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, calledLolos: true } : p),
-        message: `${cp.name} הכריז/ה על סיום!`,
+        message: lolosMsg,
+        moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: lolosMsg }],
       };
     }
     case 'END_TURN': return endTurnLogic(st);
@@ -1049,16 +1127,24 @@ function gameReducer(st: GameState, action: GameAction): GameState {
 
 const GameContext = createContext<{ state: GameState; dispatch: React.Dispatch<GameAction> }>({ state: initialState, dispatch: () => undefined });
 function GameProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(gameReducer, initialState);
+  // #region agent log
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:GameProvider',message:'GameProvider render',data:{hypothesisId:'H4'},timestamp:Date.now()})}).catch(()=>{}); }
+  // #endregion
+  const mp = useMultiplayerOptional();
+  const override = mp?.gameOverride ?? null;
+  const [localState, localDispatch] = useReducer(gameReducer, initialState);
   useEffect(() => {
+    if (override) return;
     AsyncStorage.getItem('lulos_guidance_notifications').then((raw) => {
       if (!raw) return;
       try {
         const arr = JSON.parse(raw);
-        if (Array.isArray(arr) && arr.length > 0) dispatch({ type: 'RESTORE_NOTIFICATIONS', payload: arr });
+        if (Array.isArray(arr) && arr.length > 0) localDispatch({ type: 'RESTORE_NOTIFICATIONS', payload: arr });
       } catch (_) {}
     });
-  }, []);
+  }, [override]);
+  const state = override ? override.state : localState;
+  const dispatch = override ? override.dispatch : localDispatch;
   return <GameContext.Provider value={{ state, dispatch }}>{children}</GameContext.Provider>;
 }
 function useGame() { return useContext(GameContext); }
@@ -1120,7 +1206,7 @@ function CardsCatalogContent({ numberRange, fractions }: { numberRange: 'easy' |
     { title: `🃏 קלפי מספר (${rangeLabel})`, body: `כל קלף עם ערך מספרי מהטווח ${rangeLabel}. משמשים בתרגיל או להגנה מאתגר שבר.`, count: counts.numCount },
     { title: '➕ קלף פעולה (+, −, ×, ÷)', body: 'מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר עם קלף פעולה מקביל.', count: counts.opCount },
     { title: '🃏 ג\'וקר', body: 'בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.', count: counts.jokerCount },
-    { title: '★ קלף פרא', body: 'נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.', count: counts.wildCount },
+    { title: '★ קלף פרא', body: 'נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה (כשראש הערימה קלף מספר — פרא נספר כאותו מספר).', count: counts.wildCount },
   ];
   if (fractions) {
     items.splice(2, 0, { title: '½ ⅓ ¼ ⅕ קלף שבר', body: 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף.\nבחפיסה: ½ — 6 קלפים, ⅓ — 4, ¼ — 3, ⅕ — 2 (סה"כ 15).', count: counts.fracCount });
@@ -1149,7 +1235,7 @@ function RulesContent({ state, onOpenCardsCatalog, numberRange, fractions }: { s
     { text: '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף עונש.', count: counts.fracCount, detail: '½×6, ⅓×4, ¼×3, ⅕×2' },
     { text: '➕ קלף פעולה (+, −, ×, ÷) — מפעיל אתגר פעולה לשחקן הבא. אפשר להעביר את האתגר עם קלף פעולה מקביל.', count: counts.opCount },
     { text: '🃏 ג\'וקר — בוחרים איזו פעולה הוא מייצג. מגן מפני אתגר פעולה; לא מגן מפני אתגר שבר.', count: counts.jokerCount },
-    { text: '★ קלף פרא — נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח זהה לערימה.', count: counts.wildCount },
+    { text: '★ קלף פרא — נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה (כשראש הערימה קלף מספר — פרא נספר כאותו מספר).', count: counts.wildCount },
   ];
   const cardTypesToShow = frac ? cardTypeLines : cardTypeLines.filter((_, i) => i !== 1);
   return (
@@ -1175,10 +1261,13 @@ function RulesContent({ state, onOpenCardsCatalog, numberRange, fractions }: { s
       ))}
       <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginTop: 12, marginBottom: 8, textAlign: 'right' }}>בסיסי</Text>
       {[
-        '🃏 כל שחקן מקבל 7 קלפים. הראשון שמרוקן את היד — מנצח!',
+        '🎲 תור רגיל מתחיל בהטלת קוביות. שלושה יוצאים: קלף זהה, הגנה מאתגר פעולה (כולל ג׳וקר), תגובה להתקפת שבר.',
+        '🃏 כל שחקן מקבל 7 קלפים. כאשר שחקן נותר עם 2 קלפים ביד — הוא מנצח!',
         '🎯 הטל 3 קוביות ובנה תרגיל (אפשר 2 קוביות בלבד).',
         '🃏 בחר קלפים מהיד שסכומם שווה לתוצאת התרגיל.',
-        '🔄 קלף זהה: הנח קלף זהה לערימה כדי לדלג על הקוביות (מוגבל לפעמיים ברצף).',
+        '🔄 קלף זהה: הנח קלף מספר זהה לערימה (כולל קלף פרא — נספר כאותו מספר) כדי לדלג על הקוביות (מוגבל לפעמיים ברצף).',
+        '🏁 עם 2 קלפים ביד — לחץ על "כמעט סיימתי" לפני סיום התור.',
+        '📢 כששחקן נותר עם 3 קלפים — כל השחקנים מקבלים התראה שהוא בדרך לניצחון.',
       ].map((r, i) => (
         <Text key={`b${i}`} style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, marginBottom: 6, textAlign: 'right' }}>{r}</Text>
       ))}
@@ -2001,9 +2090,9 @@ const PIPS_MAP: Record<number, [number, number][]> = {
 };
 
 const DICE_CONFIGS = [
-  { face: 4, driftBase: 5000, startX: SCREEN_W_DICE * 0.2, startY: SCREEN_H_DICE * 0.12 },
-  { face: 2, driftBase: 6500, startX: SCREEN_W_DICE * 0.5, startY: SCREEN_H_DICE * 0.28 },
-  { face: 6, driftBase: 4500, startX: SCREEN_W_DICE * 0.75, startY: SCREEN_H_DICE * 0.18 },
+  { face: 4, driftBase: 15000, startX: SCREEN_W_DICE * 0.2, startY: SCREEN_H_DICE * 0.12 },
+  { face: 2, driftBase: 19500, startX: SCREEN_W_DICE * 0.5, startY: SCREEN_H_DICE * 0.28 },
+  { face: 6, driftBase: 13500, startX: SCREEN_W_DICE * 0.75, startY: SCREEN_H_DICE * 0.18 },
 ];
 
 interface DiceCharacterRef { summon: () => void; scatter: () => void; }
@@ -2026,7 +2115,7 @@ const DiceCharacter = React.forwardRef<DiceCharacterRef, { config: typeof DICE_C
       if (!mounted.current || !drifting.current) return;
       const tx = DICE_PAD + Math.random() * (SCREEN_W_DICE - DICE_PAD * 2);
       const ty = DICE_PAD + Math.random() * (ROAM_MAX_Y - DICE_PAD);
-      const dur = config.driftBase + (Math.random() - 0.5) * 3000;
+      const dur = config.driftBase + (Math.random() - 0.5) * 9000;
       Animated.parallel([
         Animated.timing(driftX, { toValue: tx, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
         Animated.timing(driftY, { toValue: ty, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
@@ -2110,7 +2199,11 @@ const RoamingDice = React.forwardRef<RoamingDiceRef, {}>((_, ref) => {
   const d1 = useRef<DiceCharacterRef>(null);
   const d2 = useRef<DiceCharacterRef>(null);
   React.useImperativeHandle(ref, () => ({
-    summon: () => { d0.current?.summon(); d1.current?.summon(); d2.current?.summon(); },
+    summon: () => {
+      d0.current?.summon();
+      setTimeout(() => d1.current?.summon(), 200);
+      setTimeout(() => d2.current?.summon(), 400);
+    },
     scatter: () => { d0.current?.scatter(); d1.current?.scatter(); d2.current?.scatter(); },
   }));
   return (
@@ -2159,7 +2252,8 @@ function CelebrationFlash({ onDone }: { onDone: () => void }) {
 const EQ_OPS: (string | null)[] = [null, '+', '-', '×', '÷'];
 
 
-function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?: (data: { onConfirm: () => void } | null) => void; onResultChange?: (data: { result: number | null; ok: boolean; hasError: boolean } | null) => void }) {
+export type EquationBuilderRef = { resetAll: () => void } | null;
+const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data: { onConfirm: () => void } | null) => void; onResultChange?: (data: { result: number | null; ok: boolean; hasError: boolean } | null) => void }>(function EquationBuilder({ onConfirmChange, onResultChange }, ref) {
   const { state, dispatch } = useGame();
 
   // Dice placement: index into diceValues (0-2), or null — starts empty, player fills manually
@@ -2276,14 +2370,15 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
     else setOp2(next);
   };
 
-  // Reset all
-  const resetAll = () => {
-    if (isSolved) return;
+  // Reset all — נגיש מבחוץ (כפתור איפוס באיזור תוצאות אפשריות)
+  const resetAll = useCallback(() => {
+    if (state.phase === 'solved') dispatch({ type: 'REVERT_TO_BUILDING' });
     if (state.equationOpCard) dispatch({ type: 'REMOVE_EQ_OP' });
     setDice1(null); setDice2(null); setDice3(null);
     setOp1(null); setOp2(null);
     resultFade.setValue(0);
-  };
+  }, [state.phase, state.equationOpCard, dispatch]);
+  useImperativeHandle(ref, () => ({ resetAll }), [resetAll]);
 
   // ── Computation (L2R) with equation op card override ──
   const d1v = dice1 !== null ? diceValues[dice1] : null;
@@ -2332,19 +2427,24 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
   const filledCount = [dice1, dice2, dice3].filter(d => d !== null).length;
   const ok = finalResult !== null && Number.isFinite(finalResult) && finalResult >= 0 && Number.isInteger(finalResult) && filledCount >= 2 && state.validTargets.some(t => t.result === finalResult);
 
+  // Operations actually used בתרגיל
+  const usedOps: Operation[] = [];
+  if (effectiveOp1) usedOps.push(effectiveOp1 as Operation);
+  if (effectiveOp2) usedOps.push(effectiveOp2 as Operation);
+
+  // האם עמדנו באתגר הפעולה (אם יש)
+  const challengeOk = !state.activeOperation || usedOps.includes(state.activeOperation as Operation);
+
   // Confirm handler
   const confirmRef = useRef<() => void>(() => {});
   const hConfirm = () => {
-    if (!ok || finalResult === null || d1v === null || d2v === null || effectiveOp1 === null) return;
+    if (!ok || !challengeOk || finalResult === null || d1v === null || d2v === null || effectiveOp1 === null) return;
     let display: string;
     if (d3v !== null && effectiveOp2 !== null) {
       display = `(${d1v} ${effectiveOp1} ${d2v}) ${effectiveOp2} ${d3v} = ${finalResult}`;
     } else {
       display = `${d1v} ${effectiveOp1} ${d2v} = ${finalResult}`;
     }
-    const usedOps: Operation[] = [];
-    if (effectiveOp1) usedOps.push(effectiveOp1 as Operation);
-    if (effectiveOp2) usedOps.push(effectiveOp2 as Operation);
     dispatch({ type: 'CONFIRM_EQUATION', result: finalResult, equationDisplay: display, equationOps: usedOps });
   };
   confirmRef.current = hConfirm;
@@ -2353,9 +2453,9 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
   const stableConfirm = useCallback(() => confirmRef.current(), []);
   useEffect(() => {
     if (onConfirmChange) {
-      onConfirmChange(ok && !isSolved ? { onConfirm: stableConfirm } : null);
+      onConfirmChange(ok && !isSolved && challengeOk ? { onConfirm: stableConfirm } : null);
     }
-  }, [ok, isSolved]);
+  }, [ok, isSolved, challengeOk]);
   useEffect(() => () => onConfirmChange?.(null), []);
 
   // Notify parent about result state for rendering outside the table
@@ -2415,10 +2515,10 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
       if (isJoker) {
         return (
           <TouchableOpacity onPress={onPress} activeOpacity={0.7} disabled={isSolved}
-            style={{ width: 52, height: 52, alignItems: 'center', justifyContent: 'center' }}>
+            style={{ width: 58, height: 58, alignItems: 'center', justifyContent: 'center' }}>
             {/* Joker card underneath — 60% visible */}
             <View style={{
-              position: 'absolute', width: 36, height: 44, borderRadius: 7,
+              position: 'absolute', width: 42, height: 50, borderRadius: 9,
               backgroundColor: '#FFF', borderWidth: 2, borderColor: '#A78BFA',
               alignItems: 'center', justifyContent: 'center',
               transform: [{ rotate: '-8deg' }, { translateX: -4 }, { translateY: 2 }],
@@ -2427,7 +2527,7 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
             </View>
             {/* Operation card on top, tilted */}
             <View style={{
-              width: 36, height: 44, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+              width: 42, height: 50, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
               backgroundColor: '#FFF', borderWidth: 2, borderColor: (opColors[handOp] ?? opColors['+']).face,
               transform: [{ rotate: '10deg' }, { translateX: 4 }, { translateY: -2 }],
               ...Platform.select({
@@ -2435,7 +2535,7 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
                 android: { elevation: 4 },
               }),
             }}>
-              <Text style={{ fontSize: 18, fontWeight: '900', color: (opColors[handOp] ?? opColors['+']).face }}>{symDisplay}</Text>
+              <Text style={{ fontSize: 20, fontWeight: '900', color: (opColors[handOp] ?? opColors['+']).face }}>{symDisplay}</Text>
             </View>
             {/* Challenge badge */}
             <View style={{ position: 'absolute', bottom: -5, left: 0, right: 0, alignItems: 'center' }}>
@@ -2451,14 +2551,14 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
       return (
         <TouchableOpacity onPress={onPress} activeOpacity={0.7} disabled={isSolved}
           style={{
-            width: 36, height: 44, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+            width: 42, height: 50, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
             backgroundColor: '#FFF', borderWidth: 2, borderColor: cardBorder,
             ...Platform.select({
               ios: { shadowColor: cardBg, shadowOpacity: 0.5, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
               android: { elevation: 4 },
             }),
           }}>
-          <Text style={{ fontSize: 18, fontWeight: '900', color: cardBg }}>{symDisplay}</Text>
+          <Text style={{ fontSize: 20, fontWeight: '900', color: cardBg }}>{symDisplay}</Text>
           <View style={{
             position: 'absolute', bottom: -5, left: 0, right: 0, alignItems: 'center',
           }}>
@@ -2482,15 +2582,15 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
           eqS.opBtn,
           displayOp ? (isDivision ? { backgroundColor: divCl.face, borderWidth: 0, ...Platform.select({ ios: { shadowColor: divCl.dark, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.6, shadowRadius: 4 }, android: { elevation: 4 } }) } : eqS.opBtnFilled) : eqS.opBtnEmpty,
           !enabled && { opacity: 0.3 },
-          isDivision && { width: 32, height: 32 },
+          isDivision && { width: 40, height: 40 },
           isWaitingPlacement && !isHandPlaced && { borderColor: '#A78BFA', borderWidth: 2, borderStyle: 'dashed' as any },
         ]}
         disabled={isSolved || !enabled}>
         {isDivision ? (
-          <View style={{ alignItems: 'center', justifyContent: 'center', width: 32, height: 32 }}>
-            <View style={{ position: 'absolute', top: 6, left: 14, width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFF' }} />
-            <View style={{ width: 16, height: 2.5, borderRadius: 2, backgroundColor: '#FFF' }} />
-            <View style={{ position: 'absolute', bottom: 6, left: 14, width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFF' }} />
+          <View style={{ alignItems: 'center', justifyContent: 'center', width: 40, height: 40 }}>
+            <View style={{ position: 'absolute', top: 8, left: 18, width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#FFF' }} />
+            <View style={{ width: 20, height: 3, borderRadius: 2, backgroundColor: '#FFF' }} />
+            <View style={{ position: 'absolute', bottom: 8, left: 18, width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#FFF' }} />
           </View>
         ) : (
           <Text style={[displayOp ? eqS.opBtnFilledTxt : eqS.opBtnEmptyTxt]}>
@@ -2529,7 +2629,7 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
                   style={[eqS.diceBtn, isFace && eqS.diceBtnFace, isUsed && eqS.diceBtnUsed]}
                   disabled={isFace}>
                   {isFace ? (
-                    <GoldDieFace value={dv} size={40} />
+                    <GoldDieFace value={dv} size={52} />
                   ) : (
                     <Text style={[eqS.diceBtnT, isUsed && eqS.diceBtnUsedT]}>{dv}</Text>
                   )}
@@ -2540,48 +2640,38 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
         </View>
       )}
 
-      {/* ═══ Single equation row: ( d1 OP1 d2 ) OP2 d3 = result ═══ */}
-      <Animated.View style={{ flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 4, width: '100%', justifyContent: 'center', opacity: eqRowAnim, transform: [{ translateY: eqRowAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) }] }}>
-        {/* Reset button */}
-        {!isSolved && (
-          <TouchableOpacity onPress={resetAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={{ color: '#6B7280', fontSize: 16 }}>🔄</Text>
-          </TouchableOpacity>
-        )}
-        {/* Equation */}
-        <View style={eqS.eqRow}>
-          {/* Opening bracket */}
+      {/* ═══ Single equation row: ( d1 OP1 d2 ) OP2 d3 = result — רק המשוואה, כפתור איפוס הועבר לאיזור תוצאות אפשריות ═══ */}
+      <Animated.View style={{ flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', justifyContent: 'center', opacity: eqRowAnim, transform: [{ translateY: eqRowAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) }], maxWidth: '100%', flexShrink: 1 }}>
+        <View style={[eqS.eqRow, { maxWidth: '100%' }]}>
           <Text style={eqS.bracket}>(</Text>
-
           {renderDiceSlot(dice1, 1)}
           {renderOpBtn(1, op1, dice1 !== null)}
           {renderDiceSlot(dice2, 2)}
-
-          {/* Closing bracket */}
           <Text style={eqS.bracket}>)</Text>
-
-          {/* OP2 + dice3 (3-dice mode only; faded when sub-expression not complete) */}
           {!twoDiceMode && (
-            <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 3 }, !show3rd && { opacity: 0.25 }]}>
+            <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, !show3rd && { opacity: 0.25 }]}>
               {renderOpBtn(2, op2, show3rd)}
               {renderDiceSlot(dice3, 3)}
             </View>
           )}
         </View>
-        {/* Result on the right */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Text style={{ fontSize: 18, fontWeight: '800', color: '#FFD700' }}>=</Text>
-          <View style={{ minWidth: 32, height: 34, borderRadius: 8, borderWidth: 1, borderColor: hasError ? 'rgba(234,67,53,0.3)' : ok ? 'rgba(74,222,128,0.3)' : 'rgba(255,215,0,0.2)', backgroundColor: hasError ? 'rgba(234,67,53,0.1)' : ok ? 'rgba(74,222,128,0.1)' : 'rgba(255,215,0,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 }}>
+      </Animated.View>
+
+      {/* תוצאת התרגיל — מעט למעלה, רקע צבעוני (לא שקוף) */}
+      <View style={{ alignItems: 'center', marginTop: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={{ fontSize: 22, fontWeight: '800', color: '#FFD700' }}>=</Text>
+          <View style={{ minWidth: 56, height: 48, borderRadius: 12, borderWidth: 2, borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : '#A16207', backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : '#854D0E', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}>
             {hasError ? (
-              <Text style={{ fontSize: 14, fontWeight: '900', color: '#EA4335' }}>✕</Text>
+              <Text style={{ fontSize: 20, fontWeight: '900', color: '#FFF' }}>✕</Text>
             ) : finalResult !== null ? (
-              <Text style={{ fontSize: 18, fontWeight: '800', color: ok ? '#4ADE80' : '#FFD700' }}>{finalResult}</Text>
+              <Text style={{ fontSize: 26, fontWeight: '900', color: ok ? '#FFF' : '#FFD700' }}>{finalResult}</Text>
             ) : (
-              <Text style={{ fontSize: 18, fontWeight: '800', color: 'rgba(255,215,0,0.25)' }}>?</Text>
+              <Text style={{ fontSize: 24, fontWeight: '800', color: 'rgba(255,255,255,0.4)' }}>?</Text>
             )}
           </View>
         </View>
-      </Animated.View>
+      </View>
 
 
       {/* 2-dice hint (3-dice mode only) */}
@@ -2590,49 +2680,39 @@ function EquationBuilder({ onConfirmChange, onResultChange }: { onConfirmChange?
           אפשר לסיים עם 2 קוביות בלבד
         </Text>
       )}
-
-      {/* Solved phase instruction */}
-      {isSolved && state.equationResult !== null && !state.hasPlayedCards && (
-        <View style={{ alignItems: 'center', gap: 6 }}>
-          <Text style={{ color: '#4ADE80', fontSize: 15, fontWeight: '800', textAlign: 'center' }}>
-            ✅ בחר קלפים שסכומם {state.equationResult}
-          </Text>
-        </View>
-      )}
     </View>
   );
-}
+});
 const eqS = StyleSheet.create({
-  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 16, paddingVertical: 8, paddingHorizontal: 10, alignItems: 'center', alignSelf: 'center' as any, width: '100%', gap: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', },
-  title: { color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  diceRow: { flexDirection: 'row', gap: 8, justifyContent: 'center', direction: 'ltr' as any },
-  diceBtn: { width: 44, height: 44, borderRadius: 10, backgroundColor: 'rgba(255,200,60,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,200,60,0.2)', overflow: 'hidden' },
+  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'hidden' as const },
+  title: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  diceRow: { flexDirection: 'row', gap: 12, justifyContent: 'center', direction: 'ltr' as any },
+  diceBtn: { width: 56, height: 56, borderRadius: 14, backgroundColor: 'rgba(255,200,60,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,200,60,0.2)', overflow: 'hidden' },
   diceBtnFace: { backgroundColor: 'transparent', borderColor: 'rgba(232,184,48,0.4)', borderWidth: 2, padding: 0 },
   diceBtnUsed: { opacity: 0.25 },
-  diceBtnT: { fontSize: 20, fontWeight: '800', color: '#e8d84a' },
+  diceBtnT: { fontSize: 26, fontWeight: '800', color: '#e8d84a' },
   diceBtnUsedT: { color: 'rgba(255,200,60,0.3)' },
-  // Single equation row with container
-  eqRow: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 3, justifyContent: 'center', alignSelf: 'center' as any, paddingVertical: 6, paddingHorizontal: 8, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
-  bracket: { fontSize: 28, fontWeight: '300', color: 'rgba(255,200,60,0.35)', marginHorizontal: 0 },
-  // Dice slots (compact 38×38)
-  slot: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  // Equation row — סלוטים ופעולות מוגדלים לנוחות לחיצה
+  eqRow: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 6, justifyContent: 'center', alignSelf: 'center' as any, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  bracket: { fontSize: 36, fontWeight: '700', color: '#FACC15', marginHorizontal: 0, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  // סלוטים למספרים — 52×52 לנוחות
+  slot: { width: 52, height: 52, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   slotFilled: { backgroundColor: '#FFF', borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 4 } }) },
   slotEmpty: { borderWidth: 2, borderStyle: 'dashed' as any, borderColor: 'rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.02)' },
-  slotVal: { fontSize: 19, fontWeight: '800', color: '#1a1a2e' },
-  slotPlaceholder: { fontSize: 16, fontWeight: '700', color: 'rgba(255,255,255,0.15)' },
-  // Operator button (compact 28×28, tap-to-cycle)
-  opBtn: { width: 28, height: 28, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  slotVal: { fontSize: 24, fontWeight: '800', color: '#1a1a2e' },
+  slotPlaceholder: { fontSize: 20, fontWeight: '700', color: 'rgba(255,255,255,0.15)' },
+  // כפתור פעולה — 38×38 לנוחות
+  opBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   opBtnEmpty: { borderWidth: 2, borderStyle: 'dashed' as any, borderColor: '#F9A825', backgroundColor: 'transparent' },
   opBtnFilled: { backgroundColor: '#F9A825', ...Platform.select({ ios: { shadowColor: 'rgba(249,168,37,0.3)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 6 }, android: { elevation: 4 } }) },
-  opBtnEmptyTxt: { fontSize: 12, fontWeight: '800', color: '#F9A825' },
-  opBtnFilledTxt: { fontSize: 15, fontWeight: '800', color: '#1a1510' },
-  // = sign and result box
-  eqEquals: { fontSize: 22, fontWeight: '800', color: '#FFD700', marginHorizontal: 2 },
-  resultBox: { minWidth: 40, height: 44, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,215,0,0.15)', backgroundColor: 'rgba(255,215,0,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
-  resultVal: { fontSize: 24, fontWeight: '800', color: '#FFD700' },
-  resultPlaceholder: { fontSize: 24, fontWeight: '800', color: 'rgba(255,215,0,0.25)' },
-  resultError: { fontSize: 18, fontWeight: '900', color: '#EA4335' },
-  hint: { color: '#6B7280', fontSize: 11, textAlign: 'center' },
+  opBtnEmptyTxt: { fontSize: 16, fontWeight: '800', color: '#F9A825' },
+  opBtnFilledTxt: { fontSize: 20, fontWeight: '800', color: '#1a1510' },
+  eqEquals: { fontSize: 24, fontWeight: '800', color: '#FFD700', marginHorizontal: 2 },
+  resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,215,0,0.15)', backgroundColor: 'rgba(255,215,0,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  resultVal: { fontSize: 26, fontWeight: '800', color: '#FFD700' },
+  resultPlaceholder: { fontSize: 26, fontWeight: '800', color: 'rgba(255,215,0,0.25)' },
+  resultError: { fontSize: 20, fontWeight: '900', color: '#EA4335' },
+  hint: { color: '#6B7280', fontSize: 12, textAlign: 'center' },
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -2670,33 +2750,8 @@ function StagingZone() {
 
   const clearAll = () => { staged.forEach(c => dispatch({type:'UNSTAGE_CARD',card:c})); };
 
-  return (
-    <View style={szS.wrap}>
-      {hasCards && (
-        <View style={{alignItems:'center',gap:6}}>
-          <View style={{flexDirection:'row',alignItems:'center',gap:8,direction:'ltr' as any, flexWrap: 'wrap', justifyContent: 'center'}}>
-            <Text style={{color:'#9CA3AF',fontSize:13,fontWeight:'600'}}>נבחר:</Text>
-            {numberAndWild.map((c, i) => (
-              <React.Fragment key={c.id}>
-                {i > 0 && <Text style={{color:'#FDD835',fontSize:16,fontWeight:'900'}}>+</Text>}
-                <Text style={{color: c.type === 'wild' ? '#A78BFA' : '#FFF',fontSize:16,fontWeight:'900'}}>{c.type === 'wild' ? (wildVal ?? '?') : c.value}</Text>
-              </React.Fragment>
-            ))}
-            <Text style={{color:'#FFD700',fontSize:16,fontWeight:'900'}}>=</Text>
-            <Text style={{color: matches ? '#4ADE80' : '#FCA5A5',fontSize:18,fontWeight:'900'}}>{target}</Text>
-            {matches && <Text style={{color:'#4ADE80',fontSize:16}}>✓</Text>}
-            <TouchableOpacity onPress={clearAll} hitSlop={{top:8,bottom:8,left:8,right:8}} style={szS.undoBtn}>
-              <Text style={{color:'#FCA5A5',fontSize:18,fontWeight:'900'}}>↩</Text>
-            </TouchableOpacity>
-          </View>
-          {!matches && hasCards && (
-            <Text style={{color:'#FCA5A5',fontSize:12,textAlign:'center'}}>השילוב לא מגיע ל־{target}. נסה לשנות.</Text>
-          )}
-        </View>
-      )}
-      {!hasCards && hintSeen === false && <Text style={szS.hint}>לחץ על קלפי מספר או פרא מהיד.</Text>}
-    </View>
-  );
+  /* שורת "נבחר" מוצגת ב־bottom: 500 (מעל טווח 365–465); הודעות בהאזור 365–465 בוטלו */
+  return <View style={szS.wrap} />;
 }
 const szS = StyleSheet.create({
   wrap:{backgroundColor:'transparent',borderRadius:0,padding:12,alignItems:'center',gap:8,borderWidth:0,borderColor:'transparent'},
@@ -2717,11 +2772,6 @@ function ActionBar() {
     <View style={{width:'100%',gap:10}}>
       {(pr||bl||so)&&hp && (
         <View style={{alignItems:'center',gap:6}}>
-          {!!state.lastMoveMessage && (
-            <View style={{backgroundColor:'rgba(74,222,128,0.1)',borderRadius:10,borderWidth:1,borderColor:'rgba(74,222,128,0.3)',paddingHorizontal:14,paddingVertical:6}}>
-              <Text style={{color:'#4ADE80',fontSize:13,fontWeight:'700',textAlign:'center'}}>{state.lastMoveMessage}</Text>
-            </View>
-          )}
           <Text style={{color:'#9CA3AF',fontSize:12,fontWeight:'600'}}>{cp.hand.length} קלפים ביד</Text>
           <LulosButton text="סיים תור" color="green" width={160} height={52} onPress={()=>dispatch({type:'END_TURN'})} />
         </View>
@@ -3083,11 +3133,52 @@ function PlayerHand() {
   const hasFracDefense = state.pendingFractionTarget !== null;
   const sorted = [...cp.hand].sort((a,b) => { const o={number:0,fraction:1,operation:2,joker:3} as const; if(o[a.type]!==o[b.type]) return o[a.type]-o[b.type]; if(a.type==='number'&&b.type==='number') return (a.value??0)-(b.value??0); return 0; });
   const [centerCard, setCenterCard] = useState<Card | null>(null);
-  // Fraction hints handled by bottom sheets in GameScreen
+  const cardSoundRef = useRef<Audio.Sound | null>(null);
+  const cardSoundLoadingRef = useRef(false);
+  // צליל בחירת קלף — קובץ: card/assets/card_select.mov (העתק מ־Downloads: "קלף אחד מקוצר.MOV" → card_select.mov)
+  useEffect(() => {
+    (async () => {
+      if (cardSoundRef.current) return;
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_select.mov'));
+        cardSoundRef.current = sound;
+        if (__DEV__) console.log('[card_select] נטען');
+      } catch (e) {
+        if (__DEV__) console.warn('[card_select] טעינה נכשלה. העתק קלף אחד מקוצר.MOV ל־card/assets/card_select.mov', e);
+      }
+    })();
+    return () => {
+      const s = cardSoundRef.current;
+      if (s) s.unloadAsync().catch(() => {});
+      cardSoundRef.current = null;
+    };
+  }, []);
+  const playCardSelectSound = useCallback(() => {
+    const sound = cardSoundRef.current;
+    if (sound) {
+      sound.setPositionAsync(0).then(() => sound.playAsync()).catch(() => {});
+      return;
+    }
+    if (cardSoundLoadingRef.current) return;
+    cardSoundLoadingRef.current = true;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_select.mov'));
+        cardSoundRef.current = sound;
+        await sound.playAsync();
+      } catch (e) {
+        if (__DEV__) console.warn('[card_select] טעינה בלחיצה נכשלה.', e);
+      }
+      cardSoundLoadingRef.current = false;
+    })();
+  }, []);
 
   const tap = (card:Card) => {
     console.log('CARD TAP', card.id, card.type, card.type==='operation'?card.operation:'', 'phase=', state.phase, 'hp=', state.hasPlayedCards, 'activeOp=', state.activeOperation);
     if (state.hasPlayedCards) { console.log('BLOCKED: hasPlayedCards'); return; }
+    playCardSelectSound();
 
     // ── Fraction defense: only number (divisible) or fraction; ג'וקר לא מגן מפני שבר ──
     if (hasFracDefense) {
@@ -3125,8 +3216,8 @@ function PlayerHand() {
       return;
     }
     if (so) {
-      // Solved phase: number + operation → stage/unstage, fraction, joker
-      if(card.type==='number' || card.type==='operation') {
+      // Solved phase: number + operation + wild → stage/unstage, fraction, joker
+      if(card.type==='number' || card.type==='operation' || card.type==='wild') {
         const isStaged = state.stagedCards.some(c => c.id === card.id);
         if (isStaged) dispatch({type:'UNSTAGE_CARD',card});
         else dispatch({type:'STAGE_CARD',card});
@@ -3162,16 +3253,61 @@ function BottomControlsBar() {
   const showSolved = so && !state.hasPlayedCards;
   const hasStaged = showSolved && state.stagedCards.length > 0;
 
+  const placeMultipleSoundRef = useRef<Audio.Sound | null>(null);
+  const placeMultipleLoadingRef = useRef(false);
+  useEffect(() => {
+    (async () => {
+      if (placeMultipleSoundRef.current) return;
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_place_multiple.mp3'));
+        placeMultipleSoundRef.current = sound;
+      } catch (e) {
+        if (__DEV__) console.warn('[card_place_multiple] טעינה נכשלה. קובץ card_place_multiple.mp3 ב־card/assets/', e);
+      }
+    })();
+    return () => {
+      const s = placeMultipleSoundRef.current;
+      if (s) s.unloadAsync().catch(() => {});
+      placeMultipleSoundRef.current = null;
+    };
+  }, []);
+  const playPlaceMultipleSound = useCallback(() => {
+    const sound = placeMultipleSoundRef.current;
+    if (sound) {
+      sound.setPositionAsync(0).then(() => sound.playAsync()).catch(() => {});
+      return;
+    }
+    if (placeMultipleLoadingRef.current) return;
+    placeMultipleLoadingRef.current = true;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_place_multiple.mp3'));
+        placeMultipleSoundRef.current = sound;
+        await sound.playAsync();
+      } catch (e) {
+        if (__DEV__) console.warn('[card_place_multiple] טעינה בלחיצה נכשלה.', e);
+      }
+      placeMultipleLoadingRef.current = false;
+    })();
+  }, []);
+
   const showBar = showSolved;
 
+  const onPlaceCards = useCallback(() => {
+    if (state.stagedCards.length >= 2) playPlaceMultipleSound();
+    dispatch({ type: 'CONFIRM_STAGED' });
+  }, [state.stagedCards.length, dispatch, playPlaceMultipleSound]);
+
   return (
-    <View style={{minHeight:40,alignItems:'center',justifyContent:'center',paddingHorizontal:10,backgroundColor: showBar ? 'rgba(15,23,42,0.95)' : 'transparent', borderTopWidth: showBar ? 1 : 0, borderTopColor:'rgba(255,255,255,0.08)'}}>
+    <View style={{minHeight:40,alignItems:'center',justifyContent:'center',paddingHorizontal:0}}>
       {showSolved ? (
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:12,width:'100%'}}>
           {hasStaged && (
-            <LulosButton text="הנח קלפים" color="green" width={140} height={40} fontSize={14} onPress={()=>dispatch({type:'CONFIRM_STAGED'})} style={{flex:1.2}} />
+            <LulosButton text="הנח קלפים" color="green" width={140} height={40} fontSize={14} onPress={onPlaceCards} style={{flex:1.2}} />
           )}
-          <LulosButton text="חזרה לתרגיל" color="yellow" width={140} height={40} fontSize={13} onPress={()=>dispatch({type:'REVERT_TO_BUILDING'})} style={{flex:1}} />
+          <LulosButton text="חזרה לתרגיל" color="yellow" textColor="#FFFFFF" width={160} height={44} fontSize={17} onPress={()=>dispatch({type:'REVERT_TO_BUILDING'})} style={{flex:1}} />
         </View>
       ) : null}
     </View>
@@ -3334,9 +3470,19 @@ function ConditionalWalkingDice() {
   return <WalkingDice />;
 }
 
-function StartScreen() {
+// צלילי מספר שחקנים במסך הכניסה (2–6) — קבצים: players_2.mp3 … players_6.mp3
+const PLAYER_COUNT_SOUNDS: Record<number, number> = {
+  2: require('./assets/players_2.mp3'),
+  3: require('./assets/players_3.mp3'),
+  4: require('./assets/players_4.mp3'),
+  5: require('./assets/players_5.mp3'),
+  6: require('./assets/players_6.mp3'),
+};
+
+function StartScreen({ onBackToChoice }: { onBackToChoice?: () => void }) {
   const { dispatch } = useGame();
   const safe = useGameSafeArea();
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d104b3'},body:JSON.stringify({sessionId:'d104b3',location:'index.tsx:StartScreen',message:'StartScreen mount',data:{hypothesisId:'H5',runId:'init'},timestamp:Date.now()})}).catch(()=>{}); }
   const [playerCount, setPlayerCount] = useState(2);
   const [numberRange, setNumberRange] = useState<'easy' | 'full'>('full');
   const [fractions, setFractions] = useState(true);
@@ -3345,8 +3491,24 @@ function StartScreen() {
   const [guidanceOn, setGuidanceOn] = useState(true); // הדרכה והסברים — משתמש חוזר יכול לכבות
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
+  const [futureLabOpen, setFutureLabOpen] = useState(false);
+  const [labUnlocked, setLabUnlocked] = useState(false);
+  const [labPasswordInput, setLabPasswordInput] = useState('');
   const [diceMode, setDiceMode] = useState<'2' | '3'>('3');
   const bounceAnim = useRef(new Animated.Value(0)).current;
+
+  const playPlayerCountSound = useCallback((count: number) => {
+    const src = PLAYER_COUNT_SOUNDS[count];
+    if (!src) return;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(src);
+        await sound.playAsync();
+        sound.setOnPlaybackStatusUpdate((s: any) => { if (s?.didJustFinish || s?.didJustFinishNotify) sound.unloadAsync().catch(() => {}); });
+      } catch (_) {}
+    })();
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem('lulos_guidance_enabled').then(v => setGuidanceOn(v !== 'false'));
@@ -3380,10 +3542,169 @@ function StartScreen() {
   // תמונת ג'וקר — גודל קבוע קטן יותר כדי שהתמונה תופיע במלואה (פנים המשחק, המותג)
   const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220);
 
+  // שער סיסמה למעבדת רעיונות — סיסמה: 1. תוכן בראש המסך כדי שהמקלדת לא תכסה את כפתור הכניסה.
+  if (futureLabOpen && !labUnlocked) {
+    const submitLab = () => {
+      Keyboard.dismiss();
+      if (labPasswordInput === '1') {
+        setLabUnlocked(true);
+        setLabPasswordInput('');
+      } else {
+        setLabPasswordInput('');
+        Alert.alert('סיסמה שגויה', 'נסה שוב.');
+      }
+    };
+    return (
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#0a1628' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={safe.insets.top || 0}>
+        <View style={{ paddingTop: safe.insets.top || 12, paddingHorizontal: 16, paddingBottom: 16 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12 }}>
+            <LulosButton text="← ביטול" color="red" width={90} height={38} fontSize={13} onPress={() => { Keyboard.dismiss(); setFutureLabOpen(false); setLabPasswordInput(''); }} />
+            <Text style={{ color: '#E2E8F0', fontSize: 18, fontWeight: '800' }}>כניסה למעבדת רעיונות</Text>
+            <View style={{ width: 90 }} />
+          </View>
+        </View>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 32, alignItems: 'center' }}>
+            <Text style={{ color: '#93C5FD', fontSize: 15, marginBottom: 16, textAlign: 'center' }}>הזן סיסמה כדי להיכנס</Text>
+            <TextInput
+              value={labPasswordInput}
+              onChangeText={setLabPasswordInput}
+              placeholder="סיסמה"
+              placeholderTextColor="#6B7280"
+              keyboardType="number-pad"
+              maxLength={6}
+              onSubmitEditing={submitLab}
+              returnKeyType="done"
+              blurOnSubmit
+              style={{ backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 14, fontSize: 22, color: '#E2E8F0', minWidth: 140, textAlign: 'center' }}
+            />
+            <TouchableOpacity onPress={Keyboard.dismiss} style={{ marginTop: 10 }}>
+              <Text style={{ color: '#6B7280', fontSize: 13 }}>הסתר מקלדת</Text>
+            </TouchableOpacity>
+            <LulosButton text="כניסה" color="blue" width={120} height={44} fontSize={16} onPress={submitLab} style={{ marginTop: 20 }} />
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  if (futureLabOpen && labUnlocked) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0a1628', paddingTop: safe.insets.top || 12 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}>
+          <LulosButton text="← חזרה" color="red" width={100} height={38} fontSize={13} onPress={() => { setFutureLabOpen(false); setLabUnlocked(false); }} />
+          <Text style={{ color: '#E2E8F0', fontSize: 18, fontWeight: '800' }}>מעבדת רעיונות</Text>
+          <View style={{ width: 100 }} />
+        </View>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <Text style={{ color: '#93C5FD', fontSize: 14, marginBottom: 16, textAlign: 'right' }}>אופציות עתידיות — פרוטוטיפים והטבות. כל פריט ייפתח במסך/דמו נפרד בהמשך.</Text>
+          {[
+            {
+              title: '🛡️ קלף שמירה (מגן)',
+              desc: 'פרוטוטיפ — קלף מגן עם חוקים מלאים, גרסת ניסוי. כל הלוגיקה במודול נפרד.',
+              details: [
+                'אין שינוי ב-reducer הראשי או ב-GameScreen; אינטגרציה לליבת המשחק רק אחרי אישור.',
+                'חוקים: מתי מונח הקלף (למשל בתחילת תור או כתגובה לאירוע), מפני מה הוא מגן — הגנה מפני גניבת קלף, מפני אילוץ לשלוף, או מפני השפעת קלף של יריב.',
+                'נתיב קוד מוצע: card/src/future/ או card/screens/FutureLab/ — רכיבים ולוגיקה מקומית (state נפרד).',
+              ],
+            },
+            {
+              title: '📊 הסתברות וסטטיסטיקות',
+              desc: 'מסך "סטטיסטיקות והסתברות" — הסבר המודל, תוצאות סימולציה (מונטה קרלו), גרפים והתפלגות.',
+              details: [
+                'חפיסה: 0–25 ב־4 עותקים (104), שברים 1/2–1/5 (18), פעולות (16), ג\'וקרים (4) — סה"כ 142 קלפים. 10 קלפים לשחקן; ניצחון = נשארים עם 2 קלפים ביד.',
+                'למה אין נוסחה סגורה: מרחב מצבים ענק (חלוקות קלפים, קוביות, בחירות); התנהגות אסטרטגית. חישוב מדויק לא מעשי — רק סימולציה.',
+                'רובוט: משוואה תקפה מהקוביות והיד → משחק; קלף זהה לערימה → הנחה; אחרת שולף. לולוס ב־2 קלפים. ניצחון כשנשארים עם 2 קלפים ביד.',
+                'פלט: P(סיום) = שיעור ריצות שניצחו; ממוצע וחציון תורות; אופציונלי — התפלגות אורך משחק. סקריפטים: card/scripts/ (למשל simulate-lolos.js, simulate-variants.js).',
+                'תוצאות מדיווחים: 3 שחקנים 7 קלפים — P(סיום) כ־13–15% (בלי/עם פרא), ממוצע תורות כ־27–32. וריאנטים: בסיס 35%, פרא 43%, פחות שברים 59% — ראה simulation-report-3players.md, simulation-variants-report.md.',
+                'אומדן גס: במשחק "טיפוסי" (2 שחקנים, מכסה סביר) P(סיום)≈1; ממוצע תורות טיפוסי 15–40.',
+              ],
+            },
+            {
+              title: '🎁 הטבות',
+              desc: 'חיזוק חינוכי, מדידה והתאמה למערכת — כל רעיון במסך/דמו ייעודי במעבדת הרעיונות.',
+              details: [
+                'מפת תכנית לימודים: טבלה/מסך — אילו נושאים ממומשים (חשבון, שברים, סדר פעולות, התאמה למספרים) + ציון כיתה (א\'–ו\' / ז\'–ט\'). מאפשר להציג "המשחק מכסה נושא X מתכנית הליבה".',
+                'דשבורד למורה (דמו): סיכום כיתתי — משחקים שהושלמו, ממוצע תורות למשחק, שיעור הצלחה בבניית משוואות. נתונים מקומיים או מוכנים לרישום לשרת. רושם של "כלי ניהול למידה".',
+                'מצב כיתה / רב־משתתפים: דמו "חדר כיתה" — מורה מפעיל משחק, תלמידים מצטרפים (רשת או סימולציה). מתאים להצגת "משחק חברתי בכיתה".',
+                'דיפרנציאציה: פרופיל קל/בינוני/מאתגר — טווח מספרים (למשל 0–12 vs 0–25), עם/בלי שברים, 2 או 3 קוביות. הסבר פדגוגי: "התאמה לרמות שונות בכיתה".',
+                'נגישות: רשימת תכונות — תמיכה ב-RTL, פונט קריא, הגדלת קלפים, הסברים קוליים (טקסט לדיבור). מסמך או מסך "נגישות" במעבדה.',
+                'מחקר והסתברות: מסך במעבדה שמציג חישובי הסתברות, גרפים (אורך משחק, התפלגות), טקסט הסבר — רושם של "מתמטיקה ויישום".',
+              ],
+            },
+            {
+              title: '🎲 מצב מאתגר',
+              desc: 'פרוטוטיפ — 4 קוביות ו־3 פעולות חשבון במשוואה. גרסת ניסוי במודול נפרד.',
+              details: [
+                'אין שינוי בליבת המשחק הקיים עד לאישור. מתאים לשכבות גבוהות או קבוצות שמחפשות אתגר.',
+                'משוואה עם שלוש פעולות (למשל חיבור, חיסור, כפל) מגדילה את מרחב האפשרויות ואת רמת הקושי.',
+              ],
+            },
+            {
+              title: '🃏 רעיונות קלפים — פירוט',
+              desc: 'קלפים נוספים לניסוי; קלף פרא כבר מיושם במשחק. להלן ארבעה רעיונות מפורטים; כל אחד במסך/מודול משלו, אינטגרציה לליבה רק אחרי אישור. ראה גם קלף שמירה (מגן) למעלה.',
+              details: [],
+            },
+            {
+              title: '⚡ קלף חזקה',
+              desc: 'משפיע על ערך המשוואה או על מספר הקלפים שמונחים בתור.',
+              details: [
+                '"כפול תוצאה" — מניחים קלפים לפי 2×תוצאת המשוואה (למשל תוצאה 5 מאפשרת להניח קלפים שערכם 10).',
+                '"משולש תוצאה" (3×) — אותו עיקרון עם הכפלה פי 3.',
+                'אפשרות אחרת: קלף שמאפשר להניח שני קלפים במכה אחת אם שניהם מתאימים לתוצאה.',
+                'משפיע על קצב ריקון היד ואסטרטגיה — מתאים למי שמגיע ללולוס ורוצה לזרז סיום.',
+              ],
+            },
+            {
+              title: '0️⃣ קלף אפס',
+              desc: 'מאפס את תוצאת המשוואה או משנה את המספר המבוקש ל־0.',
+              details: [
+                'גרסה א: מאפס את תוצאת המשוואה ל־0 — השחקן (המשחק או הבא בתור) צריך להניח קלף עם ערך 0 או ג\'וקר.',
+                'גרסה ב: קלף שמשנה את "המספר המבוקש" ל־0 בתור — מכניס אלמנט של שליטה וחסימה.',
+                'מאזן: לא להשתמש יתר על המידה; אפשר להגביל למשל קלף אפס אחד למשחק או לתור.',
+              ],
+            },
+            {
+              title: '🎲 שינוי קובייה',
+              desc: 'החלפת ערך קובייה אחת לפני או אחרי בניית המשוואה.',
+              details: [
+                'מאפשר "תיקון" תוצאה לא נוחה — למשל להפוך קובייה מ־1 ל־6 או ל־3 לפי הצורך.',
+                'מתי משחקים: בתחילת תור (לפני זריקת קוביות או אחריהן) או כתגובה — לפי עיצוב החוקים.',
+                'מגבלה אפשרית: פעם אחת למשחק, או פעם אחת בתור, כדי שלא יהיה דומיננטי מדי.',
+              ],
+            },
+            {
+              title: '🤲 גניבה',
+              desc: 'לקיחת קלף מיד יריב — מגדיל אינטראקציה ואיום בין שחקנים.',
+              details: [
+                'מנגנון: קלף אחד מיד יריב — נבחר אקראית, או השחקן בוחר קלף גלוי (לפי חוקים).',
+                'משפיע על אסטרטגיית "לולוס" — סיכון שגונבים קלף טוב לפני סיום; או גניבה מקלפים חלשים.',
+                'אפשר לשלב עם קלף מגן (שמירה) — הגנה מפני גניבה באותו תור (ראה מסמך shield-card-design).',
+              ],
+            },
+          ].map((item, i) => (
+            <TouchableOpacity key={i} activeOpacity={0.8} style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 12, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(147,197,253,0.3)' }}>
+              <Text style={{ color: '#E2E8F0', fontSize: 16, fontWeight: '800', marginBottom: 4, textAlign: 'right' }}>{item.title}</Text>
+              <Text style={{ color: '#9CA3AF', fontSize: 13, lineHeight: 20, textAlign: 'right', marginBottom: item.details?.length ? 8 : 0 }}>{item.desc}</Text>
+              {item.details?.map((d, j) => (
+                <Text key={j} style={{ color: '#6B7280', fontSize: 12, lineHeight: 18, textAlign: 'right', marginBottom: 2, paddingRight: 8 }}>• {d}</Text>
+              ))}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
-      {/* כפתור חוקים — בצד למעלה */}
-      <View style={{ position: 'absolute', top: safe.insets.top || 12, right: 16, zIndex: 20 }}>
+      {/* כפתור חזרה + חוקים + מעבדת רעיונות — בצד למעלה */}
+      <View style={{ position: 'absolute', top: safe.insets.top || 12, left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', zIndex: 20 }}>
+        {onBackToChoice ? (
+          <LulosButton text="← בחירת אופן משחק" color="blue" width={140} height={38} fontSize={11} onPress={onBackToChoice} />
+        ) : (
+          <LulosButton text="מעבדת רעיונות" color="blue" width={120} height={38} fontSize={12} onPress={() => setFutureLabOpen(true)} />
+        )}
         <LulosButton text="חוקים" color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
       </View>
       <AppModal visible={rulesOpen} onClose={() => setRulesOpen(false)} title="איך משחקים — מסך כללים">
@@ -3415,12 +3736,16 @@ function StartScreen() {
       <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '50%', paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: '#0a1628', zIndex: 10 }}>
         <ScrollView style={{ maxHeight: '100%' }} contentContainerStyle={{ paddingTop: 8 }} showsVerticalScrollIndicator={true} bounces={false}>
         <View style={hsS.settings}>
-          {/* מספר שחקנים — בראש הרשימה */}
+          {/* מספר שחקנים — צליל לכל שינוי (2–6) */}
           <View style={hsS.row}>
             <Text style={hsS.rowLabel}>מספר שחקנים</Text>
             <View style={hsS.stepper}>
               <TouchableOpacity
-                onPress={() => setPlayerCount(c => Math.max(2, c - 1))}
+                onPress={() => {
+                  const next = Math.max(2, playerCount - 1);
+                  playPlayerCountSound(next);
+                  setPlayerCount(next);
+                }}
                 disabled={playerCount <= 2} activeOpacity={0.7}
                 style={[hsS.stepBtnWrap, playerCount <= 2 && { opacity: 0.3 }]}
               >
@@ -3431,7 +3756,11 @@ function StartScreen() {
               </TouchableOpacity>
               <Text style={hsS.stepVal}>{playerCount}</Text>
               <TouchableOpacity
-                onPress={() => setPlayerCount(c => Math.min(6, c + 1))}
+                onPress={() => {
+                  const next = Math.min(6, playerCount + 1);
+                  playPlayerCountSound(next);
+                  setPlayerCount(next);
+                }}
                 disabled={playerCount >= 6} activeOpacity={0.7}
                 style={[hsS.stepBtnWrap, playerCount >= 6 && { opacity: 0.3 }]}
               >
@@ -3507,6 +3836,10 @@ function StartScreen() {
               ))}
             </View>
           </View>
+          {/* הצג שוב ברוכים — רק מפתח ההתראה, בלי איפוס כל ההדרכה */}
+          <TouchableOpacity style={[hsS.row, { marginTop: 4 }]} onPress={() => { AsyncStorage.removeItem('lulos_welcome_player_screen_seen'); alert('בפעם הבאה שתגיע לתורך — תופיע שוב הודעת ברוכים הבאים.'); }} activeOpacity={0.7}>
+            <Text style={[hsS.rowLabel, { color: 'rgba(255,255,255,0.5)', fontSize: 12 }]}>הצג שוב ברוכים הבאים</Text>
+          </TouchableOpacity>
         </View>
         </ScrollView>
         {/* Start button — למטה, נפרד מהתפריט (כפתור חוקים רק למעלה) */}
@@ -3515,7 +3848,7 @@ function StartScreen() {
         </View>
         <TouchableOpacity
           onLongPress={() => {
-            const allKeys = [...ONB_KEYS, ...GUIDANCE_KEYS, 'lulos_tutorial_done', 'lulos_tip1_done', 'lulos_tip2_done', 'lulos_frac_arrow_seen', 'lulos_ident_arrow_seen', 'onb_first_discard', 'onb_welcome_screen', 'lulos_welcome_player_screen_seen'];
+            const allKeys = [...ONB_KEYS, ...GUIDANCE_KEYS, 'lulos_tutorial_done', 'lulos_tip1_done', 'lulos_tip2_done', 'lulos_frac_arrow_seen', 'lulos_ident_arrow_seen', 'lulos_find_cards_sum_alert_seen', 'onb_first_discard', 'onb_welcome_screen', 'lulos_welcome_player_screen_seen'];
             Promise.all(allKeys.map(k => AsyncStorage.removeItem(k))).then(() => {
               console.log('[DEV] Cleared all onboarding keys:', allKeys);
               alert('Onboarding reset! Restart the game to see onboarding again.');
@@ -3590,33 +3923,148 @@ const hsS = StyleSheet.create({
 //  TURN TRANSITION
 // ═══════════════════════════════════════════════════════════════
 
-// מפתח ישן — נשאר ברשימת האיפוס בלבד (לא בשימוש: התראה פעם per משחק, לפי הדרכה)
+// התראת משתמש חדש — פעם אחת אי־פעם (נשמר ב־AsyncStorage, לא נעלמת)
 const WELCOME_PLAYER_KEY = 'lulos_welcome_player_screen_seen';
+
+/** מוקאפ הכנסת שם — קומפוננטה נפרדת כדי שההקלדה לא תגרום לרינדור ב־TurnTransition ולא תפעיל effects שסוגרים את המודל */
+function WelcomeNameModal({
+  visible,
+  initialName,
+  onConfirm,
+}: {
+  visible: boolean;
+  initialName: string;
+  onConfirm: (name: string) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  useEffect(() => {
+    if (visible) setName(initialName);
+  }, [visible, initialName]);
+
+  if (!visible) return null;
+  return (
+    <RNModal transparent animationType="fade" onRequestClose={() => Keyboard.dismiss()} statusBarTranslucent visible>
+      <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}>
+        <View style={{flex:1,backgroundColor:'rgba(0,0,0,0.5)',justifyContent:'center',alignItems:'center',paddingHorizontal:24}}>
+          <ScrollView contentContainerStyle={{flexGrow:1,justifyContent:'center',alignItems:'center'}} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <View style={{backgroundColor:'rgba(30,41,59,0.98)',borderRadius:16,paddingHorizontal:20,paddingVertical:16,borderWidth:2,borderColor:'#FACC15',maxWidth:340,width:'100%'}}>
+              <Text style={{color:'#FDE68A',fontSize:18,fontWeight:'800',textAlign:'center',marginBottom:10}}>👋 ברוכים/ות למשחק!</Text>
+              <Text style={{color:'#E2E8F0',fontSize:14,fontWeight:'600',textAlign:'center',lineHeight:22,marginBottom:8}}>זה התור שלך. מלא/י את שמך:</Text>
+              <TextInput
+                value={name}
+                onChangeText={setName}
+                placeholder="מלא את שמך"
+                placeholderTextColor="rgba(255,255,255,0.4)"
+                editable
+                blurOnSubmit={false}
+                style={{
+                  backgroundColor: 'rgba(15,23,42,0.95)',
+                  borderRadius: 12,
+                  borderWidth: 2,
+                  borderColor: 'rgba(255,215,0,0.4)',
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  color: '#FFF',
+                  fontSize: 18,
+                  fontWeight: '700',
+                  textAlign: 'center',
+                  marginBottom: 14,
+                }}
+              />
+              <Text style={{color:'#E2E8F0',fontSize:12,fontWeight:'600',textAlign:'center',lineHeight:20,marginBottom:14}}>
+                הכר את הקלפים ולחץ/י "אני מוכן" כשאת/ה מוכן/ה להתחיל.
+              </Text>
+              <CasinoButton text="הבנתי" width={160} height={44} onPress={() => onConfirm(name.trim() || initialName)} />
+            </View>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </RNModal>
+  );
+}
 
 function TurnTransition() {
   const { state, dispatch } = useGame();
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d104b3'},body:JSON.stringify({sessionId:'d104b3',location:'index.tsx:TurnTransition',message:'TurnTransition entered',data:{hypothesisId:'H5',phase:state?.phase,playersLen:state?.players?.length,runId:'init'},timestamp:Date.now()})}).catch(()=>{}); }
   const cp = state.players[state.currentPlayerIndex];
   const currentIdx = state.currentPlayerIndex;
   const [tooltipCard, setTooltipCard] = useState<Card | null>(null);
-  // הצגת הדרכה מיד בכניסה למסך השחקן (סיבוב ראשון) — מסתירים רק אם בדף הכניסה כיבו "הדרכה והסברים"
-  const [showWelcome, setShowWelcome] = useState<boolean>(() => state.roundsPlayed === 0);
+  // הצגה פעם אחת למשתמש חדש — נקבע אחרי טעינת WELCOME_PLAYER_KEY (ללא תלות בהדרכה)
+  const [showWelcome, setShowWelcome] = useState<boolean>(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const emptySet = useMemo(() => new Set<string>(), []);
+  const cardSoundRef = useRef<Audio.Sound | null>(null);
+  const cardSoundLoadingRef = useRef(false);
+  useEffect(() => {
+    (async () => {
+      if (cardSoundRef.current) return;
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_select.mov'));
+        cardSoundRef.current = sound;
+      } catch (e) {
+        if (__DEV__) console.warn('[card_select] טעינה נכשלה (מסך שחקן). העתק card_select.mov ל־card/assets/', e);
+      }
+    })();
+    return () => {
+      const s = cardSoundRef.current;
+      if (s) s.unloadAsync().catch(() => {});
+      cardSoundRef.current = null;
+    };
+  }, []);
+  const playCardSelectSound = useCallback(() => {
+    const sound = cardSoundRef.current;
+    if (sound) {
+      sound.setPositionAsync(0).then(() => sound.playAsync()).catch(() => {});
+      return;
+    }
+    if (cardSoundLoadingRef.current) return;
+    cardSoundLoadingRef.current = true;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/card_select.mov'));
+        cardSoundRef.current = sound;
+        await sound.playAsync();
+      } catch (e) {
+        if (__DEV__) console.warn('[card_select] טעינה בלחיצה נכשלה (מסך שחקן).', e);
+      }
+      cardSoundLoadingRef.current = false;
+    })();
+  }, []);
 
+  // הצגת מוקאפ ברוכים הבאים — בודקים AsyncStorage פעם אחת בטעינה בלבד (לא אחרי עדכון שם)
+  const welcomeCheckedRef = useRef(false);
   useEffect(() => {
     if (state.roundsPlayed !== 0) {
       setShowWelcome(false);
       return;
     }
-    AsyncStorage.getItem('lulos_guidance_enabled').then((v) => {
-      if (v === 'false') setShowWelcome(false);
+    if (welcomeCheckedRef.current) return;
+    welcomeCheckedRef.current = true;
+    AsyncStorage.getItem(WELCOME_PLAYER_KEY).then((v) => {
+      if (v === 'true') setShowWelcome(false);
+      else setShowWelcome(true);
     });
   }, [state.roundsPlayed]);
 
-  const dismissWelcome = () => setShowWelcome(false);
+  const handleWelcomeConfirm = useCallback((name: string) => {
+    dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: currentIdx, name });
+    AsyncStorage.setItem(WELCOME_PLAYER_KEY, 'true');
+    setShowWelcome(false);
+  }, [dispatch, currentIdx]);
+
+  // עד 3 שחקנים — ראשון = מוביל (כמות קלפים מינימלית)
+  const sortedByCards = useMemo(() => [...state.players].sort((a, b) => a.hand.length - b.hand.length), [state.players]);
+  const visiblePlayers = sortedByCards.slice(0, 3);
 
   if (!cp) return null;
 
-  const updateName = (name: string) => dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: currentIdx, name });
+  const updateName = (name: string) => {
+    dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: currentIdx, name });
+  };
+  const isDefaultName = /^שחקן \d+$/.test(cp.name);
 
   // Sort cards identically to PlayerHand
   const sorted = [...cp.hand].sort((a,b) => { const o={number:0,fraction:1,operation:2,joker:3} as const; if(o[a.type]!==o[b.type]) return o[a.type]-o[b.type]; if(a.type==='number'&&b.type==='number') return (a.value??0)-(b.value??0); return 0; });
@@ -3641,11 +4089,18 @@ function TurnTransition() {
   };
 
   const safe = useSafeAreaInsets();
+  // קפיאת safe area למיקום המניפה — קופא רק אחרי שיש insets אמיתיים (מונע 0 בריענון)
+  const safeFrozen = useRef<{ top: number; bottom: number } | null>(null);
+  if (safeFrozen.current === null && (safe.top > 0 || safe.bottom > 0)) safeFrozen.current = { top: safe.top, bottom: safe.bottom };
+  const safeBottom = (safeFrozen.current ?? safe).bottom;
+
+  // בדיקת פריסת יד (פיתוח בלבד)
+  devCheckHandLayout();
   const HEADER_PAD = 44;
-  const BTN_STRIP_H = 80;
+  const BTN_STRIP_H = HAND_BOTTOM_OFFSET;
   return (
     <View style={{flex:1,paddingTop:HEADER_PAD,paddingBottom:safe.bottom,overflow:'hidden'}} collapsable={false}>
-      {/* ── Header — יציאה למעלה בצד אחד, קלפים/טיימר/שברים בצד הנגדי ── */}
+      {/* ── Header — יציאה + חוקים בצד אחד, קלפים/טיימר/שברים + עד 3 שמות שחקנים (ראשון = מוביל) בצד הנגדי ── */}
       <View style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingVertical:6}}>
         <View style={{flexDirection:'column',alignItems:'flex-end',gap:2}}>
           <View style={{flexDirection:'row',alignItems:'center',gap:4}}>
@@ -3661,23 +4116,30 @@ function TurnTransition() {
               </View>
             )}
           </View>
-          <View style={{backgroundColor:'rgba(34,197,94,0.3)',borderRadius:8,paddingHorizontal:10,paddingVertical:4,borderWidth:1.5,borderColor:'#4ADE80'}}>
-            <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'800'}} numberOfLines={1}>{cp.name || 'שחקן'}</Text>
+          <View style={{flexDirection:'row',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end'}}>
+            {visiblePlayers.map((p) => (
+              <View key={p.id} style={{backgroundColor:'rgba(34,197,94,0.3)',borderRadius:8,paddingHorizontal:8,paddingVertical:4,borderWidth:1.5,borderColor:'#4ADE80'}}>
+                <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'800'}} numberOfLines={1}>{p.name || 'שחקן'} {p.hand.length}</Text>
+              </View>
+            ))}
           </View>
         </View>
-        <View style={{flexShrink:0}}>
+        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:6}}>
           <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
+          <LulosButton text="חוקים" color="blue" width={72} height={32} fontSize={11} onPress={()=>setRulesOpen(true)} />
         </View>
       </View>
 
       <View style={{flex:1,paddingBottom:BTN_STRIP_H + HAND_STRIP_HEIGHT,overflow:'hidden'}}>
-      {/* ── הכנסת שם — שדה ריק עם placeholder בלבד ── */}
-      <View style={{paddingHorizontal:20,paddingVertical:8}}>
+      {/* ── הכנסת שם — מיקום קבוע בראש התוכן, גלוי תמיד כשיש שם ברירת מחדל ── */}
+      {isDefaultName && (
+      <View style={{position:'absolute',top:0,left:0,right:0,zIndex:15,elevation:15,paddingHorizontal:20,paddingVertical:8,backgroundColor:'transparent'}} pointerEvents="box-none" collapsable={false}>
         <TextInput
-          value={/^שחקן \d+$/.test(cp.name) ? '' : cp.name}
+          value={cp.name}
           onChangeText={updateName}
           placeholder="מלא את שמך"
           placeholderTextColor="rgba(255,255,255,0.4)"
+          editable
           style={{
             backgroundColor: 'rgba(15,23,42,0.95)',
             borderRadius: 12,
@@ -3692,35 +4154,23 @@ function TurnTransition() {
           }}
         />
       </View>
+      )}
 
       {/* ── מידע — הודעות וטולטיפ (תגיות הועברו ל־Header) ── */}
       <View style={{flex:1,minHeight:60,paddingHorizontal:24,alignItems:'center',justifyContent:'center'}}>
-        {/* Last move summary — הודעות צבעוניות */}
-        {!!state.lastMoveMessage && (
-          state.pendingFractionTarget !== null ? (
-            <View style={{backgroundColor:'rgba(15,23,42,0.95)',borderRadius:16,paddingHorizontal:20,paddingVertical:14,borderWidth:2,borderColor:'#F87171',maxWidth:340,width:'100%',marginBottom:8}}>
-              <Text style={{color:'#FCA5A5',fontSize:16,fontWeight:'900',textAlign:'center',marginBottom:10}}>{state.lastMoveMessage}</Text>
-              <Text style={{color:'#E2E8F0',fontSize:13,fontWeight:'700',textAlign:'right',lineHeight:22}}>יש לך 3 אפשרויות:</Text>
-              <Text style={{color:'#4ADE80',fontSize:13,fontWeight:'600',textAlign:'right',lineHeight:22}}>🛡️ הגנה — הנח קלף שמתחלק ב-{state.fractionPenalty}</Text>
-              <Text style={{color:'#FDE68A',fontSize:13,fontWeight:'600',textAlign:'right',lineHeight:22}}>⚔️ התקפה נגדית — הנח שבר נוסף (האתגר עובר הלאה!)</Text>
-              <Text style={{color:'#FCA5A5',fontSize:13,fontWeight:'600',textAlign:'right',lineHeight:22}}>😔 אין הגנה? שלוף {state.fractionPenalty} קלפי עונש</Text>
-              <Text style={{color:'rgba(255,255,255,0.55)',fontSize:11,fontWeight:'600',textAlign:'right',lineHeight:18,marginTop:6}}>⚠️ ג׳וקר לא מגן מפני שבר — רק מספר שמתחלק או שבר.</Text>
+        {/* Last move summary — הודעות צבעוניות (ללא כפילות במצב אתגר שבר) */}
+        {!!state.lastMoveMessage && state.pendingFractionTarget === null && (
+          state.lastDiscardCount > 0 && state.lastEquationDisplay ? (
+            <View style={{alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%'}}>
+              <View style={alertBubbleStyle.box}>
+                <Text style={alertBubbleStyle.title}>{state.players[(currentIdx - 1 + state.players.length) % state.players.length].name} הניח {state.lastDiscardCount} קלפים</Text>
+                <Text style={[alertBubbleStyle.body, {marginTop:6,textAlign:'center'}]}>{state.lastEquationDisplay}</Text>
+              </View>
             </View>
           ) : (
             <View style={{flexDirection:'row',alignItems:'center',gap:8,alignSelf:'center',marginBottom:8,maxWidth:340,width:'100%',justifyContent:'center'}}>
               <View style={alertBubbleStyle.box}>
-                {(() => {
-                  const msg = state.lastMoveMessage!;
-                  const sep = msg.indexOf(' — ');
-                  const title = sep >= 0 ? msg.slice(0, sep) : msg;
-                  const body = sep >= 0 ? msg.slice(sep + 3) : '';
-                  return (
-                    <>
-                      <Text style={alertBubbleStyle.title}>{title}</Text>
-                      {!!body && <Text style={alertBubbleStyle.body}>{body}</Text>}
-                    </>
-                  );
-                })()}
+                <Text style={alertBubbleStyle.title}>{state.lastMoveMessage}</Text>
               </View>
               <GoldArrow direction="right" size={48} />
             </View>
@@ -3734,43 +4184,43 @@ function TurnTransition() {
           </TouchableOpacity>
         )}
       </View>
-
-      {/* ── מניפה: מקום קבוע בתחתית, מעל "אני מוכן" (לפי בקשת קבע) ── */}
-      <View style={{position:'absolute',bottom:BTN_STRIP_H + safe.bottom,left:0,right:0,height:220,zIndex:5,alignItems:'center',justifyContent:'flex-end',paddingHorizontal:12}}>
-        <Text style={{color:'#FACC15',fontSize:14,fontWeight:'800',textAlign:'center',marginBottom:6,textShadowColor:'rgba(0,0,0,0.5)',textShadowOffset:{width:0,height:1},textShadowRadius:4}}>
-          👆 לחץ על הקלפים
-        </Text>
-        <View style={{height:200,width:'100%',alignItems:'center'}}>
-          <SimpleHand
-            cards={sorted}
-            stagedCardIds={emptySet}
-            equationOpCardId={null}
-            equationOpPlaced={false}
-            defenseValidCardIds={null}
-            forwardCardId={null}
-            onTap={(card) => setTooltipCard(prev => prev?.id === card.id ? null : card)}
-          />
-        </View>
       </View>
 
-      {/* ── "אני מוכן" — מקום קבוע בתחתית, בלי גלילה ובלי קפיצות ── */}
+      {/* ── מניפה + "אני מוכן": ישירות תחת ה־root (לא בתוך ה־View עם paddingBottom 480) — כך bottom נמדד מתחתית המסך ── */}
+      <View style={{position:'absolute',bottom:-safeBottom,left:0,right:0,height:HAND_BOTTOM_OFFSET+HAND_STRIP_HEIGHT+Math.max(0,safeBottom),zIndex:5}} pointerEvents="box-none">
+        <View style={{position:'absolute',bottom:HAND_BOTTOM_OFFSET,left:0,right:0,height:HAND_STRIP_HEIGHT,alignItems:'center',justifyContent:'flex-end',paddingHorizontal:12}}>
+          <Text style={{color:'#FACC15',fontSize:14,fontWeight:'800',textAlign:'center',marginBottom:6,textShadowColor:'rgba(0,0,0,0.5)',textShadowOffset:{width:0,height:1},textShadowRadius:4}}>
+            👆 לחץ על הקלפים
+          </Text>
+          <View style={{height:HAND_INNER_HEIGHT,width:'100%',alignItems:'center'}}>
+            <SimpleHand
+              cards={sorted}
+              stagedCardIds={emptySet}
+              equationOpCardId={null}
+              equationOpPlaced={false}
+              defenseValidCardIds={null}
+              forwardCardId={null}
+              onTap={(card) => { playCardSelectSound(); setTooltipCard(prev => prev?.id === card.id ? null : card); }}
+            />
+          </View>
+        </View>
+      </View>
       <View style={{position:'absolute',bottom:0,left:0,right:0,height:BTN_STRIP_H,paddingBottom:safe.bottom,alignItems:'center',justifyContent:'center',zIndex:10}}>
         <CasinoButton text="אני מוכן" width={220} height={48} fontSize={19} onPress={()=>dispatch({type:'BEGIN_TURN'})} />
       </View>
-      </View>
 
-      {/* ── ברוכים הבאים — overlay תמיד גלוי מעל הכל ── */}
-      {showWelcome && !tooltipCard && (
-        <View style={{position:'absolute',top:0,left:0,right:0,bottom:0,backgroundColor:'rgba(0,0,0,0.5)',zIndex:200,elevation:200,justifyContent:'center',alignItems:'center',paddingHorizontal:24}}>
-          <View style={{backgroundColor:'rgba(30,41,59,0.98)',borderRadius:16,paddingHorizontal:20,paddingVertical:16,borderWidth:2,borderColor:'#FACC15',maxWidth:340,width:'100%'}}>
-            <Text style={{color:'#FDE68A',fontSize:18,fontWeight:'800',textAlign:'center',marginBottom:10}}>👋 ברוכים/ות למשחק!</Text>
-            <Text style={{color:'#E2E8F0',fontSize:14,fontWeight:'600',textAlign:'center',lineHeight:22,marginBottom:14}}>
-              זה התור שלך. מלא/י את שמך למעלה (פעם אחת), הכר את הקלפים, ולחץ/י "אני מוכן" כשאת/ה מוכן/ה להתחיל.
-            </Text>
-            <CasinoButton text="הבנתי" width={160} height={44} onPress={dismissWelcome} />
-          </View>
-        </View>
-      )}
+      <AppModal visible={rulesOpen} onClose={() => setRulesOpen(false)} title="איך משחקים — מסך כללים">
+        <RulesContent state={state} numberRange={state.difficulty} fractions={state.showFractions} onOpenCardsCatalog={() => { setRulesOpen(false); setCardsCatalogOpen(true); }} />
+      </AppModal>
+      <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title="פירוט קלפים במשחק">
+        <CardsCatalogContent numberRange={state.difficulty} fractions={state.showFractions} />
+      </AppModal>
+
+      <WelcomeNameModal
+        visible={showWelcome && !tooltipCard && !!cp}
+        initialName={cp?.name ?? ''}
+        onConfirm={handleWelcomeConfirm}
+      />
     </View>
   );
 }
@@ -3784,10 +4234,15 @@ function PlayerSidebar({ secsLeft, timerTotal, timerRunning }: { secsLeft?: numb
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [historyPlayerIndex, setHistoryPlayerIndex] = useState<number | null>(null);
   const sorted = [...state.players].sort((a, b) => a.hand.length - b.hand.length);
   const visible = showAll ? sorted : sorted.slice(0, 3);
   const hasMore = sorted.length > 3 && !showAll;
   const cp = state.players[state.currentPlayerIndex];
+
+  const historyPlayer = historyPlayerIndex != null ? state.players[historyPlayerIndex] : null;
+  const playerMoves = historyPlayerIndex != null ? state.moveHistory.filter(e => e.playerIndex === historyPlayerIndex) : [];
+  const totalDiscarded = playerMoves.reduce((s, e) => s + e.cardsDiscarded, 0);
 
   return (
     <>
@@ -3803,7 +4258,7 @@ function PlayerSidebar({ secsLeft, timerTotal, timerRunning }: { secsLeft?: numb
               width={72}
               height={32}
               fontSize={10}
-              onPress={() => {}}
+              onPress={() => setHistoryPlayerIndex(p.id)}
             />
           );
         })}
@@ -3832,6 +4287,29 @@ function PlayerSidebar({ secsLeft, timerTotal, timerRunning }: { secsLeft?: numb
       <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title="פירוט קלפים במשחק">
         <CardsCatalogContent numberRange={state.difficulty} fractions={state.showFractions} />
       </AppModal>
+      <AppModal visible={historyPlayerIndex !== null} onClose={() => setHistoryPlayerIndex(null)} title={historyPlayer ? `היסטוריית מהלכים — ${historyPlayer.name}` : 'היסטוריה'}>
+        <View style={{ paddingVertical: 8 }}>
+          {historyPlayer && (
+            <>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, paddingHorizontal: 4 }}>
+                <Text style={{ color: '#9CA3AF', fontSize: 14, fontWeight: '700', textAlign: 'right' }}>סה"כ קלפים שנפטר: {totalDiscarded}</Text>
+                <Text style={{ color: '#9CA3AF', fontSize: 14, fontWeight: '700', textAlign: 'right' }}>מהלכים: {playerMoves.length}</Text>
+              </View>
+              <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ paddingBottom: 16 }}>
+                {[...playerMoves].reverse().map((entry, i) => (
+                  <View key={i} style={{ backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 8, padding: 10, marginBottom: 6, borderRightWidth: 3, borderRightColor: entry.cardsDiscarded > 0 ? '#4ADE80' : '#93C5FD' }}>
+                    <Text style={{ color: '#E2E8F0', fontSize: 13, fontWeight: '600', textAlign: 'right', marginBottom: 2 }}>{entry.description}</Text>
+                    <Text style={{ color: '#6B7280', fontSize: 11, textAlign: 'right' }}>קלפים בתור זה: {entry.cardsDiscarded}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+              {playerMoves.length === 0 && (
+                <Text style={{ color: '#6B7280', fontSize: 14, textAlign: 'center', marginTop: 16 }}>עדיין אין מהלכים רשומים</Text>
+              )}
+            </>
+          )}
+        </View>
+      </AppModal>
     </>
   );
 }
@@ -3849,7 +4327,7 @@ function FlashingRollButton({ onPress }: { onPress: () => void }) {
   return <GoldDiceButton onPress={onPress} size={56} />;
 }
 
-const ONB_KEYS = ['onb_game_start', 'onb_fraction', 'onb_results', 'onb_forward', 'onb_first_discard', 'onb_welcome_screen'] as const;
+const ONB_KEYS = ['onb_game_start', 'onb_fraction', 'onb_results', 'onb_forward', 'onb_first_discard', 'onb_welcome_screen', 'onb_choose_cards'] as const;
 type OnbKey = typeof ONB_KEYS[number];
 
 const GUIDANCE_KEYS = ['guidance_fraction', 'guidance_op_challenge', 'guidance_identical', 'guidance_joker', 'guidance_triple'] as const;
@@ -3858,10 +4336,12 @@ type GuidanceKey = typeof GUIDANCE_KEYS[number];
 function GameScreen() {
   const { state, dispatch } = useGame();
   const safe = useGameSafeArea();
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d104b3'},body:JSON.stringify({sessionId:'d104b3',location:'index.tsx:GameScreen',message:'GameScreen mount',data:{hypothesisId:'H5',phase:state?.phase,runId:'init'},timestamp:Date.now()})}).catch(()=>{}); }
   const cp = state.players[state.currentPlayerIndex];
   const [showCel,setShowCel] = useState(false);
   const [eqConfirm, setEqConfirm] = useState<{ onConfirm: () => void } | null>(null);
   const [eqResult, setEqResult] = useState<{ result: number | null; ok: boolean; hasError: boolean } | null>(null);
+  const eqBuilderRef = useRef<EquationBuilderRef>(null);
   const prevJ = useRef(state.jokerModalOpen);
   useEffect(() => { if(prevJ.current&&!state.jokerModalOpen&&state.hasPlayedCards) setShowCel(true); prevJ.current=state.jokerModalOpen; }, [state.jokerModalOpen,state.hasPlayedCards]);
 
@@ -3910,12 +4390,12 @@ function GameScreen() {
 
   // Feedback notification moved to TurnTransition screen
 
-  // צליל הטלת קוביות — רק אם קיים dice_sound.mov; בלי צליל אחר כגיבוי
+  // צליל הטלת קוביות — קובץ: dice_roll.m4a ב־card/assets
   const playDiceSound = useCallback(() => {
     (async () => {
       try {
         await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
-        const { sound } = await Audio.Sound.createAsync(require('./assets/dice_sound.mov'));
+        const { sound } = await Audio.Sound.createAsync(require('./assets/dice_roll.m4a'));
         await sound.playAsync();
         sound.setOnPlaybackStatusUpdate((s: { didJustFinish?: boolean; didJustFinishNotify?: boolean }) => {
           if ((s as any).didJustFinish || s.didJustFinishNotify) sound.unloadAsync().catch(() => {});
@@ -3935,6 +4415,30 @@ function GameScreen() {
     dispatch({ type: 'ROLL_DICE', values: d });
   }, [dispatch, playDiceSound]);
 
+  // צליל כפתור "שלוף קלף - ויתור" — button_forfeit.mp3 (ברמת GameScreen כדי לא להפר hooks)
+  const drawForfeitSoundRef = useRef<Audio.Sound | null>(null);
+  const drawForfeitLoadingRef = useRef(false);
+  const playDrawForfeitSound = useCallback(() => {
+    const sound = drawForfeitSoundRef.current;
+    if (sound) {
+      sound.setPositionAsync(0).then(() => sound.playAsync()).catch(() => {});
+      return;
+    }
+    if (drawForfeitLoadingRef.current) return;
+    drawForfeitLoadingRef.current = true;
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({ playsInSilentMode: true, staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+        const { sound } = await Audio.Sound.createAsync(require('./assets/button_forfeit.mp3'));
+        drawForfeitSoundRef.current = sound;
+        await sound.playAsync();
+      } catch (e) {
+        if (__DEV__) console.warn('[button_forfeit] טעינה נכשלה.', e);
+      }
+      drawForfeitLoadingRef.current = false;
+    })();
+  }, []);
+
   // Detect if current player has an identical card they can play
   const td = state.discardPile[state.discardPile.length - 1];
 
@@ -3951,6 +4455,9 @@ function GameScreen() {
   const [identArrowSeen, setIdentArrowSeen] = useState(true);
   const [identArrowVisible, setIdentArrowVisible] = useState(false);
   const identArrowX = useRef(new Animated.Value(0)).current;
+
+  // "מצא קלפים שסכומם" alert — only in SLOT 2 next to תוצאות אפשריות, first time in solved phase
+  const [findCardsAlertSeen, setFindCardsAlertSeen] = useState(true);
   const identArrowLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   // ── Contextual onboarding system ──
@@ -3961,7 +4468,7 @@ function GameScreen() {
   const guidanceSeen = useRef(new Set<string>());
 
   const showOnb = useCallback((key: OnbKey, emoji: string, title: string, body: string) => {
-    console.log('[ONB] showOnb called:', key, 'alreadySeen:', onbSeen.current.has(key), 'shownThisRender:', onbShownThisRender.current.has(key));
+    if (__DEV__) console.log('[ONB] showOnb called:', key, 'alreadySeen:', onbSeen.current.has(key), 'shownThisRender:', onbShownThisRender.current.has(key));
     if (onbSeen.current.has(key) || onbShownThisRender.current.has(key)) return;
     onbShownThisRender.current.add(key);
     onbSeen.current.add(key);
@@ -3986,9 +4493,10 @@ function GameScreen() {
       AsyncStorage.getItem('lulos_tip2_done'),
       AsyncStorage.getItem('lulos_frac_arrow_seen'),
       AsyncStorage.getItem('lulos_ident_arrow_seen'),
+      AsyncStorage.getItem('lulos_find_cards_sum_alert_seen'),
       ...ONB_KEYS.map(k => AsyncStorage.getItem(k)),
       ...GUIDANCE_KEYS.map(k => AsyncStorage.getItem(k)),
-    ]).then(([guidance, tut, tip1, tip2, arrow, identArrow, ...rest]) => {
+    ]).then(([guidance, tut, tip1, tip2, arrow, identArrow, findCardsAlert, ...rest]) => {
       guidanceEnabledRef.current = guidance !== 'false';
       const onbResults = rest.slice(0, ONB_KEYS.length);
       const guidanceResults = rest.slice(ONB_KEYS.length);
@@ -3998,6 +4506,7 @@ function GameScreen() {
       setTutStep(step);
       setFracArrowSeen(arrow === 'true' || guidance === 'false');
       setIdentArrowSeen(identArrow === 'true' || guidance === 'false');
+      setFindCardsAlertSeen(findCardsAlert === 'true');
       if (guidance === 'false') {
         ONB_KEYS.forEach(k => onbSeen.current.add(k));
         GUIDANCE_KEYS.forEach(k => guidanceSeen.current.add(k));
@@ -4191,15 +4700,16 @@ function GameScreen() {
 
   // ── Contextual onboarding triggers ──
   const onbBlocked = tutVisible || state.notifications.some(n => n.id.startsWith('onb-')) || !!state.identicalAlert || state.pendingFractionTarget !== null;
-  console.log('[ONB] onbBlocked:', onbBlocked, '{tutVisible:', tutVisible, 'hasOnbNotif:', state.notifications.some(n => n.id.startsWith('onb-')), 'identAlert:', !!state.identicalAlert, 'fracTarget:', state.pendingFractionTarget, '}');
+  if (__DEV__) console.log('[ONB] onbBlocked:', onbBlocked, '{tutVisible:', tutVisible, 'hasOnbNotif:', state.notifications.some(n => n.id.startsWith('onb-')), 'identAlert:', !!state.identicalAlert, 'fracTarget:', state.pendingFractionTarget, '}');
 
-  // 1. Game start — first time entering pre-roll (רק כשהדרכה מופעלת)
+  // 1. Game start — first time entering pre-roll. מוצג גם כש־tutVisible כדי שההתראה תופיע (לא נחסם ע"י הטוטוריאל)
   useEffect(() => {
-    if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
+    if (!guidanceEnabledRef.current || !tutLoaded) return;
+    if (state.notifications.some(n => n.id.startsWith('onb-'))) return; // כבר מוצגת התראה
     if (state.phase === 'pre-roll') {
       showOnb('onb_game_start', '🎰', 'ברוכים הבאים למשחק!', 'המטרה: היפטרו מכל הקלפים ביד! הטילו קוביות, בנו תרגיל, והניחו קלפים על הערימה.');
     }
-  }, [tutLoaded, state.phase, onbBlocked]);
+  }, [tutLoaded, state.phase, state.notifications.length, showOnb]);
 
   // 2. Fraction card in hand
   useEffect(() => {
@@ -4240,6 +4750,14 @@ function GameScreen() {
     }
   }, [tutLoaded, onbBlocked, state.lastDiscardCount]);
 
+  // 8. Choose cards — first time entering solved phase (בחר קלפים שסכומם שווה לתוצאה)
+  useEffect(() => {
+    if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
+    if (state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards) {
+      showOnb('onb_choose_cards', '🎯', 'בחר קלפים להגיע לתוצאה', 'אם יש לך קלף אחד ששווה לתוצאה — בחר אותו. אם יש כמה קלפים שסכומם שווה לתוצאה — בחר את כולם ולחץ "הנח קלפים".');
+    }
+  }, [tutLoaded, onbBlocked, state.phase, state.equationResult, state.hasPlayedCards]);
+
   // ── Guidance notification system ──
   // First time ever = full explanation, after that = short one-liner
   const showGuidance = useCallback((key: GuidanceKey, fullNotif: Omit<Notification, 'id'>, shortNotif: Omit<Notification, 'id'>) => {
@@ -4254,22 +4772,10 @@ function GameScreen() {
   }, [dispatch]);
 
   // G1. Fraction attack — defender enters pre-roll with pendingFractionTarget
+  // במצב אתגר שבר אנו משתמשים רק ב-Sheet B בתוך GameScreen, בלי התראת guidance נוספת.
   const prevFracTarget = useRef<number | null>(null);
   useEffect(() => {
-    if (state.pendingFractionTarget !== null && state.phase === 'pre-roll' && prevFracTarget.current === null) {
-      const attacker = state.challengeSource ?? 'השחקן הקודם';
-      const denom = state.fractionPenalty;
-      const fracUni = denom === 2 ? '½' : denom === 3 ? '⅓' : denom === 4 ? '¼' : denom === 5 ? '⅕' : `1/${denom}`;
-      showGuidance('guidance_fraction', {
-        message: '', emoji: '⚔️',
-        title: `${attacker} תקף אותך עם שבר ${fracUni}!`,
-        body: `🛡️ הגנה — הנח קלף שמתחלק ב-${denom}\n⚔️ התקפה נגדית — הנח שבר נוסף (האתגר עובר לשחקן הבא!)\n😔 אין הגנה? שלוף ${denom} קלפי עונש`,
-        style: 'warning', autoDismissMs: 8000,
-      }, {
-        message: `⚔️ ${attacker} תקף! הגן, תקוף נגד, או שלוף עונש`,
-        style: 'warning', autoDismissMs: 5000,
-      });
-    }
+    // נשמר רק את הערך האחרון כדי לזהות שינויים, אבל לא נדחוף התראה נוספת ל-NotificationZone.
     prevFracTarget.current = state.pendingFractionTarget;
   }, [state.pendingFractionTarget, state.phase]);
 
@@ -4312,13 +4818,14 @@ function GameScreen() {
     prevIdentical.current = state.identicalAlert;
   }, [state.identicalAlert]);
 
-  // G4. Joker in hand — first detection per game
+  // G4. Joker in hand — רק אחרי הטלת הקוביות (building או pre-roll עם קוביות), כהמצלה לבנות תרגיל ולאתגר
   const jokerGuidanceShown = useRef(false);
   useEffect(() => { jokerGuidanceShown.current = false; }, [state.players.length]); // reset on new game
   useEffect(() => {
     if (!tutLoaded || jokerGuidanceShown.current) return;
     if (!cp) return;
     if (state.phase !== 'pre-roll' && state.phase !== 'building' && state.phase !== 'solved') return;
+    if (state.dice === null) return; // ג׳וקר — רק אחרי הטלה, לא לפני
     const hasJoker = cp.hand.some(c => c.type === 'joker');
     if (hasJoker) {
       jokerGuidanceShown.current = true;
@@ -4332,7 +4839,7 @@ function GameScreen() {
         style: 'info', autoDismissMs: 4000,
       });
     }
-  }, [tutLoaded, cp?.hand.length, state.phase]);
+  }, [tutLoaded, cp?.hand.length, state.phase, state.dice]);
 
   // G5. Triple dice — all 3 dice show the same number
   const prevDiceForTriple = useRef<typeof state.dice>(null);
@@ -4353,11 +4860,12 @@ function GameScreen() {
     }
   }, [state.dice]);
 
-  // רווח קבוע להתראות — השולחן והיד לא זזים כשמופיעה/נעלמת התראה
-  const NOTIF_STRIP_RESERVED = 56;
-  const bottomPad = 160 + NOTIF_STRIP_RESERVED + safe.insets.bottom;
+  // רווח תחתון: היד ממוקמת ב־absolute מעל פס הכפתורים, אז ה־padding רק מונע מתוכן להיכנס לאזור היד
+  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
   return (
-    <ImageBackground source={gameBgImg} resizeMode="cover" style={{flex:1,width:SCREEN_W,minHeight:SCREEN_H,paddingTop:8,paddingBottom:bottomPad,overflow:'hidden'}}>
+    <View style={{flex:1,width:SCREEN_W,minHeight:SCREEN_H,overflow:'hidden'}}>
+      {/* רקע כתום־זהוב — מכסה את כל המסך */}
+      <ImageBackground source={gameBgImg} resizeMode="cover" style={StyleSheet.absoluteFill} />
 
       {/* ── Background dice layers (decorative — stays absolute) ── */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -4367,14 +4875,16 @@ function GameScreen() {
         <WalkingDice />
       </View>
 
+      {/* תוכן מעל הרקע ── */}
+      <View style={{flex:1,paddingTop:8,paddingBottom:bottomPad}}>
       {/* ── SLOT 1: שחקנים + חוקים בצד אחד, יציאה בצד השני ── */}
       <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:10,paddingTop:4,paddingBottom:4}}>
         <PlayerSidebar secsLeft={secsLeft} timerTotal={TIMER_TOTAL} timerRunning={timerRunning} />
         <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
       </View>
 
-      {/* ── SLOT 2: ערימה בצד אחד, תוצאות אפשריות בצד השני (החלפת מיקום) ── */}
-      <View style={{flexShrink:0,flexDirection:'row',alignItems:'center',justifyContent:'flex-start',gap:20,paddingHorizontal:12,paddingVertical:4,zIndex:1}}>
+      {/* ── SLOT 2: ערימה, תוצאות אפשריות, כפתור איפוס התרגיל (מעל השולחן) ── */}
+      <View style={{flexShrink:0,flexDirection:'row',alignItems:'center',justifyContent:'flex-start',flexWrap:'wrap',gap:12,paddingHorizontal:12,paddingVertical:4,zIndex:1}}>
         <View style={{alignItems:'center',gap:4,position:'relative',minWidth:90}}>
           <DiscardPile />
           {fracHintVisible && !fracArrowSeen && !state.pendingFractionTarget && (
@@ -4390,15 +4900,76 @@ function GameScreen() {
             <GoldArrow direction="right" size={48} />
           </Animated.View>
         )}
+        {state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards && !findCardsAlertSeen && tutLoaded && (
+          <View style={alertBubbleStyle.box}>
+            <Text style={alertBubbleStyle.title}>🎯 מצא קלפים שסכומם {state.equationResult}!</Text>
+            <Text style={alertBubbleStyle.body}>בחר מהיד ולחץ \"הנח קלפים\"</Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => { setFindCardsAlertSeen(true); AsyncStorage.setItem('lulos_find_cards_sum_alert_seen', 'true'); }}
+              style={{ marginTop: 10, alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 }}
+            >
+              <Text style={{ color: '#FFD700', fontWeight: '700', fontSize: 14 }}>הבנתי!</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
-          <ResultsSlot onToggle={toggleResultsBadges} filteredResults={(() => {
-            const handValuesForStrip = new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []);
-            return state.validTargets.filter(t => handValuesForStrip.has(t.result));
-          })()} matchCount={state.validTargets.filter(t => cp?.hand.some(c => c.type === 'number' && c.value === t.result)).length} />
+          <ResultsSlot
+            onToggle={toggleResultsBadges}
+            filteredResults={(() => {
+              const handValuesForStrip = new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []);
+              return state.validTargets.filter(t => handValuesForStrip.has(t.result));
+            })()}
+            matchCount={state.validTargets.filter(t => cp?.hand.some(c => c.type === 'number' && c.value === t.result)).length}
+          />
         )}
       </View>
 
-      {/* ── SLOT 3: Game area — flexGrow:1, flexShrink:1, minHeight:200 ── */}
+      {/* תוצאת התרגיל — מיקום קבוע 765px מהתחתית */}
+      {state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards && (
+        <View style={{ position: 'absolute', bottom: 765, left: 0, right: 0, alignItems: 'center', zIndex: 6 }}>
+          <View style={[eqS.resultBox, { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14 }]}>
+            <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '700' }}>התוצאה</Text>
+            <Text style={eqS.resultVal}>{state.equationResult}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* שורת "נבחר" — bottom: 500 (מעל טווח 365–465), גופן ברור ומספרי קלפים */}
+      {state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards && state.stagedCards.length > 0 && (() => {
+        const staged = state.stagedCards;
+        const target = state.equationResult!;
+        const numberAndWild = staged.filter((c: Card) => c.type === 'number' || c.type === 'wild');
+        const stOpCard = staged.filter((c: Card) => c.type === 'operation')[0] ?? null;
+        const hasWild = numberAndWild.some((c: Card) => c.type === 'wild');
+        const wildVal = hasWild ? computeWildValueInStaged(numberAndWild, stOpCard, target) : null;
+        const matches = validateStagedCards(numberAndWild, stOpCard, target);
+        const clearAll = () => { staged.forEach((c: Card) => dispatch({ type: 'UNSTAGE_CARD', card: c })); };
+        return (
+          <View style={{ position: 'absolute', bottom: 500, left: 0, right: 0, alignItems: 'center', zIndex: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, direction: 'ltr' as any, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Text style={{ color: '#9CA3AF', fontSize: 14, fontWeight: '600' }}>נבחר:</Text>
+              {numberAndWild.map((c: Card, i: number) => (
+                <React.Fragment key={c.id}>
+                  {i > 0 && <Text style={{ color: '#FDD835', fontSize: 17, fontWeight: '900' }}>+</Text>}
+                  <Text style={{ color: c.type === 'wild' ? '#A78BFA' : '#FFF', fontSize: 17, fontWeight: '900' }}>{c.type === 'wild' ? (wildVal ?? '?') : c.value}</Text>
+                </React.Fragment>
+              ))}
+              <Text style={{ color: '#FFD700', fontSize: 17, fontWeight: '900' }}>=</Text>
+              <Text style={{ color: matches ? '#4ADE80' : '#FCA5A5', fontSize: 18, fontWeight: '900' }}>{target}</Text>
+              {matches && <Text style={{ color: '#4ADE80', fontSize: 17 }}>✓</Text>}
+              <TouchableOpacity onPress={clearAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginLeft: 4, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(239,68,68,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#FCA5A5', fontSize: 18, fontWeight: '900' }}>↩</Text>
+              </TouchableOpacity>
+            </View>
+            {!matches && (
+              <Text style={{ color: '#FCA5A5', fontSize: 13, textAlign: 'center', marginTop: 4 }}>השילוב לא מגיע ל־{target}. נסה לשנות.</Text>
+            )}
+          </View>
+        );
+      })()}
+
+      {/* ── SLOT 3: Game area — שולחן ירוק + תרגיל + טיימר ── */}
       <View style={{flexGrow:1,flexShrink:1,minHeight:200,paddingHorizontal:12,zIndex:2}}>
         <ImageBackground
           source={pokerTableImg}
@@ -4409,56 +4980,38 @@ function GameScreen() {
             justifyContent:'center',
             alignItems:'center',
             paddingVertical:10,
+            paddingHorizontal:8,
+            overflow:'hidden',
           }}
           resizeMode="stretch"
         >
-          <EquationBuilder onConfirmChange={setEqConfirm} onResultChange={setEqResult} />
-          {/* טיימר — טבעת מוזהבת על השולחן, עדין בלי מספרים */}
+          <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} onResultChange={setEqResult} />
           {state.timerSetting !== 'off' && (
             <View style={{ position: 'absolute', bottom: 28, alignSelf: 'center' }}>
               <TimerBar totalTime={TIMER_TOTAL} secsLeft={secsLeft} running={timerRunning} />
             </View>
           )}
         </ImageBackground>
-        {/* Operation card hints — below the green table for visibility */}
-        {(() => {
-          const isSolved = state.phase === 'solved';
-          const eqOpOp = getEqOpCardOperation(state);
-          if (isSolved) return null;
-          if (state.equationOpCard && state.equationOpPosition === null) {
-            return (
-              <View style={{ backgroundColor: 'rgba(167,139,250,0.12)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(167,139,250,0.35)', paddingHorizontal: 14, paddingVertical: 8, marginTop: 6, marginHorizontal: 4 }}>
-                <Text style={{ color: '#C4B5FD', fontSize: 13, fontWeight: '700', textAlign: 'center', lineHeight: 20 }}>
-                  👆 לחץ על סלוט ⬦ בתרגיל כדי למקם את קלף הפעולה
-                </Text>
-              </View>
-            );
-          }
-          if (state.equationOpCard && state.equationOpPosition !== null) {
-            return (
-              <View style={{ backgroundColor: 'rgba(252,165,165,0.12)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(252,165,165,0.35)', paddingHorizontal: 14, paddingVertical: 8, marginTop: 6, marginHorizontal: 4 }}>
-                <Text style={{ color: '#FCA5A5', fontSize: 13, fontWeight: '700', textAlign: 'center', lineHeight: 20 }}>
-                  ⚔️ קלף הפעולה יאתגר את השחקן הבא עם {opDisplay[eqOpOp!] ?? eqOpOp}
-                </Text>
-              </View>
-            );
-          }
-          return null;
-        })()}
+        {/* Operation card hints — בוטלו כדי לא להציג הודעות באזור 365–465 */}
         <StagingZone />
       </View>
 
-      {/* ── SLOT 4: רווח 100px — היד עלתה ב־20px ── */}
+      {/* ── SLOT 4: רווח 100px ── */}
       <View style={{flexShrink:0,height:100}} />
-
-      {/* ── SLOT 5: מניפה — גובה זהה למסך השחקן (HAND_STRIP_HEIGHT) ── */}
-      <View style={{flexShrink:0,height:HAND_STRIP_HEIGHT,alignItems:'center',justifyContent:'center',width:'100%'}}>
-        <PlayerHand />
       </View>
 
-      {/* תוצאות אפשריות — overlay ממורכז מעל היד ── */}
+      {/* ── מניפה: עוגן בגובה מסך שמגיע לתחתית פיזית (bottom:-insets), יד עם bottom:HAND_BOTTOM_OFFSET ── */}
+      <View style={{position:'absolute',bottom:-safe.insets.bottom,left:0,right:0,height:SCREEN_H,zIndex:5}} pointerEvents="box-none">
+        <View style={{position:'absolute',bottom:HAND_BOTTOM_OFFSET+safe.insets.bottom,left:0,right:0,height:HAND_STRIP_HEIGHT,alignItems:'center',justifyContent:'center',width:'100%'}}>
+          <View style={{height:HAND_INNER_HEIGHT,width:'100%',alignItems:'center',justifyContent:'center'}}>
+            <PlayerHand />
+          </View>
+        </View>
+      </View>
+
+      {/* תוצאות אפשריות — מיני-קלפים באזור 365–415px מהתחתית */}
       {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
-        <View style={{position:'absolute',bottom:HAND_STRIP_HEIGHT + 160,left:0,right:0,zIndex:5,alignItems:'center'}} pointerEvents="box-none">
+        <View style={{position:'absolute',bottom:365,left:0,right:0,height:50,zIndex:5,alignItems:'center',justifyContent:'center'}} pointerEvents="box-none">
           <ResultsStripBelowTable resultsOpen={resultsOpen} filteredResults={(() => {
             const handValuesForStrip = new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []);
             return state.validTargets.filter(t => handValuesForStrip.has(t.result));
@@ -4466,7 +5019,39 @@ function GameScreen() {
         </View>
       )}
 
-      {/* ── SLOT 6: Action buttons — תמיד מעל ההתראה ── */}
+      {/* פסי דיבוג — אופקיים (מתחתית) + אנכיים (לרוחב) כל 50px */}
+      {__DEV__ && (
+        <>
+          {/* קווים אופקיים — מתחתית המסך כל 50px עד למעלה */}
+          {Array.from({ length: Math.ceil((SCREEN_H - HAND_BOTTOM_OFFSET) / 50) + 1 }, (_, i) => i * 50).map((offset) => (
+            <React.Fragment key={`h-${offset}`}>
+              <View
+                style={{position:'absolute',bottom:HAND_BOTTOM_OFFSET + offset,left:0,right:0,height:1,backgroundColor:'#000',zIndex:5}}
+                pointerEvents="none"
+              />
+              <View style={{position:'absolute',bottom:HAND_BOTTOM_OFFSET + offset + 4,right:8,zIndex:6}}>
+                <Text style={{color:'#000',fontSize:10,fontWeight:'700'}}>
+                  {HAND_BOTTOM_OFFSET + offset}px
+                </Text>
+              </View>
+            </React.Fragment>
+          ))}
+          {/* קווים אנכיים — לרוחב המסך כל 50px */}
+          {Array.from({ length: Math.ceil(SCREEN_W / 50) + 1 }, (_, i) => i * 50).map((x) => (
+            <React.Fragment key={`v-${x}`}>
+              <View
+                style={{position:'absolute',left:x,top:0,bottom:0,width:1,backgroundColor:'#000',zIndex:5}}
+                pointerEvents="none"
+              />
+              <View style={{position:'absolute',left:x+2,top:8,zIndex:6}}>
+                <Text style={{color:'#000',fontSize:10,fontWeight:'700'}}>{x}px</Text>
+              </View>
+            </React.Fragment>
+          ))}
+        </>
+      )}
+
+      {/* ── איזור תחתון מאוחד: כפתורי תור + שלוף קלף ויתור + חזרה לתרגיל (נסדר כפתורים אחר כך) ── */}
       {(() => {
         const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
         const fracMin = challengeMinimized && state.pendingFractionTarget !== null;
@@ -4474,33 +5059,65 @@ function GameScreen() {
         const showFracDraw = fracMin && !state.hasPlayedCards;
         const showConfirmEq = bl && !!eqConfirm;
         const btnCount = (canRoll?1:0)+(showDraw?1:0)+(showFracDraw?1:0)+(showConfirmEq?1:0);
-        // ActionBar buttons: "סיים תור" when hasPlayedCards
         const abEndTurn = (pr||bl||so)&&state.hasPlayedCards;
         const totalBtns = btnCount + (abEndTurn?1:0);
-        // GOLDEN RULE fallback: if nothing else shows, show draw card
         const showFallback = totalBtns === 0 && (pr||bl||so);
-        const solo = (totalBtns === 1) || showFallback;
+        const barPaddingBottom = Math.max(24, safe.insets.bottom + 20);
+        const BOTTOM_BAR_HEIGHT = 180;
+        const drawVisible = showDraw || showFracDraw || showFallback;
+        const showSolvedRow = so && !state.hasPlayedCards;
+        const hasStaged = showSolvedRow && state.stagedCards.length > 0;
         return (
-          <View style={{position:'absolute',bottom:Math.max(safe.insets.bottom,(NOTIF_STRIP_RESERVED + safe.insets.bottom) - 40),left:0,right:0,height:160,zIndex:10,overflow:'hidden'}}>
-            <View style={{flex:1,alignItems:'center',gap:0,paddingHorizontal:20,paddingVertical:2}}>
-              {canRoll && <FlashingRollButton onPress={handleRoll} />}
-              {showConfirmEq && (
-                <LulosButton text="▶ בחר קלפים" color="green" width={solo?240:200} height={solo?48:36} fontSize={solo?18:undefined} style={solo?{paddingVertical:16}:undefined} onPress={eqConfirm!.onConfirm} />
+          <View style={{position:'absolute',bottom:30,left:0,right:0,minHeight:BOTTOM_BAR_HEIGHT + safe.insets.bottom,zIndex:10,overflow:'visible',backgroundColor:'transparent',paddingHorizontal:20,paddingTop:12,paddingBottom:barPaddingBottom}}>
+            <View style={{flex:1,justifyContent:'flex-end'}}>
+              <ScrollView style={{flexGrow:0}} contentContainerStyle={{alignItems:'center',gap:8}} showsVerticalScrollIndicator={true} bounces={false}>
+                {canRoll && <FlashingRollButton onPress={handleRoll} />}
+                {showConfirmEq && (
+                  <LulosButton
+                    text="▶ בחר קלפים"
+                    color="green"
+                    width={220}
+                    height={44}
+                    fontSize={16}
+                    onPress={eqConfirm!.onConfirm}
+                  />
+                )}
+                <ActionBar />
+                {/* הנח קלפים + חזרה לתרגיל — בתוך ה-ScrollView כדי שהכפתור לא ייעלם */}
+                {showSolvedRow && (
+                  <View style={{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,flexWrap:'wrap',paddingTop:4}}>
+                    {hasStaged && (
+                      <LulosButton text="הנח קלפים" color="green" width={200} height={48} fontSize={17} onPress={()=>dispatch({type:'CONFIRM_STAGED'})} style={{flex:1.2}} />
+                    )}
+                    <LulosButton text="חזרה לתרגיל" color="yellow" textColor="#FFFFFF" width={160} height={44} fontSize={17} onPress={()=>dispatch({type:'REVERT_TO_BUILDING'})} style={{flex:1}} />
+                  </View>
+                )}
+              </ScrollView>
+              {/* איפוס התרגיל — שורה קבועה מתחת ל-ScrollView */}
+              <View style={{flexShrink:0,minHeight:52,alignItems:'center',justifyContent:'center',gap:8,paddingTop:6,flexDirection:'row',flexWrap:'wrap'}}>
+                {/* איפוס התרגיל — רק ב-building או ב-solved בלי קלפים מונחים (לא רלוונטי אחרי בחירה) */}
+                {bl && !state.hasPlayedCards && state.dice && state.pendingFractionTarget === null && (
+                  <LulosButton text="איפוס התרגיל" color="blue" width={120} height={38} fontSize={14} onPress={() => eqBuilderRef.current?.resetAll()} />
+                )}
+                {so && !hasStaged && !state.hasPlayedCards && state.dice && state.pendingFractionTarget === null && (
+                  <LulosButton text="איפוס התרגיל" color="blue" width={120} height={38} fontSize={14} onPress={() => eqBuilderRef.current?.resetAll()} />
+                )}
+              </View>
+              {/* שורה שנייה — שלוף קלף, מופרדת כדי למנוע חפיפה */}
+              {drawVisible && (
+                <View style={{flexShrink:0,marginTop:10,alignItems:'center'}}>
+                  <LulosButton
+                    text={'\u200Fשלוף קלף - ויתור'}
+                    color="red"
+                    height={40}
+                    fontSize={15}
+                    onPress={()=>{
+                      playDrawForfeitSound();
+                      dispatch(showFracDraw ? {type:'DEFEND_FRACTION_PENALTY'} : {type:'DRAW_CARD'});
+                    }}
+                  />
+                </View>
               )}
-              <ActionBar />
-              <View style={{flex:1}} />
-              {showDraw && (
-                <LulosButton text={'\u200Fשלוף קלף - ויתור'} color="red" height={solo?48:32} fontSize={solo?18:13} style={solo?{paddingVertical:16}:undefined} onPress={()=>dispatch({type:'DRAW_CARD'})} />
-              )}
-              {showFracDraw && (
-                <LulosButton text={'\u200Fשלוף קלף - ויתור'} color="red" height={solo?48:32} fontSize={solo?18:13} style={solo?{paddingVertical:16}:undefined} onPress={()=>dispatch({type:'DEFEND_FRACTION_PENALTY'})} />
-              )}
-              {showFallback && (
-                <LulosButton text={'\u200Fשלוף קלף - ויתור'} color="red" height={48} fontSize={18} style={{paddingVertical:16}} onPress={()=>dispatch({type:'DRAW_CARD'})} />
-              )}
-            </View>
-            <View style={{marginTop:20}}>
-              <BottomControlsBar />
             </View>
           </View>
         );
@@ -4548,7 +5165,6 @@ function GameScreen() {
               <Text style={{color:'#FCA5A5',fontSize:14,fontWeight:'700',flex:1,textAlign:'right',lineHeight:20}}>{`אין הגנה? שלוף ${state.fractionPenalty} קלפי עונש`}</Text>
             </View>
           </View>
-          <Text style={{color:'rgba(255,255,255,0.6)',fontSize:12,fontWeight:'600',textAlign:'center',marginBottom:12,lineHeight:18}}>⚠️ ג׳וקר לא מגן מפני התקפת שבר — רק קלף מספר שמתחלק או קלף שבר.</Text>
           <View style={{alignItems:'center'}}>
             <CasinoButton text="👆 הנח קלף מהיד" width={240} height={56} onPress={() => setChallengeMinimized(true)} />
           </View>
@@ -4648,7 +5264,7 @@ function GameScreen() {
         </Animated.View>
       )}
 
-    </ImageBackground>
+    </View>
   );
 }
 
@@ -4675,7 +5291,7 @@ function GameOver() {
       <ScrollView style={{width:'100%',maxHeight:220}} contentContainerStyle={{paddingHorizontal:8,alignItems:'center'}} showsVerticalScrollIndicator={false}>
         <View style={{backgroundColor:'rgba(55,65,81,0.5)',borderRadius:12,padding:16,width:'100%'}}>
           <Text style={{color:'#9CA3AF',fontSize:11,fontWeight:'700',letterSpacing:1,marginBottom:10,textAlign:'right'}}>תוצאות סופיות</Text>
-          {sorted.map((p,i)=><View key={p.id} style={{flexDirection:'row',justifyContent:'space-between',paddingVertical:3}}><Text style={{color:'#D1D5DB',fontSize:14}} numberOfLines={1}>{i+1}. {p.name}{p.hand.length===0?' ★':''}</Text><Text style={{color:'#9CA3AF',fontSize:14}}>{p.hand.length} קלפים נותרו</Text></View>)}
+          {sorted.map((p,i)=><View key={p.id} style={{flexDirection:'row',justifyContent:'space-between',paddingVertical:3}}><Text style={{color:'#D1D5DB',fontSize:14}} numberOfLines={1}>{i+1}. {p.name}{p.hand.length===2?' ★':''}</Text><Text style={{color:'#9CA3AF',fontSize:14}}>{p.hand.length} קלפים נותרו</Text></View>)}
         </View>
       </ScrollView>
       <LulosButton text="שחק/י שוב" color="green" width={280} height={64} onPress={()=>dispatch({type:'RESET_GAME'})} style={{marginTop:20}} />
@@ -4722,12 +5338,17 @@ const alertBubbleStyle = StyleSheet.create({
 
 function NotificationZone() {
   const { state, dispatch } = useGame();
-  console.log('[NZ] render, phase:', state.phase, 'queue length:', state.notifications?.length, 'notifications:', JSON.stringify(state.notifications?.map(n => ({id:n.id,title:n.title,msg:n.message?.slice(0,30)}))));
-  // Hide notifications on the welcome screen (turn-transition phase)
-  const notif = state.phase === 'turn-transition' ? null : (state.notifications[0] ?? null);
+  const insets = useSafeAreaInsets();
+  if (__DEV__) console.log('[NZ] render, phase:', state.phase, 'queue length:', state.notifications?.length, 'notifications:', JSON.stringify(state.notifications?.map(n => ({id:n.id,title:n.title,msg:n.message?.slice(0,30)}))));
+  // התראות למשתמש חדש (onboarding) מוצגות בכל שלב — כולל במסך מעבר התור
+  const notif = (state.notifications ?? []).find(n =>
+    !(state.pendingFractionTarget !== null && n.id.startsWith('guidance-guidance_fraction'))
+  ) ?? null;
   const NOTIF_STRIP_H = 56;
   const slideY = useRef(new Animated.Value(NOTIF_STRIP_H)).current;
   const prevId = useRef<string | null>(null);
+  // מעל המניפה (תחתית מניפה ב־HAND_BOTTOM_OFFSET px) — ב־AppShell קואורדינטות מתחתית אזור התוכן
+  const notifBottom = Math.max(20, HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + 20 - insets.bottom);
 
   useEffect(() => {
     if (!notif) {
@@ -4755,7 +5376,7 @@ function NotificationZone() {
 
   return (
     <Animated.View style={{
-      position:'absolute', bottom:20, left:16, right:16, zIndex:9999,
+      position:'absolute', bottom: notifBottom, left:16, right:16, zIndex:9999, elevation:9999,
       transform:[{translateY:slideY}],
     }} pointerEvents="box-none">
       <View style={[alertBubbleStyle.box, { flexDirection: 'row', alignItems: 'center', gap: 12, maxWidth: '100%' }]}>
@@ -4775,17 +5396,137 @@ function NotificationZone() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  משחק ברשת — מסך שחקן (היד שלי) + מעבר אוטומטי כשמגיע תורי
+// ═══════════════════════════════════════════════════════════════
+
+/** מסך "המסך שלי" — מציג את היד שלי בלבד; שחקן יכול לעבור לכאן ולחזור לצפייה */
+function PlayerWaitingScreen({ myHand, currentTurnName, onBack }: { myHand: Card[]; currentTurnName: string; onBack: () => void }) {
+  const sorted = [...myHand].sort((a, b) => {
+    const o = { number: 0, fraction: 1, operation: 2, joker: 3 } as const;
+    if (o[a.type] !== o[b.type]) return o[a.type] - o[b.type];
+    if (a.type === 'number' && b.type === 'number') return (a.value ?? 0) - (b.value ?? 0);
+    return 0;
+  });
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0a1628', paddingTop: 56, paddingHorizontal: 16, paddingBottom: 24 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Text style={{ color: '#F59E0B', fontSize: 20, fontWeight: '800' }}>המסך שלי</Text>
+        <TouchableOpacity onPress={onBack} style={{ backgroundColor: '#2563EB', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 }}>
+          <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '700' }}>חזרה לצפייה במשחק</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 12, textAlign: 'right' }}>תור של {currentTurnName} — צופה מהצד</Text>
+      <Text style={{ color: '#E2E8F0', fontSize: 14, fontWeight: '600', marginBottom: 8, textAlign: 'right' }}>היד שלי ({myHand.length} קלפים)</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', gap: 8, paddingVertical: 12 }}>
+        {sorted.map((card) => (
+          <GameCard key={card.id} card={card} small />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** עטיפה למשחק ברשת: מצב צפייה אחרי סיום תור, מעבר ל"מסך שלי", ופתיחה אוטומטית כשמגיע תורי */
+function OnlineGameWrapper() {
+  const { state } = useGame();
+  const mp = useMultiplayerOptional();
+  const myPlayerIndex = (state as any).myPlayerIndex ?? 0;
+  const isMyTurn = state.currentPlayerIndex === myPlayerIndex;
+  const currentTurnName = state.players[state.currentPlayerIndex]?.name ?? 'שחקן';
+  const [viewMode, setViewMode] = useState<'game' | 'player'>('game');
+  const prevMyTurn = useRef(isMyTurn);
+
+  useEffect(() => {
+    if (isMyTurn && !prevMyTurn.current) {
+      setViewMode('game');
+      mp?.clearToast?.();
+    }
+    prevMyTurn.current = isMyTurn;
+  }, [isMyTurn, mp]);
+
+  const myHand = state.players[myPlayerIndex]?.hand ?? [];
+
+  if (viewMode === 'player') {
+    return <PlayerWaitingScreen myHand={myHand} currentTurnName={currentTurnName} onBack={() => setViewMode('game')} />;
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <GameScreen />
+      {!isMyTurn && (
+        <TouchableOpacity
+          onPress={() => setViewMode('player')}
+          style={{
+            position: 'absolute',
+            bottom: 100,
+            left: 16,
+            backgroundColor: 'rgba(37,99,235,0.9)',
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 10,
+            zIndex: 100,
+          }}
+        >
+          <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '700' }}>למסך שלי</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  בחירת אופן משחק — במכשיר אחד (כמה שחקנים) או ברשת
+// ═══════════════════════════════════════════════════════════════
+
+function PlayModeChoiceScreen({ onLocal, onOnline }: { onLocal: () => void; onOnline: () => void }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0a1628', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
+      <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 20, fontWeight: '800', marginBottom: 24, textAlign: 'center' }}>איך לשחק?</Text>
+      <LulosButton text="משחק במכשיר אחד (כמה שחקנים)" color="green" width={280} height={52} fontSize={15} onPress={onLocal} style={{ marginBottom: 16 }} />
+      <LulosButton text="משחק ברשת" color="blue" width={280} height={52} fontSize={15} onPress={onOnline} />
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  ROUTER + APP + REGISTER
 // ═══════════════════════════════════════════════════════════════
 
 function GameRouter() {
+  const mp = useMultiplayerOptional();
   const { state } = useGame();
+  const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online'>('choose');
+  // #region agent log
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:GameRouter',message:'GameRouter render',data:{hypothesisId:'H5',playMode,phase:state?.phase,hasMp:!!mp},timestamp:Date.now()})}).catch(()=>{}); }
+  // #endregion
+  if (playMode === 'choose') {
+    return (
+      <PlayModeChoiceScreen
+        onLocal={() => setPlayMode('local')}
+        onOnline={() => setPlayMode('online')}
+      />
+    );
+  }
+
+  if (playMode === 'local') {
+    if (state.phase === 'setup') return <StartScreen onBackToChoice={() => setPlayMode('choose')} />;
+    switch (state.phase) {
+      case 'turn-transition': return <TurnTransition />;
+      case 'pre-roll': case 'building': case 'solved': return <GameScreen />;
+      case 'game-over': return <GameOver />;
+      default: return <StartScreen onBackToChoice={() => setPlayMode('choose')} />;
+    }
+  }
+
+  // playMode === 'online' — משחק ברשת (צפייה + מסך שחקן, מעבר אוטומטי בתורי)
+  if (!mp?.inRoom) return <LobbyEntry onBackToChoice={() => setPlayMode('choose')} />;
+  if (mp.inRoom && !mp.serverState) return <LobbyScreen />;
   switch (state.phase) {
-    case 'setup': return <StartScreen />;
+    case 'setup': return <LobbyEntry onBackToChoice={() => setPlayMode('choose')} />;
     case 'turn-transition': return <TurnTransition />;
-    case 'pre-roll': case 'building': case 'solved': return <GameScreen />;
+    case 'pre-roll': case 'building': case 'solved': return <OnlineGameWrapper />;
     case 'game-over': return <GameOver />;
-    default: return <StartScreen />;
+    default: return <LobbyEntry onBackToChoice={() => setPlayMode('choose')} />;
   }
 }
 
@@ -4937,6 +5678,9 @@ function SplashScreen({ onFinish }: { onFinish: () => void }) {
 
 function AppShell({ showSplash, setShowSplash }: { showSplash: boolean; setShowSplash: (v: boolean) => void }) {
   const insets = useSafeAreaInsets();
+  // #region agent log
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:AppShell',message:'AppShell render',data:{hypothesisId:'H2',showSplash},timestamp:Date.now()})}).catch(()=>{}); }
+  // #endregion
   return (
     <View style={{
       flex: 1,
@@ -4959,18 +5703,28 @@ function AppShell({ showSplash, setShowSplash }: { showSplash: boolean; setShowS
 function App() {
   const [fontsLoaded] = useFonts({ Fredoka_700Bold });
   const [showSplash, setShowSplash] = useState(true);
-  if (!fontsLoaded) return null;
+  // #region agent log
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:App',message:'App render',data:{hypothesisId:'H1',fontsLoaded},timestamp:Date.now()})}).catch(()=>{}); }
+  if (!fontsLoaded) { if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:App',message:'App return null',data:{hypothesisId:'H1',reason:'fontsLoaded false'},timestamp:Date.now()})}).catch(()=>{}); } return null; }
+  // #endregion
   return (
-    <GameProvider>
-      <AppShell showSplash={showSplash} setShowSplash={setShowSplash} />
-    </GameProvider>
+    <MultiplayerProvider>
+      <GameProvider>
+        <AppShell showSplash={showSplash} setShowSplash={setShowSplash} />
+      </GameProvider>
+    </MultiplayerProvider>
   );
 }
 
 // SafeAreaProvider ברמת השורש — חובה לפני כל שימוש ב-useSafeAreaInsets
+// key מאלץ רענון מלא אחרי Reload (מניעת "נתקע" כשהמשחק כבר עלה)
 registerRootComponent(function Root() {
+  // #region agent log
+  if (__DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'index.tsx:Root',message:'Root render',data:{hypothesisId:'H2'},timestamp:Date.now()})}).catch(()=>{}); }
+  // #endregion
+  const [rootKey] = useState(() => `${Date.now()}-${Math.random()}`);
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider key={rootKey}>
       <App />
     </SafeAreaProvider>
   );

@@ -10,6 +10,8 @@ export interface LulosButtonProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  /** Override text color (e.g. '#FFFFFF' for white on dark yellow button) */
+  textColor?: string;
   style?: any;
 }
 
@@ -51,8 +53,9 @@ const PALETTES = {
   },
 };
 
-function buildHTML(text: string, color: keyof typeof PALETTES, w: number, h: number, fs: number): string {
+function buildHTML(text: string, color: keyof typeof PALETTES, w: number, h: number, fs: number, textFillOverride?: string): string {
   const p = PALETTES[color];
+  const textFill = textFillOverride ?? p.text.fill;
   const escaped = text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // For JS string inside HTML
   const jsEscaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "\\'");
@@ -164,7 +167,7 @@ b.font="900 "+FS+"px system-ui,sans-serif";
 var tx2=W/2,ty2=H/2-1;
 b.fillStyle="${p.text.shadow}";b.fillText("${jsEscaped}",tx2+1,ty2+2);
 b.strokeStyle="${p.text.stroke}";b.lineWidth=3;b.strokeText("${jsEscaped}",tx2,ty2);
-b.fillStyle="${p.text.fill}";b.fillText("${jsEscaped}",tx2,ty2);
+b.fillStyle="${textFill}";b.fillText("${jsEscaped}",tx2,ty2);
 
 // Twinkle positions
 var twinkles=[];
@@ -228,7 +231,7 @@ loop();
 <\/script></body></html>`;
 }
 
-export function LulosButton({ text, color, onPress, disabled, width, height = 68, fontSize, style }: LulosButtonProps) {
+export function LulosButton({ text, color, onPress, disabled, width, height = 68, fontSize, textColor, style }: LulosButtonProps) {
   const fs = fontSize ?? Math.round(height * 0.38);
   const w = width ?? Math.max(140, Math.min(300, text.length * fs * 0.6 + 80));
   const palette = PALETTES[color];
@@ -245,7 +248,7 @@ export function LulosButton({ text, color, onPress, disabled, width, height = 68
 
   const translateY = pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 4] });
 
-  const html = buildHTML(text, color, w, height, fs);
+  const html = buildHTML(text, color, w, height, fs, textColor);
 
   return (
     <View style={[{ width: w, height: height + 8, opacity: disabled ? 0.3 : 1 }, style]}>
@@ -273,9 +276,9 @@ export function LulosButton({ text, color, onPress, disabled, width, height = 68
           },
         ]}>
           <WebView
-            key={text + color + w + height}
+            key={text + color + w + height + (textColor ?? '')}
             source={{ html }}
-            style={btnStyles.webview}
+            style={[btnStyles.webview, { borderRadius: height / 2 }]}
             scrollEnabled={false}
             bounces={false}
             pointerEvents="none"
@@ -294,7 +297,6 @@ const btnStyles = StyleSheet.create({
   webview: {
     flex: 1,
     backgroundColor: 'transparent',
-    borderRadius: 34,
     overflow: 'hidden',
   },
 });
