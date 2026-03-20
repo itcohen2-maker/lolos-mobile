@@ -133,7 +133,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
 
   // ── Game Start ──
 
-  socket.on('start_game', ({ difficulty }) => {
+  socket.on('start_game', ({ difficulty, gameSettings }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) { socket.emit('error', { message: 'לא נמצא חדר' }); return; }
     const { room, playerId } = info;
@@ -141,7 +141,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     if (room.players.length < 2) { socket.emit('error', { message: 'דרושים לפחות 2 שחקנים' }); return; }
     if (room.state) { socket.emit('error', { message: 'המשחק כבר התחיל' }); return; }
 
-    room.state = startGame(room, difficulty);
+    room.state = startGame(room, difficulty, gameSettings);
     room.lastActivity = Date.now();
 
     // Send personalized game_started to each player

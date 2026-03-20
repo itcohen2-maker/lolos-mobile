@@ -63,6 +63,16 @@ export type GamePhase =
   | 'solved'
   | 'game-over';
 
+/** הגדרות שמשתמש המארח קובע בתחילת משחק — משודרות לכל לקוח ב־PlayerView */
+export interface HostGameSettings {
+  diceMode: '2' | '3';
+  showFractions: boolean;
+  showPossibleResults: boolean;
+  showSolveExercise: boolean;
+  timerSetting: '30' | '60' | 'off' | 'custom';
+  timerCustomSeconds: number;
+}
+
 // ── Server Game State (full, only on server) ──
 
 export interface ServerGameState {
@@ -87,6 +97,7 @@ export interface ServerGameState {
   lastMoveMessage: string | null;
   lastEquationDisplay: string | null;
   difficulty: 'easy' | 'full';
+  hostGameSettings: HostGameSettings;
   winner: Player | null;
   message: string;
 }
@@ -117,6 +128,7 @@ export interface PlayerView {
   consecutiveIdenticalPlays: number;
   lastMoveMessage: string | null;
   difficulty: 'easy' | 'full';
+  gameSettings: HostGameSettings;
   winner: { id: string; name: string } | null;
   message: string;
 }
@@ -127,7 +139,7 @@ export interface ClientToServerEvents {
   create_room: (data: { playerName: string }) => void;
   join_room: (data: { roomCode: string; playerName: string }) => void;
   leave_room: () => void;
-  start_game: (data: { difficulty: 'easy' | 'full' }) => void;
+  start_game: (data: { difficulty: 'easy' | 'full'; gameSettings?: Partial<HostGameSettings> }) => void;
   roll_dice: () => void;
   set_operator: (data: { position: number; operator: string }) => void;
   confirm_equation: (data: { result: number; equationDisplay: string }) => void;

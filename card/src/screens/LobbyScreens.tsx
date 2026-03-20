@@ -2,7 +2,7 @@
 // LobbyScreens — Create/Join room + Lobby wait
 // ============================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,18 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useMultiplayer } from '../hooks/useMultiplayer';
+import type { HostGameSettings } from '../../shared/types';
+
+function lobbyTimerLabel(ts: HostGameSettings['timerSetting'], customSec: number): string {
+  if (ts === 'off') return 'ללא';
+  if (ts === 'custom') {
+    return customSec >= 60
+      ? `${Math.floor(customSec / 60)} דק׳ ${customSec % 60} שנ׳`
+      : `${customSec} שנ׳`;
+  }
+  if (ts === '60') return '1 דקה';
+  return `${ts} שנ׳`;
+}
 
 export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } = {}) {
   const { createRoom, joinRoom, error, clearError } = useMultiplayer();
@@ -109,10 +121,17 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
 export function LobbyScreen() {
   const { roomCode, players, isHost, startGame, leaveRoom, error, clearError } = useMultiplayer();
   const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
+  const [diceMode, setDiceMode] = useState<HostGameSettings['diceMode']>('3');
+  const [showFractions, setShowFractions] = useState(true);
+  const [showPossibleResults, setShowPossibleResults] = useState(true);
+  const [showSolveExercise, setShowSolveExercise] = useState(true);
+  const [timerSetting, setTimerSetting] = useState<HostGameSettings['timerSetting']>('off');
+  const [timerCustomSeconds, setTimerCustomSeconds] = useState(60);
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     if (error) {
+      setStarting(false);
       const t = setTimeout(clearError, 4000);
       return () => clearTimeout(t);
     }
@@ -121,8 +140,29 @@ export function LobbyScreen() {
   const handleStart = () => {
     if (!isHost || players.length < 2) return;
     setStarting(true);
-    startGame(difficulty);
+    const gameSettings: HostGameSettings = {
+      diceMode,
+      showFractions,
+      showPossibleResults,
+      showSolveExercise,
+      timerSetting,
+      timerCustomSeconds: timerSetting === 'custom' ? timerCustomSeconds : 60,
+    };
+    startGame(difficulty, gameSettings);
   };
+
+  const hostSettingsSummary = useMemo(() => {
+    const ts = timerSetting === 'custom' ? timerCustomSeconds : 60;
+    const lines = [
+      `קושי: ${difficulty === 'easy' ? 'קל (0–12)' : 'מלא (0–25)'}`,
+      `קוביות: ${diceMode}`,
+      `שברים: ${showFractions ? 'כן' : 'לא'}`,
+      `תוצאות אפשריות: ${showPossibleResults ? 'הצג' : 'הסתר'}`,
+      `פתרון תרגיל: ${showSolveExercise ? 'מופעל' : 'כבוי'}`,
+      `טיימר: ${lobbyTimerLabel(timerSetting, ts)}`,
+    ];
+    return lines.join('\n');
+  }, [difficulty, diceMode, showFractions, showPossibleResults, showSolveExercise, timerSetting, timerCustomSeconds]);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
@@ -160,6 +200,114 @@ export function LobbyScreen() {
               <Text style={[styles.diffText, difficulty === 'full' && styles.diffTextActive]}>מלא</Text>
             </TouchableOpacity>
           </View>
+
+          <Text style={styles.label}>קוביות</Text>
+          <View style={styles.diffRow}>
+            <TouchableOpacity
+              style={[styles.diffBtn, diceMode === '2' && styles.diffBtnActive]}
+              onPress={() => setDiceMode('2')}
+            >
+              <Text style={[styles.diffText, diceMode === '2' && styles.diffTextActive]}>2 קוביות</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.diffBtn, diceMode === '3' && styles.diffBtnActive]}
+              onPress={() => setDiceMode('3')}
+            >
+              <Text style={[styles.diffText, diceMode === '3' && styles.diffTextActive]}>3 קוביות</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>שברים</Text>
+          <View style={styles.diffRow}>
+            <TouchableOpacity
+              style={[styles.diffBtn, showFractions && styles.diffBtnActive]}
+              onPress={() => setShowFractions(true)}
+            >
+              <Text style={[styles.diffText, showFractions && styles.diffTextActive]}>עם שברים</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.diffBtn, !showFractions && styles.diffBtnActive]}
+              onPress={() => setShowFractions(false)}
+            >
+              <Text style={[styles.diffText, !showFractions && styles.diffTextActive]}>בלי שברים</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>תוצאות אפשריות</Text>
+          <View style={styles.diffRow}>
+            <TouchableOpacity
+              style={[styles.diffBtn, showPossibleResults && styles.diffBtnActive]}
+              onPress={() => setShowPossibleResults(true)}
+            >
+              <Text style={[styles.diffText, showPossibleResults && styles.diffTextActive]}>הצג</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.diffBtn, !showPossibleResults && styles.diffBtnActive]}
+              onPress={() => setShowPossibleResults(false)}
+            >
+              <Text style={[styles.diffText, !showPossibleResults && styles.diffTextActive]}>הסתר</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>פתרון תרגיל (מיני־קלפים)</Text>
+          <View style={styles.diffRow}>
+            <TouchableOpacity
+              style={[styles.diffBtn, showSolveExercise && styles.diffBtnActive]}
+              onPress={() => setShowSolveExercise(true)}
+            >
+              <Text style={[styles.diffText, showSolveExercise && styles.diffTextActive]}>מופעל</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.diffBtn, !showSolveExercise && styles.diffBtnActive]}
+              onPress={() => setShowSolveExercise(false)}
+            >
+              <Text style={[styles.diffText, !showSolveExercise && styles.diffTextActive]}>כבוי</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>טיימר לתור</Text>
+          <View style={styles.timerGrid}>
+            {([
+              ['off', 'ללא'] as const,
+              ['30', '30 שנ׳'] as const,
+              ['60', '1 דקה'] as const,
+              ['custom', 'מותאם'] as const,
+            ]).map(([key, label]) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.timerChip, timerSetting === key && styles.diffBtnActive]}
+                onPress={() => setTimerSetting(key)}
+              >
+                <Text style={[styles.timerChipText, timerSetting === key && styles.diffTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {timerSetting === 'custom' && (
+            <>
+              <Text style={styles.hint}>שניות לתור (10–600)</Text>
+              <TextInput
+                style={styles.input}
+                value={String(timerCustomSeconds)}
+                onChangeText={(t) => {
+                  const n = parseInt(t.replace(/\D/g, ''), 10);
+                  if (Number.isNaN(n)) {
+                    setTimerCustomSeconds(60);
+                    return;
+                  }
+                  setTimerCustomSeconds(Math.min(600, Math.max(10, n)));
+                }}
+                keyboardType="number-pad"
+                maxLength={3}
+                textAlign="center"
+              />
+            </>
+          )}
+
+          <Text style={styles.label}>סיכום לפני התחלה (כל השחקנים)</Text>
+          <View style={styles.summaryBox}>
+            <Text style={styles.summaryText}>{hostSettingsSummary}</Text>
+          </View>
+
           <TouchableOpacity
             style={[styles.primaryBtn, (players.length < 2 || starting) && styles.primaryBtnDisabled]}
             onPress={handleStart}
@@ -177,7 +325,7 @@ export function LobbyScreen() {
         </>
       )}
       {!isHost && (
-        <Text style={styles.waitingText}>מחכים שהמארח יתחיל את המשחק...</Text>
+        <Text style={styles.waitingText}>מחכים שהמארח יתחיל את המשחק… ההגדרות יופיעו אצל כולם עם תרחיש המשחק.</Text>
       )}
       {error && (
         <View style={styles.errorBox}>
@@ -191,8 +339,8 @@ export function LobbyScreen() {
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: '#0a1628' },
   container: { padding: 24, paddingTop: 60, alignItems: 'center' },
-  backBtn: { alignSelf: 'flex-start', marginBottom: 16 },
-  backBtnText: { color: '#93C5FD', fontSize: 16, fontWeight: '600' },
+  backBtn: { alignSelf: 'flex-start', marginBottom: 16, paddingVertical: 8, paddingHorizontal: 12 },
+  backBtnText: { color: '#93C5FD', fontSize: 14, fontWeight: '600' },
   title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8 },
   subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24 },
   label: { color: '#D1D5DB', fontSize: 14, fontWeight: '600', alignSelf: 'flex-start', marginTop: 16, marginBottom: 8 },
@@ -250,9 +398,35 @@ const styles = StyleSheet.create({
   diffBtnActive: { backgroundColor: '#2563EB' },
   diffText: { color: '#9CA3AF', fontWeight: '600' },
   diffTextActive: { color: '#FFF' },
-  waitingText: { color: '#9CA3AF', fontSize: 14, marginTop: 24 },
+  timerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: '100%',
+    gap: 8,
+    marginBottom: 4,
+    justifyContent: 'center',
+  },
+  timerChip: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#374151',
+    alignItems: 'center',
+  },
+  timerChipText: { color: '#9CA3AF', fontWeight: '600', fontSize: 13 },
+  waitingText: { color: '#9CA3AF', fontSize: 14, marginTop: 24, textAlign: 'center' },
+  summaryBox: {
+    width: '100%',
+    backgroundColor: 'rgba(15,23,42,0.75)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(250,204,21,0.35)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 4,
+  },
+  summaryText: { color: '#E2E8F0', fontSize: 13, fontWeight: '600', lineHeight: 21, textAlign: 'right' },
   errorBox: { marginTop: 16, padding: 12, backgroundColor: 'rgba(239,68,68,0.2)', borderRadius: 10, width: '100%' },
   errorText: { color: '#FCA5A5', textAlign: 'center' },
-  backBtn: { alignSelf: 'flex-start', marginBottom: 16, paddingVertical: 8, paddingHorizontal: 12 },
-  backBtnText: { color: '#93C5FD', fontSize: 14, fontWeight: '600' },
 });

@@ -24,11 +24,12 @@ const PALETTES = {
     rnShadow: '#0a2a18',
   },
   red: {
-    s1: '#2A0808', s2: '#420E0E', s3: '#5C1A1A', s4: '#6B2222',
-    hi: 'rgba(200,60,60,', sym: '#8B2222', symhi: '#CC5555',
-    twinkle: 'rgba(255,210,210,0.5)', twinkleGlow: 'rgba(200,80,80,0)',
+    // Google red family (#EA4335) with darker rim shades
+    s1: '#8B1A12', s2: '#A5271C', s3: '#DC4736', s4: '#EA4335',
+    hi: 'rgba(234,67,53,', sym: '#B3261E', symhi: '#DC4736',
+    twinkle: 'rgba(255,170,170,0.5)', twinkleGlow: 'rgba(234,67,53,0)',
     text: { fill: '#FFD0CC', stroke: 'rgba(100,10,5,0.5)', shadow: 'rgba(60,5,0,0.7)' },
-    rnShadow: '#2a0808',
+    rnShadow: '#8B1A12',
   },
   blue: {
     s1: '#060E2A', s2: '#0E1A42', s3: '#12245C', s4: '#1A2E6B',
@@ -57,8 +58,8 @@ function buildHTML(text: string, color: keyof typeof PALETTES, w: number, h: num
   const p = PALETTES[color];
   const textFill = textFillOverride ?? p.text.fill;
   const escaped = text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // For JS string inside HTML
-  const jsEscaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "\\'");
+  // For JS string inside HTML (newline as \n so runtime string has real newline for multiline)
+  const jsEscaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "\\'").replace(/\n/g, '\\n');
   return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>*{margin:0;padding:0}html,body{width:100%;height:100%;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="c"></canvas><script>
 var cv=document.getElementById("c"),x=cv.getContext("2d");
 var W=${w},H=${h},FS=${fs};
@@ -161,13 +162,21 @@ b.strokeStyle="rgba(0,0,0,0.4)";b.lineWidth=1.2;b.stroke();
 pp(b,1.5,1.5,W-3,H-6);
 b.strokeStyle="rgba(255,248,180,0.25)";b.lineWidth=0.8;b.stroke();
 
-// Pre-render text onto bg
+// Pre-render text onto bg (support multiline: split by \\n)
 b.textAlign="center";b.textBaseline="middle";
 b.font="900 "+FS+"px system-ui,sans-serif";
 var tx2=W/2,ty2=H/2-1;
-b.fillStyle="${p.text.shadow}";b.fillText("${jsEscaped}",tx2+1,ty2+2);
-b.strokeStyle="${p.text.stroke}";b.lineWidth=3;b.strokeText("${jsEscaped}",tx2,ty2);
-b.fillStyle="${textFill}";b.fillText("${jsEscaped}",tx2,ty2);
+var textStr="${jsEscaped}";
+var textLines=textStr.split("\\n");
+var lineHeight=FS*1.25;
+var totalTextH=(textLines.length-1)*lineHeight;
+var startY=ty2-totalTextH/2;
+for(var li=0;li<textLines.length;li++){
+var ly=startY+li*lineHeight;
+b.fillStyle="${p.text.shadow}";b.fillText(textLines[li],tx2+1,ly+2);
+b.strokeStyle="${p.text.stroke}";b.lineWidth=3;b.strokeText(textLines[li],tx2,ly);
+b.fillStyle="${textFill}";b.fillText(textLines[li],tx2,ly);
+}
 
 // Twinkle positions
 var twinkles=[];

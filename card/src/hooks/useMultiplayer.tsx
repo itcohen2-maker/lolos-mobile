@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { PlayerView } from '../../shared/types';
+import type { PlayerView, HostGameSettings } from '../../shared/types';
 
 // Default server URL — same machine. For device use your computer's LAN IP (e.g. 192.168.1.x:3001)
 const getServerUrl = () => {
@@ -44,7 +44,7 @@ export interface MultiplayerContextValue {
   createRoom: (playerName: string) => void;
   joinRoom: (roomCode: string, playerName: string) => void;
   leaveRoom: () => void;
-  startGame: (difficulty: 'easy' | 'full') => void;
+  startGame: (difficulty: 'easy' | 'full', gameSettings?: Partial<HostGameSettings>) => void;
   // Game state from server (when game has started)
   serverState: PlayerView | null;
   // Emit game actions (only valid when serverState is set)
@@ -72,6 +72,8 @@ export function useMultiplayerOptional(): MultiplayerContextValue | null {
 
 /** Adapt server PlayerView to client GameState shape (index.tsx) so existing GameScreen works */
 function playerViewToGameState(view: PlayerView): any {
+  const myPlayerIndex = view.players.findIndex((p) => p.id === view.myPlayerId);
+  const safeMyIndex = myPlayerIndex >= 0 ? myPlayerIndex : 0;
   const players = view.players.map((p, i) => ({
     id: i,
     name: p.name,
@@ -79,9 +81,18 @@ function playerViewToGameState(view: PlayerView): any {
     calledLolos: p.calledLolos,
   }));
   const drawPileFake = Array.from({ length: view.deckCount }, (_, i) => ({ id: `deck-${i}`, type: 'number' as const, value: 0 }));
+  const gs = view.gameSettings ?? {
+    diceMode: '3' as const,
+    showFractions: true,
+    showPossibleResults: true,
+    showSolveExercise: true,
+    timerSetting: 'off' as const,
+    timerCustomSeconds: 60,
+  };
   return {
     phase: view.phase,
     players,
+    myPlayerIndex: safeMyIndex,
     currentPlayerIndex: view.currentPlayerIndex,
     drawPile: drawPileFake,
     discardPile: view.pileTop ? [view.pileTop] : [],
@@ -110,10 +121,12 @@ function playerViewToGameState(view: PlayerView): any {
     lastDiscardCount: 0,
     lastEquationDisplay: null,
     difficulty: view.difficulty,
-    diceMode: '3' as const,
-    showFractions: true,
-    showPossibleResults: true,
-    timerSetting: 'off' as const,
+    diceMode: gs.diceMode,
+    showFractions: gs.showFractions,
+    showPossibleResults: gs.showPossibleResults,
+    showSolveExercise: gs.showSolveExercise,
+    timerSetting: gs.timerSetting,
+    timerCustomSeconds: gs.timerCustomSeconds,
     winner: view.winner ? { id: 0, name: view.winner.name, hand: [], calledLolos: false } : null,
     message: view.message,
     roundsPlayed: 0,
@@ -246,8 +259,12 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     setIsHost(false);
   }, []);
 
-  const startGame = useCallback((difficulty: 'easy' | 'full') => {
-    socketRef.current?.emit('start_game', { difficulty });
+  const startGame = useCallback((difficulty: 'easy' | 'full', gameSettings?: Partial<HostGameSettings>) => {
+    if (gameSettings && Object.keys(gameSettings).length > 0) {
+      socketRef.current?.emit('start_game', { difficulty, gameSettings });
+    } else {
+      socketRef.current?.emit('start_game', { difficulty });
+    }
   }, []);
 
   const emit = useCallback((event: string, data?: any) => {

@@ -1901,12 +1901,12 @@ function StartScreen() {
   const mx = diff === 'easy' ? 8 : 10;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: '#111827' }} contentContainerStyle={{ padding: 24, paddingTop: 60, alignItems: 'center' }} keyboardShouldPersistTaps="handled">
-      <Text style={{ fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4 }}>משחק קלפים</Text>
-      <Text style={{ color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28 }}>משחק קלפים חשבוני חינוכי</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: '#111827' }} contentContainerStyle={{ padding: 24, paddingTop: 60, alignItems: 'flex-end' }} keyboardShouldPersistTaps="handled">
+      <Text style={{ fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4, alignSelf: 'center' }}>משחק קלפים</Text>
+      <Text style={{ color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center' }}>משחק קלפים חשבוני חינוכי</Text>
 
       <Text style={ssS.label}>מספר שחקנים</Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-start' }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-end', direction: 'ltr' }}>
         {Array.from({ length: mx - 1 }, (_, i) => i + 2).map(n => (
           <TouchableOpacity key={n} onPress={() => setPc(n)} style={[ssS.cBtn, pc === n && ssS.cAct]}>
             <Text style={[ssS.cTxt, pc === n && { color: '#FFF' }]}>{n}</Text>
@@ -1922,12 +1922,12 @@ function StartScreen() {
       ))}
 
       <Text style={ssS.label}>רמת קושי</Text>
-      <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-        <TouchableOpacity style={[ssS.dBtn, diff === 'easy' && { backgroundColor: '#16A34A' }]} onPress={() => { setDiff('easy'); setPc(c => Math.min(c, 8)); }}>
-          <Text style={[ssS.dTxt, diff === 'easy' && { color: '#FFF' }]}>קל (0-12)</Text>
-        </TouchableOpacity>
+      <View style={{ flexDirection: 'row', gap: 10, width: '100%', direction: 'ltr' }}>
         <TouchableOpacity style={[ssS.dBtn, diff === 'full' && { backgroundColor: '#DC2626' }]} onPress={() => setDiff('full')}>
           <Text style={[ssS.dTxt, diff === 'full' && { color: '#FFF' }]}>מלא (0-25)</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[ssS.dBtn, diff === 'easy' && { backgroundColor: '#16A34A' }]} onPress={() => { setDiff('easy'); setPc(c => Math.min(c, 8)); }}>
+          <Text style={[ssS.dTxt, diff === 'easy' && { color: '#FFF' }]}>קל (0-12)</Text>
         </TouchableOpacity>
       </View>
 
@@ -1944,7 +1944,7 @@ function StartScreen() {
           <Text style={ssS.rTitle}>איך משחקים במשחק</Text>
           <View style={{ backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)', padding: 12, marginBottom: 14 }}>
             <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 6, textAlign: 'right' }}>משתמש חדש?</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 20, textAlign: 'right' }}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים. למטה מפורט כל החוקים.</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 20, textAlign: 'right' }}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים לתרגיל. שחקן שנשארו לו 2 קלפים ביד — מנצח.</Text>
           </View>
           {[
             'כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!',
@@ -1960,7 +1960,7 @@ function StartScreen() {
   );
 }
 const ssS = StyleSheet.create({
-  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'flex-start', marginBottom: 8, marginTop: 16 },
+  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'flex-end', marginBottom: 8, marginTop: 16 },
   cBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#374151', alignItems: 'center', justifyContent: 'center' },
   cAct: { backgroundColor: '#2563EB' },
   cTxt: { color: '#D1D5DB', fontWeight: '700', fontSize: 14 },
@@ -2144,12 +2144,8 @@ const goS = StyleSheet.create({
 function GameRouter() {
   const { state } = useGame();
   useEffect(() => {
-    if (state.phase === 'setup') {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-    } else {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-    }
-  }, [state.phase]);
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+  }, []);
   switch (state.phase) {
     case 'setup': return <StartScreen />;
     case 'turn-transition': return <TurnTransition />;

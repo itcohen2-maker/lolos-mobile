@@ -5,8 +5,17 @@
 
 import type {
   Card, Player, ServerGameState, PlayerView, Operation, Fraction,
-  DiceResult,
+  DiceResult, HostGameSettings,
 } from '../../shared/types';
+
+const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
+  diceMode: '3',
+  showFractions: true,
+  showPossibleResults: true,
+  showSolveExercise: true,
+  timerSetting: 'off',
+  timerCustomSeconds: 60,
+};
 import { generateDeck, shuffle, dealCards } from './deck';
 import {
   applyOperation, fractionDenominator, validateIdenticalPlay,
@@ -93,7 +102,15 @@ function findCard(state: ServerGameState, cardId: string): Card | undefined {
 //  PUBLIC API — Game Actions
 // ══════════════════════════════════════════════════════════════
 
-export function startGame(room: Room, difficulty: 'easy' | 'full'): ServerGameState {
+export function startGame(
+  room: Room,
+  difficulty: 'easy' | 'full',
+  partialSettings?: Partial<HostGameSettings>,
+): ServerGameState {
+  const hostGameSettings: HostGameSettings = {
+    ...DEFAULT_HOST_GAME_SETTINGS,
+    ...partialSettings,
+  };
   const deck = shuffle(generateDeck(difficulty));
   const { hands, remaining } = dealCards(deck, room.players.length, CARDS_PER_PLAYER);
   let drawPile = remaining;
@@ -138,6 +155,7 @@ export function startGame(room: Room, difficulty: 'easy' | 'full'): ServerGameSt
     lastMoveMessage: null,
     lastEquationDisplay: null,
     difficulty,
+    hostGameSettings,
     winner: null,
     message: '',
   };
@@ -448,6 +466,7 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
     consecutiveIdenticalPlays: state.consecutiveIdenticalPlays,
     lastMoveMessage: state.lastMoveMessage,
     difficulty: state.difficulty,
+    gameSettings: state.hostGameSettings,
     winner: state.winner ? { id: state.winner.id, name: state.winner.name } : null,
     message: state.message,
   };

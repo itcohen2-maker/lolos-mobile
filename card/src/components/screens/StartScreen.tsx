@@ -70,6 +70,14 @@ export default function StartScreen() {
       <Text style={styles.label}>רמת קושי</Text>
       <View style={styles.diffRow}>
         <TouchableOpacity
+          style={[styles.diffBtn, difficulty === 'full' && styles.diffFull]}
+          onPress={() => setDifficulty('full')}
+        >
+          <Text style={[styles.diffText, difficulty === 'full' && { color: '#FFF' }]}>
+            מלא (0-25)
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={[styles.diffBtn, difficulty === 'easy' && styles.diffEasy]}
           onPress={() => {
             setDifficulty('easy')
@@ -78,14 +86,6 @@ export default function StartScreen() {
         >
           <Text style={[styles.diffText, difficulty === 'easy' && { color: '#FFF' }]}>
             קל (0-12)
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.diffBtn, difficulty === 'full' && styles.diffFull]}
-          onPress={() => setDifficulty('full')}
-        >
-          <Text style={[styles.diffText, difficulty === 'full' && { color: '#FFF' }]}>
-            מלא (0-25)
           </Text>
         </TouchableOpacity>
       </View>
@@ -107,7 +107,7 @@ export default function StartScreen() {
           <Text style={styles.rulesTitle}>איך משחקים במשחק</Text>
           <View style={styles.newUserBox}>
             <Text style={styles.newUserTitle}>משתמש חדש?</Text>
-            <Text style={styles.newUserText}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים. למטה מפורט כל החוקים.</Text>
+            <Text style={styles.newUserText}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים לתרגיל. שחקן שנשארו לו 2 קלפים ביד — מנצח.</Text>
           </View>
           <Text style={styles.ruleItem}>1. כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד מנצח!</Text>
           <Text style={styles.ruleItem}>2. הטל 3 קוביות וצור מספר יעד באמצעות חשבון (+, -, x, ÷).</Text>
@@ -126,17 +126,17 @@ export default function StartScreen() {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: '#111827' },
-  container: { padding: 24, paddingTop: 60, alignItems: 'center' },
-  title: { fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4 },
-  subtitle: { color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28 },
-  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'flex-start', marginBottom: 8, marginTop: 16 },
-  countRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-start' },
+  container: { padding: 24, paddingTop: 60, alignItems: 'flex-end' },
+  title: { fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4, alignSelf: 'center' },
+  subtitle: { color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center' },
+  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'flex-end', marginBottom: 8, marginTop: 16 },
+  countRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-end', direction: 'ltr' },
   countBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#374151', alignItems: 'center', justifyContent: 'center' },
   countBtnActive: { backgroundColor: '#2563EB' },
   countText: { color: '#D1D5DB', fontWeight: '700', fontSize: 14 },
   countTextActive: { color: '#FFF' },
   input: { width: '100%', backgroundColor: '#374151', borderWidth: 1, borderColor: '#4B5563', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, color: '#FFF', fontSize: 14, marginBottom: 6 },
-  diffRow: { flexDirection: 'row', gap: 10, width: '100%' },
+  diffRow: { flexDirection: 'row', gap: 10, width: '100%', direction: 'ltr' },
   diffBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#374151', alignItems: 'center' },
   diffEasy: { backgroundColor: '#16A34A' },
   diffFull: { backgroundColor: '#DC2626' },

@@ -1461,7 +1461,7 @@ function ZoneFActions({ eqConfirm }: { eqConfirm: { onConfirm: () => void } | nu
       {/* Fraction defense */}
       {hasFracDefense && (
         <View style={zoneF.fracBanner} pointerEvents="auto">
-          <Text style={{ color: '#FDBA74', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
+          <Text style={{ color: '#EA4335', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
             ⚠️ אותגרת! הנח קלף {state.pendingFractionTarget} או חסום עם שבר
           </Text>
           <LulosButton
@@ -1483,15 +1483,19 @@ function ZoneFActions({ eqConfirm }: { eqConfirm: { onConfirm: () => void } | nu
       {/* Staging confirm */}
       {so && !hp && state.stagedCards.length > 0 && !hasFracDefense && (
         <View pointerEvents="auto" style={{ alignItems: 'center', gap: 4 }}>
-          {/* Sum indicator */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, direction: 'ltr' as any }}>
-            <Text style={{ color: '#9CA3AF', fontSize: 12 }}>נבחר:</Text>
-            <OutlinedText text={String(stagedSum)} fontSize={18} color={sumMatches ? GOOG.GREEN : GOOG.RED} outlineWidth={1} />
-            <Text style={{ color: GOOG.YELLOW, fontSize: 14, fontWeight: '900' }}>/</Text>
-            <OutlinedText text={String(target)} fontSize={18} color="#FFF" outlineWidth={1} />
-            {sumMatches && <Text style={{ color: GOOG.GREEN }}>✓</Text>}
-          </View>
-          <LulosButton text="הנח קלפים" color="green" width={SCREEN_W - 60} height={48} onPress={() => dispatch({ type: 'CONFIRM_STAGED' })} />
+          <LulosButton
+            text={
+              target !== null
+                ? `${stagedSum} = ${target}${sumMatches ? ' ✓' : ''}`
+                : 'הנח קלפים'
+            }
+            color="yellow"
+            width={SCREEN_W - 60}
+            height={52}
+            fontSize={26}
+            textColor="#5B001A"
+            onPress={() => dispatch({ type: 'CONFIRM_STAGED' })}
+          />
         </View>
       )}
 
