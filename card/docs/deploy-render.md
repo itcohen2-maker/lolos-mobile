@@ -8,7 +8,7 @@ Open [service settings](https://dashboard.render.com/web/srv-d6umul1r0fns73bq0v6
 |--------|--------|
 | **Root Directory** | `card/server` |
 | **Build Command** | `npm install && npm run build` |
-| **Start Command** | `npm start` |
+| **Start Command** | `npm start` (runs `node dist/server/src/index.js` — not `dist/index.js`) |
 
 Save, then **Manual Deploy → Clear build cache & deploy**.
 

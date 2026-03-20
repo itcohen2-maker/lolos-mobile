@@ -2,11 +2,11 @@
   "name": "lolos-server",
   "version": "1.0.0",
   "description": "Lolos card game multiplayer server",
-  "main": "dist/index.js",
+  "main": "dist/server/src/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/server/src/index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
