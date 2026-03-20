@@ -5178,7 +5178,6 @@ async function clearAllLulosOnboardingKeys(): Promise<void> {
     'lulos_frac_arrow_seen',
     'lulos_ident_arrow_seen',
     'lulos_find_cards_sum_alert_seen',
-    'lulos_solve_exercise_mini_card_tip_seen',
     NO_IDENTICAL_HINT_SEEN_KEY,
     ROLL_ARROW_SEEN_KEY,
     BUILDING_EQUATION_HINT_KEY,
@@ -5502,9 +5501,6 @@ function GameScreen() {
 
   // "מצא קלפים שסכומם" alert — only in SLOT 2 next to תוצאות אפשריות, first time in solved phase
   const [findCardsAlertSeen, setFindCardsAlertSeen] = useState(true);
-  const [solveExerciseTipSeen, setSolveExerciseTipSeen] = useState(false);
-  const [solveExerciseTipDismissing, setSolveExerciseTipDismissing] = useState(false);
-  const solveExerciseTipY = useRef(new Animated.Value(300)).current;
   const identArrowLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   // ── Contextual onboarding system ──
@@ -5542,12 +5538,11 @@ function GameScreen() {
       AsyncStorage.getItem('lulos_frac_arrow_seen'),
       AsyncStorage.getItem('lulos_ident_arrow_seen'),
       AsyncStorage.getItem('lulos_find_cards_sum_alert_seen'),
-      AsyncStorage.getItem('lulos_solve_exercise_mini_card_tip_seen'),
       AsyncStorage.getItem(NO_IDENTICAL_HINT_SEEN_KEY),
       ...ONB_KEYS.map(k => AsyncStorage.getItem(k)),
       ...GUIDANCE_KEYS.map(k => AsyncStorage.getItem(k)),
     ])
-      .then(([guidance, tut, tip1, tip2, arrow, identArrow, findCardsAlert, solveExerciseTip, noIdenticalHint, ...rest]) => {
+      .then(([guidance, tut, tip1, tip2, arrow, identArrow, findCardsAlert, noIdenticalHint, ...rest]) => {
         if (cancelled) return;
         const enabled = guidance !== 'false';
         guidanceEnabledRef.current = enabled;
@@ -5561,7 +5556,6 @@ function GameScreen() {
         setFracArrowSeen(arrow === 'true' || guidance === 'false');
         setIdentArrowSeen(identArrow === 'true' || guidance === 'false');
         setFindCardsAlertSeen(findCardsAlert === 'true');
-        setSolveExerciseTipSeen(solveExerciseTip === 'true');
         setNoIdenticalHintSeen(noIdenticalHint === 'true' || guidance === 'false');
         if (guidance === 'false') {
           ONB_KEYS.forEach(k => onbSeen.current.add(k));
@@ -5575,7 +5569,6 @@ function GameScreen() {
       .catch(() => {
         if (!cancelled) {
           setTutLoaded(true);
-          setSolveExerciseTipSeen(false);
           setNoIdenticalHintSeen(false);
         }
       });
@@ -5587,10 +5580,8 @@ function GameScreen() {
 
   // Possible results toggle (moved before first reference to avoid TDZ)
   const [resultsOpen, setResultsOpenState] = useState(false);
-  const solveExerciseTipVisible = tutLoaded && !solveExerciseTipSeen && state.showSolveExercise && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && resultsOpen && state.validTargets.length > 0;
   useEffect(() => {
     if (state.phase === 'pre-roll') {
-      AsyncStorage.getItem('lulos_solve_exercise_mini_card_tip_seen').then(v => setSolveExerciseTipSeen(v === 'true'));
       Promise.all(ONB_KEYS.map(k => AsyncStorage.getItem(k))).then(results => {
         ONB_KEYS.forEach((k, i) => {
           if (results[i] === 'true') onbSeen.current.add(k);
@@ -5599,20 +5590,7 @@ function GameScreen() {
       });
     }
   }, [state.phase]);
-  // כפתור התוצאות — נפתח רק בלחיצה, לא אוטומטית (טיפ הפתרון יוצג אחרי שהמשתמש לוחץ על "תוצאות אפשריות")
-  useEffect(() => {
-    if (!solveExerciseTipVisible || solveExerciseTipDismissing) return;
-    solveExerciseTipY.setValue(300);
-    Animated.timing(solveExerciseTipY, { toValue: 0, duration: 280, useNativeDriver: true }).start();
-  }, [solveExerciseTipVisible, solveExerciseTipDismissing]);
-  const dismissSolveExerciseTip = useCallback(() => {
-    setSolveExerciseTipDismissing(true);
-    Animated.timing(solveExerciseTipY, { toValue: 300, duration: 250, useNativeDriver: true }).start(() => {
-      setSolveExerciseTipSeen(true);
-      setSolveExerciseTipDismissing(false);
-      AsyncStorage.setItem('lulos_solve_exercise_mini_card_tip_seen', 'true');
-    });
-  }, []);
+  // כפתור התוצאות — נפתח רק בלחיצה, לא אוטומטית
 
   const [tutVisible, setTutVisible] = useState(false);
   const showTut = () => {
@@ -6110,8 +6088,6 @@ function GameScreen() {
     }
   }, [state.dice]);
 
-  // G6. Mini card solution hint — מוצג רק בווילון בתחתית המסך (solveExerciseTipVisible), לא בהתראה צפה
-
   // רווח תחתון: היד ממוקמת ב־absolute מעל פס הכפתורים, אז ה־padding רק מונע מתוכן להיכנס לאזור היד
   const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
   return (
@@ -6426,28 +6402,6 @@ function GameScreen() {
             <Text style={{color:'rgba(255,255,255,0.5)',fontSize:14,fontWeight:'700'}}>הבנתי 👍</Text>
           </TouchableOpacity>
         </Animated.View>
-      )}
-
-      {/* ── וילון הסבר חד־פעמי: רק כשהמיני-קלפים מופיעים, חץ למיני-קלפים, אפשר להמשיך לשחק (מעבר אירועים) ── */}
-      {(solveExerciseTipVisible || solveExerciseTipDismissing) && (
-        <View style={{position:'absolute',bottom:0,left:0,right:0,top:0,zIndex:38}} pointerEvents="box-none">
-          <Animated.View style={{position:'absolute',bottom:0,left:0,right:0,backgroundColor:'rgba(15,23,42,0.97)',borderTopLeftRadius:24,borderTopRightRadius:24,borderTopWidth:2,borderColor:'rgba(248,113,113,0.5)',padding:20,paddingHorizontal:24,paddingBottom:Math.max(28,safe.insets.bottom+16),transform:[{translateY:solveExerciseTipY}]}} pointerEvents="auto">
-            <View style={{alignSelf:'center',width:40,height:4,backgroundColor:'rgba(255,255,255,0.25)',borderRadius:2,marginBottom:12}} />
-            <View style={{alignSelf:'center',marginBottom:10}}>
-              <Text style={{color:'#FCA5A5',fontSize:28,textAlign:'center'}}>▲</Text>
-              <Text style={{color:'rgba(248,113,113,0.7)',fontSize:11,fontWeight:'700',textAlign:'center'}}>למיני-קלפים כאן</Text>
-            </View>
-            <Text style={{color:'#FCA5A5',fontSize:20,fontWeight:'900',textAlign:'center',marginBottom:12}}>📋 פתרון תרגיל</Text>
-            <Text style={{color:'#E2E8F0',fontSize:16,fontWeight:'600',textAlign:'center',lineHeight:24}}>אפשר ללחוץ על המיני-קלף כדי לראות את פיצוח התרגיל</Text>
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={dismissSolveExerciseTip}
-              style={{alignSelf:'center',marginTop:18,backgroundColor:'rgba(255,255,255,0.08)',borderRadius:10,borderWidth:1,borderColor:'rgba(255,255,255,0.15)',paddingHorizontal:28,paddingVertical:10}}
-            >
-              <Text style={{color:'rgba(255,255,255,0.5)',fontSize:14,fontWeight:'700'}}>הבנתי 👍</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </View>
       )}
 
       {/* Floating 💡 recall button — appears after dismissing fraction hint */}
