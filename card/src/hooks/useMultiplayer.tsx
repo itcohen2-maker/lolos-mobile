@@ -74,12 +74,23 @@ export function useMultiplayerOptional(): MultiplayerContextValue | null {
 function playerViewToGameState(view: PlayerView): any {
   const myPlayerIndex = view.players.findIndex((p) => p.id === view.myPlayerId);
   const safeMyIndex = myPlayerIndex >= 0 ? myPlayerIndex : 0;
-  const players = view.players.map((p, i) => ({
-    id: i,
-    name: p.name,
-    hand: p.id === view.myPlayerId ? view.myHand : [],
-    calledLolos: p.calledLolos,
-  }));
+  const players = view.players.map((p, i) => {
+    const count = p.cardCount ?? 0;
+    const hand =
+      p.id === view.myPlayerId
+        ? view.myHand
+        : Array.from({ length: count }, (_, j) => ({
+            id: `hidden-${p.id}-${j}`,
+            type: 'number' as const,
+            value: 0,
+          }));
+    return {
+      id: i,
+      name: p.name,
+      hand,
+      calledLolos: p.calledLolos,
+    };
+  });
   const drawPileFake = Array.from({ length: view.deckCount }, (_, i) => ({ id: `deck-${i}`, type: 'number' as const, value: 0 }));
   const gs = view.gameSettings ?? {
     diceMode: '3' as const,
@@ -102,7 +113,7 @@ function playerViewToGameState(view: PlayerView): any {
     validTargets: view.validTargets || [],
     equationResult: view.equationResult,
     activeOperation: view.activeOperation,
-    challengeSource: null,
+    challengeSource: view.challengeSource ?? null,
     equationOpsUsed: [],
     activeFraction: null,
     pendingFractionTarget: view.pendingFractionTarget,
