@@ -1,0 +1,15 @@
+# Render Blueprint — Lolos multiplayer API (card/server).
+# Dashboard: Blueprints → Connect repository (main).
+services:
+  - type: web
+    name: lolos-multiplayer
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: card/server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

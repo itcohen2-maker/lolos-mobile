@@ -6,19 +6,19 @@ Open [service settings](https://dashboard.render.com/web/srv-d6umul1r0fns73bq0v6
 
 | Field | Value |
 |--------|--------|
-| **Root Directory** | `server` |
+| **Root Directory** | `card/server` |
 | **Build Command** | `npm install && npm run build` |
 | **Start Command** | `npm start` |
 
 Save, then **Manual Deploy → Clear build cache & deploy**.
 
-If `package.json` is not at `server/` in GitHub (e.g. code is under `card/server`), use that path as Root Directory instead.
+This repo uses `card/server` (monorepo-style layout on `lolos-mobile`).
 
 Verify: `GET https://lolos-mobile.onrender.com/` → JSON `{"status":"ok",...}`.
 
 ## Or: new service from Blueprint
 
-Commit `render.yaml`, then in Render: **Blueprints** → connect the repo. You get a URL like `https://lolos-multiplayer.onrender.com` — set `EXPO_PUBLIC_SERVER_URL` in `eas.json` (production env) to match.
+`render.yaml` lives at the **repository root** (not inside `card/`). In Render: **Blueprints** → connect the repo. You get a URL like `https://lolos-multiplayer.onrender.com` — set `EXPO_PUBLIC_SERVER_URL` in `eas.json` (production env) to match.
 
 ## Client
 
