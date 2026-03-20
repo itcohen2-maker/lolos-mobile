@@ -13,7 +13,11 @@
         "simulator": false
       }
     },
-    "production": {}
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_SERVER_URL": "https://lolos-mobile.onrender.com"
+      }
+    }
   },
   "submit": {
     "production": {}

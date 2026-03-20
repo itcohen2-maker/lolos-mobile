@@ -1,0 +1,16 @@
+# Render Blueprint — multiplayer Socket.IO server (Express).
+# Apply: Render Dashboard → Blueprints → Connect this repo (branch main).
+# If your repo root is NOT the project (e.g. code lives under card/), set rootDir to that path + /server.
+services:
+  - type: web
+    name: lolos-multiplayer
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
