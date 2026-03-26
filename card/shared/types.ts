@@ -86,7 +86,6 @@ export interface ServerGameState {
   validTargets: EquationOption[];
   equationResult: number | null;
   stagedCards: Card[];
-  activeOperation: Operation | null;
   pendingFractionTarget: number | null;
   fractionPenalty: number;
   fractionAttackResolved: boolean;
@@ -100,6 +99,10 @@ export interface ServerGameState {
   hostGameSettings: HostGameSettings;
   winner: Player | null;
   message: string;
+  /** מזהה ייחודי למשחק מקוון — הגרלת פותח; לדה-דופליקציה של הודעה בלקוח */
+  openingDrawId: string;
+  /** מועד יעד (epoch ms) לפעולת התור הנוכחית — מקוון בלבד; null כשלא במצב המתנה */
+  turnDeadlineAt: number | null;
 }
 
 // ── Client Player View (what each player sees) ──
@@ -118,7 +121,6 @@ export interface PlayerView {
   validTargets: EquationOption[];
   equationResult: number | null;
   stagedCards: Card[];
-  activeOperation: Operation | null;
   pendingFractionTarget: number | null;
   fractionPenalty: number;
   fractionAttackResolved: boolean;
@@ -131,6 +133,8 @@ export interface PlayerView {
   gameSettings: HostGameSettings;
   winner: { id: string; name: string } | null;
   message: string;
+  openingDrawId: string;
+  turnDeadlineAt: number | null;
 }
 
 // ── Socket Events: Client → Server ──

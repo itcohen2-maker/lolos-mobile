@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import React, { useRef, useCallback, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -16,10 +16,15 @@ const DICE_VERSION = 9; // bump to force WebView re-mount
 const DiceWebViewComponent = forwardRef<DiceWebViewRef, DiceWebViewProps>(
   ({ onResult, height = 220 }, ref) => {
     const webViewRef = useRef<WebView>(null);
+    const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
     console.log('[DiceWebView] Rendering v' + DICE_VERSION + ', HTML length=' + DICE_HTML.length);
 
     const throwDice = useCallback(() => {
+      if (Platform.OS === 'web') {
+        iframeRef.current?.contentWindow?.postMessage(JSON.stringify({ type: 'throwDice' }), '*');
+        return;
+      }
       webViewRef.current?.injectJavaScript(`
         if (window.doThrow) window.doThrow();
         true;
@@ -40,6 +45,42 @@ const DiceWebViewComponent = forwardRef<DiceWebViewRef, DiceWebViewProps>(
         }
       } catch (e) {}
     }, [onResult]);
+
+    useEffect(() => {
+      if (Platform.OS !== 'web') return;
+      const onWindowMessage = (event: MessageEvent) => {
+        if (event.source !== iframeRef.current?.contentWindow) return;
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (!data || typeof data !== 'object') return;
+          if (data.type === 'debug') {
+            console.log('[DiceWV]', data.msg);
+            return;
+          }
+          if (data.type === 'diceResult' && onResult) {
+            onResult(data.results, data.total);
+          }
+        } catch (_) {}
+      };
+      window.addEventListener('message', onWindowMessage);
+      return () => window.removeEventListener('message', onWindowMessage);
+    }, [onResult]);
+
+    if (Platform.OS === 'web') {
+      return (
+        <View style={[styles.container, { height: height as any }]}>
+          <iframe
+            ref={(node) => {
+              iframeRef.current = node;
+            }}
+            title="dice-web"
+            srcDoc={DICE_HTML}
+            sandbox="allow-scripts allow-same-origin"
+            style={{ border: 'none', width: '100%', height: '100%', display: 'block', backgroundColor: 'transparent' }}
+          />
+        </View>
+      );
+    }
 
     return (
       <View style={[styles.container, { height: height as any }]}>
@@ -96,7 +137,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:transparent;touch-ac
 var PL={1:[[0,0]],2:[[-0.25,-0.25],[0.25,0.25]],3:[[-0.25,-0.25],[0,0],[0.25,0.25]],4:[[-0.25,-0.25],[0.25,-0.25],[-0.25,0.25],[0.25,0.25]],5:[[-0.25,-0.25],[0.25,-0.25],[0,0],[-0.25,0.25],[0.25,0.25]],6:[[-0.25,-0.25],[0.25,-0.25],[-0.25,0],[0.25,0],[-0.25,0.25],[0.25,0.25]]};
 
 // === DEBUG / RN MESSAGING ===
-function dbg(m){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({type:"debug",msg:m}))}
+function postHost(obj){
+try{ if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(obj)); }catch(e){}
+try{ if(window.parent&&window.parent!==window)window.parent.postMessage(JSON.stringify(obj),"*"); }catch(e){}
+}
+function dbg(m){postHost({type:"debug",msg:m})}
 
 // === DICE FACE TEXTURE ===
 function mkTex(n){
@@ -312,6 +357,12 @@ d.vz=(5+Math.random()*1)});
 state=STT.T;sShuffleStart()};
 
 cw.addEventListener("click",function(){if(state===STT.I)window.doThrow()});
+window.addEventListener("message",function(ev){
+try{
+  var d=typeof ev.data==="string"?JSON.parse(ev.data):ev.data;
+  if(d&&d.type==="throwDice"&&state===STT.I)window.doThrow();
+}catch(e){}
+});
 
 var cPos=new THREE.Vector3(0,5,10),cLk=new THREE.Vector3(0,0,0);
 var cTP=new THREE.Vector3(0,5,10),cTL=new THREE.Vector3(0,0,0);
@@ -474,11 +525,11 @@ var results=dice.map(function(d){return d.throwResult});
 var total=results[0]+results[1]+results[2];
 dbg("diceResult: "+results.join(",")+", total="+total);
 try{
-window.ReactNativeWebView.postMessage(JSON.stringify({
+postHost({
   type:"diceResult",
   results:results,
   total:total
-}));
+});
 }catch(e){
 console.log("diceResult",results,total);
 }

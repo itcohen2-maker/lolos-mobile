@@ -9,6 +9,7 @@ import {
 } from 'react-native'
 import { useGame } from '../../hooks/useGame'
 import Button from '../ui/Button'
+import { WELCOME_GAME_BODY_CORE } from '../../copy/welcomeGame'
 
 export default function StartScreen() {
   const { dispatch } = useGame()
@@ -107,15 +108,15 @@ export default function StartScreen() {
           <Text style={styles.rulesTitle}>איך משחקים במשחק</Text>
           <View style={styles.newUserBox}>
             <Text style={styles.newUserTitle}>משתמש חדש?</Text>
-            <Text style={styles.newUserText}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים לתרגיל. שחקן שנשארו לו 2 קלפים ביד — מנצח.</Text>
+            <Text style={styles.newUserText}>{WELCOME_GAME_BODY_CORE}</Text>
           </View>
           <Text style={styles.ruleItem}>1. כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד מנצח!</Text>
           <Text style={styles.ruleItem}>2. הטל 3 קוביות וצור מספר יעד באמצעות חשבון (+, -, x, ÷).</Text>
           <Text style={styles.ruleItem}>3. שחק קלפי מספר מהיד שסכומם שווה ליעד.</Text>
           <Text style={styles.ruleItem}>4. קלף זהה: שחק קלף התואם לקלף העליון בערימה (עד פעמיים).</Text>
           <Text style={styles.ruleItem}>5. קלפי שבר: חלק את הקלף העליון במכנה השבר.</Text>
-          <Text style={styles.ruleItem}>6. קלפי פעולה: השחקן הבא חייב להגן או לשלוף 2 קלפים.</Text>
-          <Text style={styles.ruleItem}>7. ג'וקר: משמש כקלף פעולה כלשהו.</Text>
+          <Text style={styles.ruleItem}>6. קלפי פעולה: משלבים סימן בתרגיל וכך נפטרים מהקלף.</Text>
+          <Text style={styles.ruleItem}>7. ג'וקר: בוחרים לו סימן ומשלבים בתרגיל כדי להיפטר מהקלף.</Text>
           <Text style={styles.ruleItem}>8. שלישייה בקוביות: כל שאר השחקנים שולפים N קלפים!</Text>
           <Text style={styles.ruleItem}>9. עם קלף אחד ביד - לחץ על כפתור הסיום, אחרת תשלוף קלף עונשין.</Text>
         </View>

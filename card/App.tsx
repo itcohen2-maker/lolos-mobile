@@ -18,6 +18,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
 import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
+import { WELCOME_GAME_BODY_CORE } from './src/copy/welcomeGame';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
@@ -1944,7 +1945,7 @@ function StartScreen() {
           <Text style={ssS.rTitle}>איך משחקים במשחק</Text>
           <View style={{ backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)', padding: 12, marginBottom: 14 }}>
             <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 6, textAlign: 'right' }}>משתמש חדש?</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 20, textAlign: 'right' }}>ברוכים הבאים! המטרה — להיפטר מכל הקלפים ביד. כל תור: מגלגלים קוביות, בונים תרגיל, ובוחרים קלפים שסכומם מתאים לתרגיל. שחקן שנשארו לו 2 קלפים ביד — מנצח.</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 20, textAlign: 'right' }}>{WELCOME_GAME_BODY_CORE}</Text>
           </View>
           {[
             'כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!',

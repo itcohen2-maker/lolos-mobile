@@ -11,6 +11,8 @@ export interface Room {
   state: ServerGameState | null;   // null = still in lobby
   createdAt: number;
   lastActivity: number;
+  /** מתזמן תור מקוון (AFK) — מנוקה בעדכון מצב */
+  turnTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 /** In-memory room store */
@@ -85,6 +87,11 @@ export function leaveRoom(socketId: string): { room: Room; playerId: string; pla
   if (!info) return null;
   const room = rooms.get(info.roomCode);
   if (!room) { socketToRoom.delete(socketId); return null; }
+
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = undefined;
+  }
 
   const player = room.players.find(p => p.id === info.playerId);
   if (!player) { socketToRoom.delete(socketId); return null; }

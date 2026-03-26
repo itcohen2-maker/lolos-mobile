@@ -3,6 +3,7 @@
 import React, { useRef, useCallback, useState } from 'react';
 import { View, Pressable, Animated, Platform, StyleSheet, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { HtmlCanvasEmbed } from './HtmlCanvasEmbed';
 
 interface GoldDiceButtonProps {
   onPress: () => void;
@@ -202,7 +203,7 @@ const BTN_H = 58;
 export function GoldDiceButton({ onPress, disabled = false, width, size, style }: GoldDiceButtonProps) {
   const w = width ?? BTN_W;
   const h = size ?? BTN_H;
-  const [webViewReady, setWebViewReady] = useState(false);
+  const [graphicReady, setGraphicReady] = useState(false);
 
   const pressAnim = useRef(new Animated.Value(1)).current;
 
@@ -261,7 +262,7 @@ export function GoldDiceButton({ onPress, disabled = false, width, size, style }
             position: 'absolute', top: 9, left: 0, right: 0, height: h,
             borderRadius: 12, backgroundColor: '#3A2505',
           }} />
-          {!webViewReady && (
+          {!graphicReady && (
             <View style={{
               position: 'absolute', zIndex: 1, width: w, height: h, borderRadius: 12,
               backgroundColor: '#DAA520', justifyContent: 'center', alignItems: 'center',
@@ -274,17 +275,27 @@ export function GoldDiceButton({ onPress, disabled = false, width, size, style }
           <View style={{
             width: w, height: h, borderRadius: 12, overflow: 'hidden',
           }}>
-            <WebView
-              source={{ html }}
-              style={gdStyles.webview}
-              scrollEnabled={false}
-              bounces={false}
-              pointerEvents="none"
-              javaScriptEnabled={true}
-              originWhitelist={['*']}
-              androidLayerType="hardware"
-              onLoadEnd={() => setWebViewReady(true)}
-            />
+            {Platform.OS === 'web' ? (
+              <HtmlCanvasEmbed
+                html={html}
+                style={gdStyles.webview}
+                borderRadius={12}
+                pointerEvents="none"
+                onLoadEnd={() => setGraphicReady(true)}
+              />
+            ) : (
+              <WebView
+                source={{ html }}
+                style={gdStyles.webview}
+                scrollEnabled={false}
+                bounces={false}
+                pointerEvents="none"
+                javaScriptEnabled={true}
+                originWhitelist={['*']}
+                androidLayerType="hardware"
+                onLoadEnd={() => setGraphicReady(true)}
+              />
+            )}
           </View>
         </Animated.View>
       </Pressable>

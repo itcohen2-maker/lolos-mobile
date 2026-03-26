@@ -15,6 +15,8 @@ import {
   playIdentical, playFraction, defendFractionSolve, defendFractionPenalty,
   playOperation, playJoker, drawCard, callLulos, doEndTurn,
   getPlayerView,
+  forceTurnTimeout,
+  withOnlineTurnDeadline,
 } from './gameEngine';
 import type { Room } from './roomManager';
 
@@ -22,6 +24,37 @@ type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 // ── Helper: broadcast updated state to all players in room ──
+
+function clearRoomTurnTimer(room: Room): void {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = undefined;
+  }
+}
+
+function scheduleRoomTurnTimer(io: IOServer, room: Room): void {
+  clearRoomTurnTimer(room);
+  if (!room.state?.turnDeadlineAt) return;
+  const ms = Math.max(0, room.state.turnDeadlineAt - Date.now());
+  room.turnTimer = setTimeout(() => {
+    room.turnTimer = undefined;
+    if (!room.state?.turnDeadlineAt) return;
+    if (Date.now() < room.state.turnDeadlineAt - 150) {
+      scheduleRoomTurnTimer(io, room);
+      return;
+    }
+    const res = forceTurnTimeout(room.state);
+    if ('error' in res) return;
+    const prevToast = room.state.lastMoveMessage;
+    room.state = withOnlineTurnDeadline(res);
+    room.lastActivity = Date.now();
+    if (room.state.lastMoveMessage && room.state.lastMoveMessage !== prevToast) {
+      io.to(room.code).emit('toast', { message: room.state.lastMoveMessage });
+    }
+    broadcastState(io, room);
+    scheduleRoomTurnTimer(io, room);
+  }, ms);
+}
 
 function broadcastState(io: IOServer, room: Room): void {
   if (!room.state) return;
@@ -59,15 +92,16 @@ function applyAction(
 
   // Check for toast message
   const prevToast = room.state.lastMoveMessage;
-  room.state = result;
+  room.state = withOnlineTurnDeadline(result);
   room.lastActivity = Date.now();
 
   // If there's a new toast message, broadcast it
-  if (result.lastMoveMessage && result.lastMoveMessage !== prevToast) {
-    io.to(room.code).emit('toast', { message: result.lastMoveMessage });
+  if (room.state.lastMoveMessage && room.state.lastMoveMessage !== prevToast) {
+    io.to(room.code).emit('toast', { message: room.state.lastMoveMessage });
   }
 
   broadcastState(io, room);
+  scheduleRoomTurnTimer(io, room);
 }
 
 // ── Helper: verify it's this player's turn ──
@@ -157,6 +191,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
         }
       }
     }
+    scheduleRoomTurnTimer(io, room);
   });
 
   // ── Game Actions (require current turn) ──

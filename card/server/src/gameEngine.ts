@@ -23,8 +23,19 @@ import {
   rollDice, isTriple, generateValidTargets,
 } from './equations';
 import type { Room } from './roomManager';
+import { randomInt, randomUUID } from 'node:crypto';
 
 const CARDS_PER_PLAYER = 10;
+
+/** זמן המתנה לפעולת שחקן במשחק מקוון (אני מוכן / הטלת קוביות) */
+export const ONLINE_TURN_ACTION_MS = 30_000;
+
+export function withOnlineTurnDeadline(st: ServerGameState): ServerGameState {
+  if (st.phase === 'turn-transition' || st.phase === 'pre-roll') {
+    return { ...st, turnDeadlineAt: Date.now() + ONLINE_TURN_ACTION_MS };
+  }
+  return { ...st, turnDeadlineAt: null };
+}
 
 // ── Helper: draw N cards from draw pile for a player ──
 
@@ -64,14 +75,6 @@ function checkWin(st: ServerGameState): ServerGameState {
 
 function endTurnLogic(st: ServerGameState): ServerGameState {
   let s = { ...st };
-  let keepOp = false;
-
-  if (s.activeOperation && !s.hasPlayedCards) {
-    s = drawFromPile(s, 2, s.currentPlayerIndex);
-    s.message = `${s.players[s.currentPlayerIndex].name} קיבל/ה עונש ${s.activeOperation}!`;
-  } else if (s.activeOperation && s.hasPlayedCards) {
-    keepOp = true;
-  }
 
   const up = s.players[s.currentPlayerIndex];
   if (up.hand.length === 1 && !up.calledLolos) {
@@ -85,7 +88,6 @@ function endTurnLogic(st: ServerGameState): ServerGameState {
     players: s.players.map(p => ({ ...p, calledLolos: false })),
     currentPlayerIndex: next, phase: 'turn-transition', dice: null,
     stagedCards: [], equationResult: null, validTargets: [],
-    activeOperation: keepOp ? s.activeOperation : null,
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: null, fractionPenalty: 0,
   };
@@ -133,18 +135,20 @@ export function startGame(
     calledLolos: false,
   }));
 
-  return {
+  const firstIdx = randomInt(0, players.length);
+  const openingDrawId = randomUUID();
+
+  const initial: ServerGameState = {
     roomCode: room.code,
     phase: 'turn-transition',
     players,
-    currentPlayerIndex: 0,
+    currentPlayerIndex: firstIdx,
     drawPile,
     discardPile: firstDiscard ? [firstDiscard] : [],
     dice: null,
     validTargets: [],
     equationResult: null,
     stagedCards: [],
-    activeOperation: null,
     pendingFractionTarget: null,
     fractionPenalty: 0,
     fractionAttackResolved: false,
@@ -158,17 +162,13 @@ export function startGame(
     hostGameSettings,
     winner: null,
     message: '',
+    openingDrawId,
+    turnDeadlineAt: null,
   };
+  return withOnlineTurnDeadline(initial);
 }
 
 export function beginTurn(st: ServerGameState): ServerGameState {
-  if (st.activeOperation) {
-    const cp = st.players[st.currentPlayerIndex];
-    const has = cp.hand.some(c => (c.type === 'operation' && c.operation === st.activeOperation) || c.type === 'joker');
-    if (has) return { ...st, phase: 'pre-roll', message: `פעולת ${st.activeOperation}! שחק/י קלף פעולה תואם או ג'וקר כדי להגן.` };
-    let s = drawFromPile(st, 2, st.currentPlayerIndex);
-    return { ...s, phase: 'pre-roll', activeOperation: null, message: `אין הגנה מפני ${st.activeOperation}! שלפת 2 קלפי עונשין.` };
-  }
   if (st.pendingFractionTarget !== null && !st.fractionAttackResolved) {
     return { ...st, phase: 'pre-roll', message: `התקפת שבר! נדרש: ${st.pendingFractionTarget}. הגן/י בקלף מספר, חסום/י בשבר, או שלוף/י ${st.fractionPenalty} קלפים.` };
   }
@@ -189,7 +189,46 @@ export function doRollDice(st: ServerGameState): ServerGameState | { error: stri
   }
 
   const vt = generateValidTargets(dice);
-  return { ...ns, validTargets: vt, phase: 'building', activeOperation: null, consecutiveIdenticalPlays: 0, message: ns.message || '' };
+  return { ...ns, validTargets: vt, phase: 'building', consecutiveIdenticalPlays: 0, message: ns.message || '' };
+}
+
+/** דילוג תור אם השחקן לא הגיב בזמן — מעבר לשחקן הבא + begin_turn + roll אוטומטי */
+export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error: string } {
+  if (st.phase !== 'turn-transition' && st.phase !== 'pre-roll') {
+    return { error: 'לא בשלב המתנה' };
+  }
+  const skippedIdx = st.currentPlayerIndex;
+  const skippedName = st.players[skippedIdx]?.name ?? 'שחקן';
+  const next = (skippedIdx + 1) % st.players.length;
+  const nextName = st.players[next]?.name ?? 'שחקן';
+
+  const base: ServerGameState = {
+    ...st,
+    currentPlayerIndex: next,
+    phase: 'turn-transition',
+    dice: null,
+    validTargets: [],
+    equationResult: null,
+    stagedCards: [],
+    hasPlayedCards: false,
+    hasDrawnCard: false,
+    lastCardValue: null,
+    consecutiveIdenticalPlays: 0,
+    message: '',
+    pendingFractionTarget: null,
+    fractionPenalty: 0,
+    fractionAttackResolved: true,
+  };
+
+  const tMsg = `⏱️ ${skippedName} לא הגיב/ה בזמן — התור עבר ל-${nextName}`;
+  const afterBegin = beginTurn(base);
+  if (afterBegin.phase !== 'pre-roll') {
+    return { ...afterBegin, lastMoveMessage: tMsg };
+  }
+  const rolled = doRollDice(afterBegin);
+  if ('error' in rolled) return rolled;
+  const combinedMsg = [tMsg, rolled.message].filter(Boolean).join(' ').trim();
+  return { ...rolled, lastMoveMessage: combinedMsg || tMsg };
 }
 
 export function confirmEquation(st: ServerGameState, result: number, equationDisplay: string): ServerGameState | { error: string } {
@@ -229,22 +268,19 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: s
   const stIds = new Set(st.stagedCards.map(c => c.id));
   const stCp = st.players[st.currentPlayerIndex];
   const stNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: stCp.hand.filter(c => !stIds.has(c.id)) } : p);
-  const stDiscard = [...st.discardPile, ...stNumbers];
-  if (stOpCard) stDiscard.push(stOpCard);
-
-  const stNewActiveOp = stOpCard ? stOpCard.operation! : null;
-  const stLastNum = stNumbers[stNumbers.length - 1];
-  const stToast = stNewActiveOp
-    ? `⚔️ ${stCp.name}: הניח סימן ${stNewActiveOp} — אתגר!`
-    : `✅ ${stCp.name}: ${st.lastEquationDisplay || ''} → הניח ${stLastNum.value}`;
+  const stagedLast = st.stagedCards[st.stagedCards.length - 1];
+  const displayCard = stagedLast?.type === 'number'
+    ? stagedLast
+    : stNumbers[stNumbers.length - 1];
+  const stDiscard = displayCard ? [...st.discardPile, displayCard] : [...st.discardPile];
+  const stToast = `✅ ${stCp.name}: ${st.lastEquationDisplay || ''} → הניח ${displayCard?.value ?? '?'}`;
 
   let stNs: ServerGameState = {
     ...st, players: stNp, discardPile: stDiscard,
     stagedCards: [], consecutiveIdenticalPlays: 0,
-    hasPlayedCards: true, lastCardValue: stLastNum.value ?? null,
-    activeOperation: stNewActiveOp ?? st.activeOperation,
+    hasPlayedCards: true, lastCardValue: displayCard?.value ?? null,
     lastMoveMessage: stToast, lastEquationDisplay: null,
-    message: stNewActiveOp ? `אתגר פעולה ${stNewActiveOp} לשחקן הבא!` : '',
+    message: '',
   };
   stNs = checkWin(stNs);
   if (stNs.phase === 'game-over') return stNs;
@@ -297,7 +333,6 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
       ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
       currentPlayerIndex: next, phase: 'turn-transition', dice: null,
       stagedCards: [], equationResult: null, validTargets: [],
-      activeOperation: null,
       consecutiveIdenticalPlays: 0,
       hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
       pendingFractionTarget: newTarget, fractionPenalty: denom,
@@ -322,7 +357,6 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
     ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
     currentPlayerIndex: next, phase: 'turn-transition', dice: null,
     stagedCards: [], equationResult: null, validTargets: [],
-    activeOperation: null,
     consecutiveIdenticalPlays: 0,
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: newTarget, fractionPenalty: denom,
@@ -335,7 +369,9 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
 export function defendFractionSolve(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
   if (st.pendingFractionTarget === null) return { error: 'אין התקפת שבר פעילה' };
   const card = findCard(st, cardId);
-  if (!card || card.type !== 'number' || card.value !== st.pendingFractionTarget) {
+  const v = card?.value;
+  // Align with client (index.tsx): any hand number divisible by the attack denominator counts as defense
+  if (!card || card.type !== 'number' || v == null || v <= 0 || st.fractionPenalty <= 0 || v % st.fractionPenalty !== 0) {
     return { error: 'הקלף לא מתאים להגנה' };
   }
   const cp = st.players[st.currentPlayerIndex];
@@ -344,10 +380,11 @@ export function defendFractionSolve(st: ServerGameState, cardId: string): Server
     ...st, players: np, discardPile: [...st.discardPile, card],
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true, lastCardValue: card.value ?? null,
+    lastMoveMessage: '🛡️ הגנה מוצלחת — התור עובר לשחקן הבא',
     message: 'הגנה מוצלחת!',
   });
   if (ns.phase === 'game-over') return ns;
-  return { ...ns, phase: 'pre-roll', hasPlayedCards: false };
+  return endTurnLogic(ns);
 }
 
 export function defendFractionPenalty(st: ServerGameState): ServerGameState | { error: string } {
@@ -358,38 +395,18 @@ export function defendFractionPenalty(st: ServerGameState): ServerGameState | { 
     ...s,
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true,
-    lastMoveMessage: `📥 ${cp.name}: שלף ${st.fractionPenalty} קלפי עונשין`,
+    lastMoveMessage: `${cp.name} שלף ${st.fractionPenalty} קלפי עונשין 📥`,
     message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.`,
   };
   return endTurnLogic(s);
 }
 
 export function playOperation(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.phase !== 'pre-roll' && st.phase !== 'solved') return { error: 'לא בשלב הנכון' };
-  if (st.hasPlayedCards) return { error: 'כבר שיחקת קלף' };
-  const card = findCard(st, cardId);
-  if (!card || card.type !== 'operation') return { error: 'קלף פעולה לא נמצא' };
-  const cp = st.players[st.currentPlayerIndex];
-  const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns: ServerGameState = {
-    ...st, players: np, discardPile: [...st.discardPile, card],
-    activeOperation: card.operation!, hasPlayedCards: true, message: '',
-  };
-  ns = checkWin(ns);
-  return ns;
+  return { error: 'קלף סימן משולב רק בתוך התרגיל' };
 }
 
 export function playJoker(st: ServerGameState, cardId: string, chosenOperation: Operation): ServerGameState | { error: string } {
-  const card = findCard(st, cardId);
-  if (!card || card.type !== 'joker') return { error: 'קלף ג׳וקר לא נמצא' };
-  const cp = st.players[st.currentPlayerIndex];
-  const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns: ServerGameState = {
-    ...st, players: np, discardPile: [...st.discardPile, card],
-    activeOperation: chosenOperation, hasPlayedCards: true, message: '',
-  };
-  ns = checkWin(ns);
-  return ns;
+  return { error: 'ג׳וקר משולב רק בתוך התרגיל' };
 }
 
 export function drawCard(st: ServerGameState): ServerGameState | { error: string } {
@@ -398,7 +415,7 @@ export function drawCard(st: ServerGameState): ServerGameState | { error: string
   let s = reshuffleDiscard(st);
   if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: '' };
   s = drawFromPile(s, 1, s.currentPlayerIndex);
-  s = { ...s, hasDrawnCard: true, lastMoveMessage: `📥 ${drawCp.name}: שלף קלף מהחבילה` };
+  s = { ...s, hasDrawnCard: true, lastMoveMessage: `${drawCp.name} שלף קלף מהחבילה 📥` };
   return endTurnLogic(s);
 }
 
@@ -456,7 +473,6 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
     validTargets: state.validTargets,
     equationResult: state.equationResult,
     stagedCards: state.stagedCards,
-    activeOperation: state.activeOperation,
     pendingFractionTarget: state.pendingFractionTarget,
     fractionPenalty: state.fractionPenalty,
     fractionAttackResolved: state.fractionAttackResolved,
@@ -469,5 +485,7 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
     gameSettings: state.hostGameSettings,
     winner: state.winner ? { id: state.winner.id, name: state.winner.name } : null,
     message: state.message,
+    openingDrawId: state.openingDrawId,
+    turnDeadlineAt: state.turnDeadlineAt,
   };
 }

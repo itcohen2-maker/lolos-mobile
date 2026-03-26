@@ -1,6 +1,7 @@
 import React, { useRef, useCallback } from 'react';
 import { View, TouchableOpacity, Animated, Platform, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { HtmlCanvasEmbed } from './HtmlCanvasEmbed';
 
 export interface LulosButtonProps {
   text: string;
@@ -284,18 +285,28 @@ export function LulosButton({ text, color, onPress, disabled, width, height = 68
             }),
           },
         ]}>
-          <WebView
-            key={text + color + w + height + (textColor ?? '')}
-            source={{ html }}
-            style={[btnStyles.webview, { borderRadius: height / 2 }]}
-            scrollEnabled={false}
-            bounces={false}
-            pointerEvents="none"
-            javaScriptEnabled={true}
-            originWhitelist={['*']}
-            transparent={true}
-            androidLayerType="hardware"
-          />
+          {Platform.OS === 'web' ? (
+            <HtmlCanvasEmbed
+              key={text + color + w + height + (textColor ?? '')}
+              html={html}
+              style={[btnStyles.webview, { borderRadius: height / 2 }]}
+              borderRadius={height / 2}
+              pointerEvents="none"
+            />
+          ) : (
+            <WebView
+              key={text + color + w + height + (textColor ?? '')}
+              source={{ html }}
+              style={[btnStyles.webview, { borderRadius: height / 2 }]}
+              scrollEnabled={false}
+              bounces={false}
+              pointerEvents="none"
+              javaScriptEnabled={true}
+              originWhitelist={['*']}
+              transparent={true}
+              androidLayerType="hardware"
+            />
+          )}
         </Animated.View>
       </TouchableOpacity>
     </View>

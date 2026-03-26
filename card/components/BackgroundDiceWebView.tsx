@@ -1,5 +1,5 @@
 import React, { useRef, forwardRef, useImperativeHandle } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Platform, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 export interface BackgroundDiceWebViewRef {
@@ -11,21 +11,46 @@ const BG_DICE_VERSION = 1;
 
 const BackgroundDiceWebViewComponent = forwardRef<BackgroundDiceWebViewRef, {}>((_, ref) => {
   const webViewRef = useRef<WebView>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useImperativeHandle(ref, () => ({
     summon: () => {
+      if (Platform.OS === 'web') {
+        iframeRef.current?.contentWindow?.postMessage(JSON.stringify({ type: 'bgSummon' }), '*');
+        return;
+      }
       webViewRef.current?.injectJavaScript(`
         if (window.bgSummon) window.bgSummon();
         true;
       `);
     },
     scatter: () => {
+      if (Platform.OS === 'web') {
+        iframeRef.current?.contentWindow?.postMessage(JSON.stringify({ type: 'bgScatter' }), '*');
+        return;
+      }
       webViewRef.current?.injectJavaScript(`
         if (window.bgScatter) window.bgScatter();
         true;
       `);
     },
   }));
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.webview}>
+        <iframe
+          ref={(node) => {
+            iframeRef.current = node;
+          }}
+          title="bg-dice-web"
+          srcDoc={BG_DICE_HTML}
+          sandbox="allow-scripts allow-same-origin"
+          style={{ border: 'none', width: '100%', height: '100%', display: 'block', backgroundColor: 'transparent', pointerEvents: 'none' }}
+        />
+      </View>
+    );
+  }
 
   return (
     <WebView
@@ -278,6 +303,14 @@ else{d.x=PAD+Math.random()*(W-PAD*2);d.y=H-PAD}
 d.summonStartX=d.x;d.summonStartY=d.y;
 pickTarget(d);transitionState(d);
 })};
+window.addEventListener("message",function(ev){
+try{
+  var d=typeof ev.data==="string"?JSON.parse(ev.data):ev.data;
+  if(!d||typeof d!=="object")return;
+  if(d.type==="bgSummon"&&window.bgSummon)window.bgSummon();
+  if(d.type==="bgScatter"&&window.bgScatter)window.bgScatter();
+}catch(e){}
+});
 
 // === ANIMATION LOOP ===
 var clk=new THREE.Clock();

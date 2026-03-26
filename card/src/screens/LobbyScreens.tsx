@@ -56,7 +56,7 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       {onBackToChoice && (
         <TouchableOpacity style={styles.backBtn} onPress={onBackToChoice}>
-          <Text style={styles.backBtnText}>← בחירת אופן משחק</Text>
+          <Text style={styles.backBtnText}>→ בחירת אופן משחק</Text>
         </TouchableOpacity>
       )}
       <Text style={styles.title}>התחבר למשחק</Text>
@@ -167,7 +167,7 @@ export function LobbyScreen() {
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
       <TouchableOpacity style={styles.backBtn} onPress={() => leaveRoom()}>
-        <Text style={styles.backBtnText}>← עזוב חדר</Text>
+        <Text style={styles.backBtnText}>→ עזוב חדר</Text>
       </TouchableOpacity>
       <Text style={styles.title}>החדר מוכן</Text>
       <View style={styles.codeBox}>

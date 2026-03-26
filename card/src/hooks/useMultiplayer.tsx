@@ -112,8 +112,8 @@ function playerViewToGameState(view: PlayerView): any {
     stagedCards: view.stagedCards || [],
     validTargets: view.validTargets || [],
     equationResult: view.equationResult,
-    activeOperation: view.activeOperation,
-    challengeSource: view.challengeSource ?? null,
+    activeOperation: null,
+    challengeSource: null,
     equationOpsUsed: [],
     activeFraction: null,
     pendingFractionTarget: view.pendingFractionTarget,
@@ -140,6 +140,8 @@ function playerViewToGameState(view: PlayerView): any {
     timerCustomSeconds: gs.timerCustomSeconds,
     winner: view.winner ? { id: 0, name: view.winner.name, hand: [], calledLolos: false } : null,
     message: view.message,
+    openingDrawId: view.openingDrawId,
+    turnDeadlineAt: view.turnDeadlineAt,
     roundsPlayed: 0,
     notifications: [],
     moveHistory: [],
@@ -160,8 +162,8 @@ function actionToSocketEvent(action: any): { event: string; data?: any } | null 
     case 'PLAY_FRACTION': return { event: 'play_fraction', data: { cardId: action.card?.id } };
     case 'DEFEND_FRACTION_SOLVE': return { event: 'defend_fraction_solve', data: { cardId: action.card?.id } };
     case 'DEFEND_FRACTION_PENALTY': return { event: 'defend_fraction_penalty' };
-    case 'PLAY_OPERATION': return { event: 'play_operation', data: { cardId: action.card?.id } };
-    case 'FORWARD_CHALLENGE': return { event: 'play_operation', data: { cardId: action.card?.id } };
+    case 'PLAY_OPERATION': return null;
+    case 'FORWARD_CHALLENGE': return null;
     case 'PLAY_JOKER':
       return { event: 'play_joker', data: { cardId: action.card?.id, chosenOperation: action.chosenOperation } };
     case 'DRAW_CARD': return { event: 'draw_card' };
