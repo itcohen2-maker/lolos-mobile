@@ -3,7 +3,8 @@
 // ============================================================
 
 import { v4 as uuidv4 } from 'uuid';
-import type { Player, ServerGameState } from '../../shared/types';
+import type { AppLocale, Player, ServerGameState } from '../../shared/types';
+import type { LocalizedMessage } from '../../shared/i18n';
 
 export interface Room {
   code: string;
@@ -33,7 +34,9 @@ function generateRoomCode(): string {
 
 // ── Public API ──
 
-export function createRoom(playerName: string, socketId: string): { room: Room; playerId: string } {
+export function createRoom(
+  playerName: string, socketId: string, locale: AppLocale = 'he',
+): { room: Room; playerId: string } {
   const code = generateRoomCode();
   const playerId = uuidv4();
   const player: Player = {
@@ -43,6 +46,10 @@ export function createRoom(playerName: string, socketId: string): { room: Room; 
     calledLolos: false,
     isConnected: true,
     isHost: true,
+    afkWarnings: 0,
+    isEliminated: false,
+    isSpectator: false,
+    locale,
   };
   const room: Room = {
     code,
@@ -58,13 +65,13 @@ export function createRoom(playerName: string, socketId: string): { room: Room; 
 }
 
 export function joinRoom(
-  roomCode: string, playerName: string, socketId: string
-): { room: Room; playerId: string } | { error: string } {
+  roomCode: string, playerName: string, socketId: string, locale: AppLocale = 'he',
+): { room: Room; playerId: string } | { error: LocalizedMessage } {
   const room = rooms.get(roomCode);
-  if (!room) return { error: 'חדר לא נמצא' };
-  if (room.state) return { error: 'המשחק כבר התחיל' };
-  if (room.players.length >= 6) return { error: 'החדר מלא (מקסימום 6 שחקנים)' };
-  if (room.players.some(p => p.name === playerName)) return { error: 'השם הזה כבר תפוס' };
+  if (!room) return { error: { key: 'room.notFound' } };
+  if (room.state) return { error: { key: 'room.gameAlreadyStarted' } };
+  if (room.players.length >= 6) return { error: { key: 'room.full' } };
+  if (room.players.some(p => p.name === playerName)) return { error: { key: 'room.nameTaken' } };
 
   const playerId = uuidv4();
   const player: Player = {
@@ -74,6 +81,10 @@ export function joinRoom(
     calledLolos: false,
     isConnected: true,
     isHost: false,
+    afkWarnings: 0,
+    isEliminated: false,
+    isSpectator: false,
+    locale,
   };
   room.players.push(player);
   room.lastActivity = Date.now();
@@ -121,14 +132,15 @@ export function leaveRoom(socketId: string): { room: Room; playerId: string; pla
 }
 
 export function reconnectPlayer(
-  roomCode: string, playerId: string, socketId: string
-): { room: Room; player: Player } | { error: string } {
+  roomCode: string, playerId: string, socketId: string, locale?: AppLocale,
+): { room: Room; player: Player } | { error: LocalizedMessage } {
   const room = rooms.get(roomCode);
-  if (!room) return { error: 'חדר לא נמצא' };
+  if (!room) return { error: { key: 'room.notFound' } };
   const player = room.players.find(p => p.id === playerId);
-  if (!player) return { error: 'שחקן לא נמצא בחדר' };
+  if (!player) return { error: { key: 'room.playerNotInRoom' } };
 
   player.isConnected = true;
+  if (locale) player.locale = locale;
   room.lastActivity = Date.now();
   socketToRoom.set(socketId, { roomCode, playerId });
   console.log(`[ROOM] ${player.name} reconnected to ${roomCode}`);

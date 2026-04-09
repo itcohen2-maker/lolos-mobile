@@ -141,8 +141,18 @@ export function generateValidTargets(dice: DiceResult): EquationOption[] {
 
 // ── Validation functions ──
 
+/** ערך מספרי אפקטיבי: מספר → value, פרא על הערימה → resolvedValue */
+export function getEffectiveNumber(card: Card | undefined): number | null {
+  if (!card) return null;
+  if (card.type === 'number') return card.value ?? null;
+  if (card.type === 'wild') return card.resolvedValue ?? null;
+  return null;
+}
+
 export function validateIdenticalPlay(card: Card, topDiscard: Card | undefined): boolean {
-  if (!topDiscard || card.type !== topDiscard.type) return false;
+  if (!topDiscard) return false;
+  if (card.type === 'wild') return topDiscard.type === 'number' || topDiscard.type === 'wild';
+  if (card.type !== topDiscard.type) return false;
   switch (card.type) {
     case 'number': return card.value === topDiscard.value;
     case 'fraction': return card.fraction === topDiscard.fraction;
@@ -154,8 +164,10 @@ export function validateIdenticalPlay(card: Card, topDiscard: Card | undefined):
 
 export function validateFractionPlay(card: Card, topDiscard: Card | undefined): boolean {
   if (!card.fraction || !topDiscard) return false;
-  if (topDiscard.type !== 'number' || topDiscard.value === undefined) return false;
-  return isDivisibleByFraction(topDiscard.value, card.fraction as Fraction);
+  if (topDiscard.type !== 'number' && topDiscard.type !== 'wild') return false;
+  const effective = getEffectiveNumber(topDiscard);
+  if (effective === null) return false;
+  return isDivisibleByFraction(effective, card.fraction as Fraction);
 }
 
 function getStagedPermutations(arr: number[]): number[][] {
@@ -169,11 +181,36 @@ function getStagedPermutations(arr: number[]): number[][] {
 }
 
 export function validateStagedCards(numberCards: Card[], opCard: Card | null, target: number): boolean {
-  const values = numberCards.map(c => c.value ?? 0);
-  if (values.length === 0) return false;
-  if (!opCard) {
-    return values.reduce((s, v) => s + v, 0) === target;
+  const wildCount = numberCards.filter(c => c.type === 'wild').length;
+  const numCards = numberCards.filter(c => c.type === 'number');
+  const values = numCards.map(c => c.value ?? 0);
+  if (wildCount > 1) return false;
+  if (wildCount === 1) {
+    if (!opCard) {
+      const sum = values.reduce((s, v) => s + v, 0);
+      const wildVal = target - sum;
+      return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal);
+    }
+    const op = opCard.operation!;
+    for (let wildVal = 0; wildVal <= 25; wildVal++) {
+      const allVals = [...values, wildVal];
+      const perms = getStagedPermutations(allVals);
+      for (const perm of perms) {
+        for (let gapPos = 0; gapPos < perm.length - 1; gapPos++) {
+          let result: number | null = perm[0];
+          for (let i = 1; i < perm.length; i++) {
+            const useOp = i - 1 === gapPos ? op : '+';
+            result = applyOperation(result!, useOp, perm[i]);
+            if (result === null) break;
+          }
+          if (result !== null && result === target) return true;
+        }
+      }
+    }
+    return false;
   }
+  if (values.length === 0) return false;
+  if (!opCard) return values.reduce((s, v) => s + v, 0) === target;
   const op = opCard.operation!;
   const perms = getStagedPermutations(values);
   for (const perm of perms) {
@@ -188,6 +225,54 @@ export function validateStagedCards(numberCards: Card[], opCard: Card | null, ta
     }
   }
   return false;
+}
+
+export function computeWildValueInStaged(numberCards: Card[], opCard: Card | null, target: number): number | null {
+  const wildCount = numberCards.filter(c => c.type === 'wild').length;
+  const numCards = numberCards.filter(c => c.type === 'number');
+  const values = numCards.map(c => c.value ?? 0);
+  if (wildCount !== 1) return null;
+  if (!opCard) {
+    const wildVal = target - values.reduce((s, v) => s + v, 0);
+    return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal) ? wildVal : null;
+  }
+  const op = opCard.operation!;
+  for (let wildVal = 0; wildVal <= 25; wildVal++) {
+    const allVals = [...values, wildVal];
+    const perms = getStagedPermutations(allVals);
+    for (const perm of perms) {
+      for (let gapPos = 0; gapPos < perm.length - 1; gapPos++) {
+        let result: number | null = perm[0];
+        for (let i = 1; i < perm.length; i++) {
+          const useOp = i - 1 === gapPos ? op : '+';
+          result = applyOperation(result!, useOp, perm[i]);
+          if (result === null) break;
+        }
+        if (result !== null && result === target) return wildVal;
+      }
+    }
+  }
+  return null;
+}
+
+export function resolveDiscardNumberCardFromStaged(stagedCards: Card[], equationResult: number): Card {
+  const stagedNumbers = stagedCards.filter(c => c.type === 'number' || c.type === 'wild');
+  const stagedOpCard = stagedCards.find(c => c.type === 'operation') ?? null;
+  const wildVal = stagedNumbers.some(c => c.type === 'wild')
+    ? computeWildValueInStaged(stagedNumbers, stagedOpCard, equationResult)
+    : null;
+
+  for (let i = stagedCards.length - 1; i >= 0; i--) {
+    const c = stagedCards[i];
+    if (c.type === 'number') return c;
+    if (c.type === 'wild') return wildVal !== null ? { ...c, resolvedValue: wildVal } : c;
+  }
+
+  const fallback = stagedNumbers[stagedNumbers.length - 1];
+  if (fallback?.type === 'wild') {
+    return wildVal !== null ? { ...fallback, resolvedValue: wildVal } : fallback;
+  }
+  return fallback as Card;
 }
 
 export function computeStagedResult(staged: Card[]): number | null {

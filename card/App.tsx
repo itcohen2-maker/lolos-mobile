@@ -18,10 +18,14 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
 import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
-import { WELCOME_GAME_BODY_CORE } from './src/copy/welcomeGame';
+import * as Localization from 'expo-localization';
+import { t as translate } from './shared/i18n';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
+
+const DEVICE_LOCALE = Localization.getLocales()[0]?.languageCode?.toLowerCase() === 'en' ? 'en' : 'he';
+const WELCOME_GAME_BODY_CORE = translate(DEVICE_LOCALE, 'welcome.body');
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -172,14 +176,14 @@ function generateDeck(difficulty: 'easy' | 'full'): Card[] {
       cards.push({ id: makeId(), type: 'number', value: v });
   const fracs: { frac: Fraction; count: number }[] = [
     { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
-    { frac: '1/4', count: 4 }, { frac: '1/5', count: 4 },
+    { frac: '1/4', count: 3 }, { frac: '1/5', count: 2 },
   ];
   for (const { frac, count } of fracs)
     for (let i = 0; i < count; i++)
       cards.push({ id: makeId(), type: 'fraction', fraction: frac });
   const operations: Operation[] = ['+', '-', 'x', '÷'];
   for (const op of operations)
-    for (let i = 0; i < 4; i++)
+    for (let i = 0; i < (op === '÷' ? 3 : 4); i++)
       cards.push({ id: makeId(), type: 'operation', operation: op });
   for (let i = 0; i < 4; i++)
     cards.push({ id: makeId(), type: 'joker' });
@@ -250,25 +254,6 @@ function generateValidTargets(dice: DiceResult): EquationOption[] {
           }
         }
         // Removed: no PEMDAS grouping — all calculations are strictly left-to-right
-      }
-    }
-  }
-
-  // 2-dice combinations (3rd die optional)
-  const pairs: [number, number][] = [
-    [values[0], values[1]], [values[0], values[2]], [values[1], values[2]],
-  ];
-  for (const [a, b] of pairs) {
-    for (const op of ALL_OPS) {
-      const r1 = applyOperation(a, op, b);
-      if (r1 !== null && r1 >= 0 && Number.isInteger(r1)) {
-        const eq1 = `${a} ${op} ${b} = ${r1}`;
-        if (!seen.has(`${r1}:${eq1}`)) { seen.add(`${r1}:${eq1}`); results.push({ equation: eq1, result: r1 }); }
-      }
-      const r2 = applyOperation(b, op, a);
-      if (r2 !== null && r2 >= 0 && Number.isInteger(r2)) {
-        const eq2 = `${b} ${op} ${a} = ${r2}`;
-        if (!seen.has(`${r2}:${eq2}`)) { seen.add(`${r2}:${eq2}`); results.push({ equation: eq2, result: r2 }); }
       }
     }
   }
@@ -1343,8 +1328,8 @@ function EquationBuilder() {
     if (state.jokerEquationActive && !state.jokerEquationOp) {
       setCheckMsg('יש לבחור פעולה לג\'וקר!'); return;
     }
-    if (slotVal(0) === null || slotVal(1) === null) {
-      setCheckMsg('הנח/י לפחות 2 קוביות!'); return;
+    if (slotVal(0) === null || slotVal(1) === null || slotVal(2) === null) {
+      setCheckMsg('יש להניח 3 קוביות כדי לאשר!'); return;
     }
     const actual = computeSlotResult(slotVal(0), effectiveOp1, slotVal(1), op2, slotVal(2));
     if (actual === null || !Number.isInteger(actual) || actual < 0) {
@@ -1899,12 +1884,87 @@ function StartScreen() {
   const [names, setNames] = useState<string[]>(Array(10).fill(''));
   const [diff, setDiff] = useState<'easy' | 'full'>('full');
   const [rules, setRules] = useState(false);
+  const [showTeacherDashboard, setShowTeacherDashboard] = useState(false);
+  const [activeTeacherOptionId, setActiveTeacherOptionId] = useState<string | null>(null);
+  const [teacherActionMessage, setTeacherActionMessage] = useState('בחר/י פעולת מורה כדי להפעיל סימולציה מקומית.');
   const mx = diff === 'easy' ? 8 : 10;
+  const teacherOptions = [
+    {
+      id: 'level-filter',
+      title: 'סינון לפי רמה',
+      action: 'בחירה בין תמיכה / ליבה / אתגר כדי לראות תמונת מצב ממוקדת.',
+      impact: 'מאפשרת החלטות מהירות לכל שכבת יכולת בלי עומס מידע.',
+    },
+    {
+      id: 'support-groups',
+      title: 'יצירת קבוצות תגבור',
+      action: 'קיבוץ תלמידים לפי פער משותף (למשל שברים או סדר פעולות).',
+      impact: 'מעלה אפקטיביות של הוראה בקבוצות קטנות.',
+    },
+    {
+      id: 'differentiated-task',
+      title: 'הקצאת משימה דיפרנציאלית',
+      action: 'הצמדת משימה מותאמת לרמה לתלמיד בודד או לקבוצה.',
+      impact: 'כל תלמיד מקבל אתגר מתאים ולא משימה כללית מדי.',
+    },
+    {
+      id: 'weak-concepts',
+      title: 'זיהוי מושגים חלשים',
+      action: 'סימון אוטומטי של נושאים חלשים: חיבור, חיסור, כפל, שברים, סדר פעולות.',
+      impact: 'מונע ניחוש ומכוון את המורה לשורש הקושי.',
+    },
+    {
+      id: 'weekly-goal',
+      title: 'יעד שבועי אישי',
+      action: 'הגדרת יעד לכל תלמיד (למשל 80% דיוק או 3 יחידות בשבוע).',
+      impact: 'יוצר מחויבות והתקדמות מדידה לאורך זמן.',
+    },
+    {
+      id: 'performance-drop-alert',
+      title: 'התראות ירידה בביצועים',
+      action: 'התראה כאשר יש ירידה עקבית בדיוק או בקצב.',
+      impact: 'מאפשרת התערבות מוקדמת לפני פער גדול.',
+    },
+    {
+      id: 'inactive-alert',
+      title: 'התראות חוסר פעילות',
+      action: 'סימון תלמידים שלא ביצעו תרגול בפרק זמן שהוגדר.',
+      impact: 'שומר על רצף למידה ומונע נשירה שקטה.',
+    },
+    {
+      id: 'dynamic-difficulty',
+      title: 'התאמת קושי דינמית',
+      action: 'העלאה/הורדה של רמת קושי לפי הצלחה אחרונה.',
+      impact: 'איזון בין ביטחון לאתגר ושיפור התמדה.',
+    },
+    {
+      id: 'personal-path',
+      title: 'תוכנית למידה אישית',
+      action: 'מסלול מומלץ אוטומטי לכל תלמיד לפי נתוני ביצוע.',
+      impact: 'למידה מדויקת יותר במקום תבנית אחידה לכל הכיתה.',
+    },
+    {
+      id: 'export-report',
+      title: 'ייצוא דוח להורים ולהנהלה',
+      action: 'הפקת סיכום שבועי עם הישגים, סיכונים והמלצות להמשך.',
+      impact: 'שקיפות מלאה ושיתוף פעולה עם בית והנהלה.',
+    },
+  ];
+  const teacherKpis = [
+    { label: 'דיוק כיתתי', value: '84%' },
+    { label: 'התקדמות יחידות', value: '5/8' },
+    { label: 'תלמידים בסיכון', value: '4' },
+    { label: 'השלמת מטלות', value: '76%' },
+  ];
+  const handleTeacherOptionPress = (option: { id: string; title: string; action: string; impact: string }) => {
+    setActiveTeacherOptionId(option.id);
+    setTeacherActionMessage(`הופעלה "${option.title}" | ${option.action} | תוצאה: ${option.impact}`);
+  };
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: '#111827' }} contentContainerStyle={{ padding: 24, paddingTop: 60, alignItems: 'flex-end' }} keyboardShouldPersistTaps="handled">
-      <Text style={{ fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4, alignSelf: 'center' }}>משחק קלפים</Text>
-      <Text style={{ color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center' }}>משחק קלפים חשבוני חינוכי</Text>
+      <Text style={{ fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4, alignSelf: 'center' }}>Salinda / סלינדה</Text>
+      <Text style={{ color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center' }}>סלינדה · משחק חשבוני חינוכי</Text>
 
       <Text style={ssS.label}>מספר שחקנים</Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-end', direction: 'ltr' }}>
@@ -1935,10 +1995,18 @@ function StartScreen() {
       <Btn variant="success" size="lg" onPress={() => {
         const players = Array.from({ length: pc }, (_, i) => ({ name: names[i].trim() || `שחקן ${i + 1}` }));
         dispatch({ type: 'START_GAME', players, difficulty: diff });
-      }} style={{ width: '100%', marginTop: 12 }}>התחל משחק</Btn>
+      }} style={{ width: 220, height: 56, borderRadius: 28, marginTop: 12, alignSelf: 'center' }}>התחל משחק</Btn>
 
       <Btn variant="secondary" size="sm" onPress={() => setRules(!rules)} style={{ width: '100%', marginTop: 8 }}>
         {rules ? 'הסתר חוקים' : 'איך משחקים?'}
+      </Btn>
+      <Btn
+        variant="gold"
+        size="sm"
+        onPress={() => setShowTeacherDashboard(!showTeacherDashboard)}
+        style={{ width: '100%', marginTop: 8 }}
+      >
+        {showTeacherDashboard ? 'הסתר מסך מורה' : 'ראה מסך מורה'}
       </Btn>
       {rules && (
         <View style={ssS.rBox}>
@@ -1949,7 +2017,7 @@ function StartScreen() {
           </View>
           {[
             'כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד — מנצח!',
-            'הטל 3 קוביות וצור מספר יעד באמצעות חשבון (הקובייה השלישית אופציונלית).',
+            'הטל 3 קוביות וצור מספר יעד באמצעות חשבון - משתמשים תמיד בשלוש קוביות.',
             'פתור את המשוואה קודם — רק אז תוכל/י לבחור קלפים מהיד.',
             'שחק/י קלפי מספר מהיד שסכומם שווה לתוצאת המשוואה.',
             'לפני הטלת קוביות: אם יש קלף תואם לערימה — לחץ עליו לסיום תור.',
@@ -1957,7 +2025,66 @@ function StartScreen() {
           ].map((r, i) => <Text key={i} style={ssS.rItem}>{i + 1}. {r}</Text>)}
         </View>
       )}
+      {showTeacherDashboard && (
+        <TeacherDashboardPanel
+          options={teacherOptions}
+          kpis={teacherKpis}
+          activeOptionId={activeTeacherOptionId}
+          actionMessage={teacherActionMessage}
+          onOptionPress={handleTeacherOptionPress}
+        />
+      )}
     </ScrollView>
+  );
+}
+
+function TeacherDashboardPanel({
+  options,
+  kpis,
+  activeOptionId,
+  actionMessage,
+  onOptionPress,
+}: {
+  options: { id: string; title: string; action: string; impact: string }[];
+  kpis: { label: string; value: string }[];
+  activeOptionId: string | null;
+  actionMessage: string;
+  onOptionPress: (option: { id: string; title: string; action: string; impact: string }) => void;
+}) {
+  return (
+    <View style={ssS.rBox}>
+      <Text style={ssS.rTitle}>דשבורד מורה - מסך מעקב</Text>
+      <View style={ssS.dashboardGrid}>
+        {kpis.map((kpi) => (
+          <View key={kpi.label} style={ssS.kpiCard}>
+            <Text style={ssS.kpiLabel}>{kpi.label}</Text>
+            <Text style={ssS.kpiValue}>{kpi.value}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={ssS.sectionSubtitle}>פעולות מורה</Text>
+      {options.map((opt, i) => (
+        <View key={opt.id} style={[ssS.optionCard, activeOptionId === opt.id && ssS.optionCardActive]}>
+          <Text style={ssS.optionTitle}>
+            {i + 1}. {opt.title}
+          </Text>
+          <Text style={ssS.optionLine}>מה עושים: {opt.action}</Text>
+          <Text style={ssS.optionLine}>תוצאה צפויה: {opt.impact}</Text>
+          <Btn
+            variant={activeOptionId === opt.id ? 'success' : 'secondary'}
+            size="sm"
+            onPress={() => onOptionPress(opt)}
+            style={{ marginTop: 8, alignSelf: 'stretch' }}
+          >
+            {activeOptionId === opt.id ? 'הופעל' : 'הפעל אופציה'}
+          </Btn>
+        </View>
+      ))}
+      <View style={ssS.actionMessageBox}>
+        <Text style={ssS.actionMessageTitle}>סטטוס פעולה אחרונה</Text>
+        <Text style={ssS.actionMessageText}>{actionMessage}</Text>
+      </View>
+    </View>
   );
 }
 const ssS = StyleSheet.create({
@@ -1971,6 +2098,59 @@ const ssS = StyleSheet.create({
   rBox: { marginTop: 16, backgroundColor: 'rgba(55,65,81,0.5)', borderRadius: 10, padding: 16, width: '100%' },
   rTitle: { color: '#FFF', fontWeight: '700', fontSize: 15, marginBottom: 10, textAlign: 'right' },
   rItem: { color: '#D1D5DB', fontSize: 12, marginBottom: 6, lineHeight: 20, textAlign: 'right' },
+  learningHero: {
+    backgroundColor: 'rgba(59,130,246,0.14)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.35)',
+    padding: 12,
+    marginBottom: 12,
+  },
+  learningHeroTitle: { color: '#BFDBFE', fontSize: 14, fontWeight: '800', textAlign: 'right' },
+  learningHeroText: { color: 'rgba(255,255,255,0.9)', fontSize: 12, lineHeight: 18, marginTop: 4, textAlign: 'right' },
+  sectionSubtitle: { color: '#93C5FD', fontSize: 13, fontWeight: '700', marginTop: 8, marginBottom: 8, textAlign: 'right' },
+  levelBox: {
+    backgroundColor: 'rgba(17,24,39,0.5)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(75,85,99,0.65)',
+    padding: 10,
+    marginBottom: 8,
+  },
+  levelTitle: { color: '#F9FAFB', fontSize: 12, fontWeight: '800', textAlign: 'right', marginBottom: 4 },
+  levelText: { color: '#D1D5DB', fontSize: 12, lineHeight: 18, textAlign: 'right' },
+  dashboardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10, direction: 'ltr' },
+  kpiCard: {
+    width: '48%',
+    backgroundColor: 'rgba(17,24,39,0.55)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(75,85,99,0.6)',
+    padding: 10,
+  },
+  kpiLabel: { color: '#9CA3AF', fontSize: 11, textAlign: 'right' },
+  kpiValue: { color: '#FDE68A', fontSize: 19, fontWeight: '900', textAlign: 'right', marginTop: 4 },
+  optionCard: {
+    backgroundColor: 'rgba(17,24,39,0.48)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(75,85,99,0.58)',
+    padding: 10,
+    marginBottom: 8,
+  },
+  optionCardActive: { borderColor: 'rgba(34,197,94,0.8)', backgroundColor: 'rgba(22,163,74,0.15)' },
+  optionTitle: { color: '#F9FAFB', fontSize: 13, fontWeight: '800', textAlign: 'right', marginBottom: 4 },
+  optionLine: { color: '#D1D5DB', fontSize: 12, lineHeight: 18, textAlign: 'right' },
+  actionMessageBox: {
+    marginTop: 8,
+    backgroundColor: 'rgba(30,64,175,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.45)',
+    borderRadius: 10,
+    padding: 10,
+  },
+  actionMessageTitle: { color: '#BFDBFE', fontSize: 12, fontWeight: '800', textAlign: 'right', marginBottom: 4 },
+  actionMessageText: { color: '#DBEAFE', fontSize: 12, lineHeight: 18, textAlign: 'right' },
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -2049,7 +2229,7 @@ function GameScreen() {
         <TouchableOpacity style={gsS.exit} onPress={() => dispatch({ type: 'RESET_GAME' })}>
           <Text style={gsS.exitT}>יציאה</Text>
         </TouchableOpacity>
-        <Text style={gsS.logo}>משחק קלפים</Text>
+        <Text style={gsS.logo}>Salinda / סלינדה</Text>
         <Text style={gsS.turn}>
           תורו/ה של <Text style={{ color: '#FFF', fontWeight: '700' }}>{cp?.name}</Text>
         </Text>

@@ -1,4 +1,6 @@
-import React, { createContext, useReducer, ReactNode } from 'react'
+import React, { createContext, useCallback, useMemo, useReducer, ReactNode } from 'react'
+import { useLocaleOptional } from '../i18n/LocaleContext'
+import { t as translateStatic, type MsgParams } from '../../shared/i18n'
 import { GameState, GameAction, Card } from '../types/game'
 import { generateDeck, shuffle, dealCards } from '../utils/deck'
 import { rollDice, isTriple, generateValidTargets } from '../utils/dice'
@@ -58,25 +60,25 @@ function drawFromPile(state: GameState, count: number, playerIndex: number): Gam
   return s
 }
 
-function checkWin(state: GameState): GameState {
+function checkWin(state: GameState, tf: (key: string, params?: MsgParams) => string): GameState {
   const currentPlayer = state.players[state.currentPlayerIndex]
-  if (currentPlayer.hand.length === 0 && currentPlayer.calledLolos) {
+  if (currentPlayer.hand.length <= 2) {
     return { ...state, phase: 'game-over', winner: currentPlayer }
   }
-  if (currentPlayer.hand.length === 0 && !currentPlayer.calledLolos) {
-    const s = drawFromPile(state, 1, state.currentPlayerIndex)
-    if (s.players[state.currentPlayerIndex].hand.length === 0) {
-      return { ...s, phase: 'game-over', winner: currentPlayer }
-    }
+  if (currentPlayer.hand.length === 3) {
     return {
-      ...s,
-      message: `${currentPlayer.name} שכח/ה לקרוא לולוס! שלף/י קלף אחד.`,
+      ...state,
+      message: tf('legacy.threeCardsWarn', { name: currentPlayer.name }),
     }
   }
   return state
 }
 
-function gameReducer(state: GameState, action: GameAction): GameState {
+function gameReducer(
+  state: GameState,
+  action: GameAction,
+  tf: (key: string, params?: MsgParams) => string,
+): GameState {
   switch (action.type) {
     case 'START_GAME': {
       const deck = shuffle(generateDeck(action.difficulty))
@@ -133,7 +135,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
           return {
             ...state,
             phase: 'select-cards',
-            message: `פעולת ${op}! שחק/י קלף פעולה תואם או ג'וקר כדי להגן, או סיים/י תור כדי לשלוף 2 קלפים.`,
+            message: tf('legacy.opChallengeDefend', { op }),
           }
         } else {
           let s = drawFromPile(state, 2, state.currentPlayerIndex)
@@ -141,7 +143,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
             ...s,
             phase: 'roll-dice',
             activeOperation: null,
-            message: `אין הגנה מפני ${op}! שלפת 2 קלפי עונשין. עכשיו הטל/י קוביות.`,
+            message: tf('legacy.opChallengePenalty', { op }),
           }
         }
       }
@@ -161,7 +163,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
             s = drawFromPile(s, penaltyCount, i)
           }
         }
-        s.message = `שלישייה של ${dice.die1}! כל שאר השחקנים שולפים ${penaltyCount} קלפים!`
+        s.message = tf('toast.tripleDice', { n: String(dice.die1) })
         newState = s
       }
 
@@ -171,7 +173,7 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         validTargets,
         phase: 'select-cards',
         message: newState.message || (validTargets.length === 0
-          ? 'אין מספרים תקינים מהקוביות. שחק/י קלפים מיוחדים או שלוף/י.'
+          ? tf('legacy.diceNoValidTargets')
           : ''),
       }
     }
@@ -187,14 +189,14 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'PLAY_CARDS': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+        return { ...state, message: tf('legacy.playedThisTurn') }
       }
       if (state.selectedCards.length === 0) {
-        return { ...state, message: 'בחר/י לפחות קלף אחד לשחק!' }
+        return { ...state, message: tf('legacy.pickOneCard') }
       }
       const numberCards = state.selectedCards.filter((c) => c.type === 'number')
       if (numberCards.length !== state.selectedCards.length) {
-        return { ...state, message: 'ניתן לשחק רק קלפי מספר בפעולה זו!' }
+        return { ...state, message: tf('legacy.numbersOnlyPlay') }
       }
       const cardSum = numberCards.reduce((s, c) => s + (c.value ?? 0), 0)
       const matchedTarget = state.validTargets.find((t) => t.result === cardSum)
@@ -202,7 +204,10 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         const validNums = state.validTargets.map((t) => t.result).join(', ')
         return {
           ...state,
-          message: `הסכום ${cardSum} לא תואם אף תוצאת קוביות. תקינים: ${validNums || 'אין'}`,
+          message: tf('legacy.sumNoMatch', {
+            sum: String(cardSum),
+            valid: validNums || tf('legacy.noneValid'),
+          }),
         }
       }
 
@@ -223,10 +228,10 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         identicalPlayCount: 0,
         targetNumber: null,
         hasPlayedCards: true,
-        message: 'קלפים שוחקו! סיים/י את התור.',
+        message: tf('legacy.cardsPlayedEndTurn'),
       }
 
-      newState = checkWin(newState)
+      newState = checkWin(newState, tf)
       if (newState.phase === 'game-over') return newState
 
       return { ...newState, phase: 'select-cards' }
@@ -234,24 +239,24 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'CONFIRM_EQUATION': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+        return { ...state, message: tf('legacy.playedThisTurn') }
       }
       if (state.selectedCards.length === 0) {
-        return { ...state, message: 'בחר/י לפחות קלף אחד לשחק!' }
+        return { ...state, message: tf('legacy.pickOneCard') }
       }
       const eqNumberCards = state.selectedCards.filter((c) => c.type === 'number')
       if (eqNumberCards.length !== state.selectedCards.length) {
-        return { ...state, message: 'ניתן לשחק רק קלפי מספר בפעולה זו!' }
+        return { ...state, message: tf('legacy.numbersOnlyPlay') }
       }
       const eqCardSum = eqNumberCards.reduce((s, c) => s + (c.value ?? 0), 0)
 
       // Strict validation: equation result must match card sum AND be a valid target
       if (action.equationResult !== eqCardSum) {
-        return { ...state, message: 'המשוואה אינה נכונה או חסרה!' }
+        return { ...state, message: tf('legacy.equationWrong') }
       }
       const eqMatchedTarget = state.validTargets.find((t) => t.result === action.equationResult)
       if (!eqMatchedTarget) {
-        return { ...state, message: 'המשוואה אינה נכונה או חסרה!' }
+        return { ...state, message: tf('legacy.equationWrong') }
       }
 
       const eqPlayedIds = new Set(state.selectedCards.map((c) => c.id))
@@ -271,10 +276,10 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         identicalPlayCount: 0,
         targetNumber: null,
         hasPlayedCards: true,
-        message: 'קלפים שוחקו! סיים/י את התור.',
+        message: tf('legacy.cardsPlayedEndTurn'),
       }
 
-      eqNewState = checkWin(eqNewState)
+      eqNewState = checkWin(eqNewState, tf)
       if (eqNewState.phase === 'game-over') return eqNewState
 
       return { ...eqNewState, phase: 'select-cards' }
@@ -282,14 +287,14 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'PLAY_IDENTICAL': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+        return { ...state, message: tf('legacy.playedThisTurn') }
       }
       const topDiscard = state.discardPile[state.discardPile.length - 1]
       if (!validateIdenticalPlay(action.card, topDiscard)) {
-        return { ...state, message: 'הקלף לא תואם את הקלף העליון!' }
+        return { ...state, message: tf('legacy.cardNotMatchingTop') }
       }
       if (state.identicalPlayCount >= 2) {
-        return { ...state, message: 'מקסימום 2 שחיקות זהות ברצף!' }
+        return { ...state, message: tf('legacy.identicalMaxTwo') }
       }
 
       const currentPlayer = state.players[state.currentPlayerIndex]
@@ -305,10 +310,10 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         identicalPlayCount: state.identicalPlayCount + 1,
         selectedCards: [],
         hasPlayedCards: true,
-        message: 'קלף זהה שוחק! סיים/י את התור.',
+        message: tf('legacy.identicalPlayed'),
       }
 
-      newState = checkWin(newState)
+      newState = checkWin(newState, tf)
       if (newState.phase === 'game-over') return newState
 
       return newState
@@ -316,11 +321,11 @@ function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'PLAY_OPERATION': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+        return { ...state, message: tf('legacy.playedThisTurn') }
       }
       const currentPlayer = state.players[state.currentPlayerIndex]
       if (action.card.type !== 'operation') {
-        return { ...state, message: 'זה לא קלף פעולה!' }
+        return { ...state, message: tf('legacy.notOperationCard') }
       }
 
       const newHand = currentPlayer.hand.filter((c) => c.id !== action.card.id)
@@ -335,20 +340,20 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         activeOperation: action.card.operation!,
         selectedCards: [],
         hasPlayedCards: true,
-        message: `שוחק קלף פעולה ${action.card.operation}! סיים/י את התור.`,
+        message: tf('legacy.operationPlayed', { op: action.card.operation! }),
       }
 
-      newState = checkWin(newState)
+      newState = checkWin(newState, tf)
       return newState
     }
 
     case 'PLAY_FRACTION': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה!' }
+        return { ...state, message: tf('legacy.playedThisTurn') }
       }
       const topDiscard = state.discardPile[state.discardPile.length - 1]
       if (!validateFractionPlay(action.card, topDiscard)) {
-        return { ...state, message: 'לא ניתן לשחק שבר זה על הקלף הנוכחי!' }
+        return { ...state, message: tf('fraction.cannotPlayOnTop') }
       }
 
       const currentPlayer = state.players[state.currentPlayerIndex]
@@ -373,10 +378,15 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         discardPile: [...state.discardPile, action.card, resultCard],
         selectedCards: [],
         hasPlayedCards: true,
-        message: `שוחק ${action.card.fraction}! ${topValue} ÷ ${denom} = ${newValue}. סיים/י את התור.`,
+        message: tf('legacy.fractionPlayedMath', {
+          frac: action.card.fraction!,
+          top: String(topValue),
+          denom: String(denom),
+          result: String(newValue),
+        }),
       }
 
-      newState = checkWin(newState)
+      newState = checkWin(newState, tf)
       return newState
     }
 
@@ -403,42 +413,31 @@ function gameReducer(state: GameState, action: GameAction): GameState {
         selectedCards: [],
         jokerModalOpen: false,
         hasPlayedCards: true,
-        message: `ג'וקר שוחק כ-${action.chosenOperation}! סיים/י את התור.`,
+        message: tf('legacy.jokerPlayedAs', { op: action.chosenOperation }),
       }
 
-      newState = checkWin(newState)
+      newState = checkWin(newState, tf)
       return newState
     }
 
     case 'DRAW_CARD': {
       if (state.hasPlayedCards) {
-        return { ...state, message: 'כבר שיחקת קלפים בתור הזה! סיים/י את התור.' }
+        return { ...state, message: tf('legacy.endTurnAfterPlay') }
       }
       let s = reshuffleDiscard(state)
       if (s.drawPile.length === 0) {
-        return { ...s, hasDrawnCard: true, message: 'אין קלפים לשליפה!' }
+        return { ...s, hasDrawnCard: true, message: tf('legacy.noCardsToDraw') }
       }
       s = drawFromPile(s, 1, s.currentPlayerIndex)
       return {
         ...s,
         hasDrawnCard: true,
-        message: `נשלף קלף. (${s.players[s.currentPlayerIndex].hand.length} קלפים ביד)`,
+        message: tf('legacy.drewCardCount', { n: s.players[s.currentPlayerIndex].hand.length }),
       }
     }
 
     case 'CALL_LOLOS': {
-      const currentPlayer = state.players[state.currentPlayerIndex]
-      if (currentPlayer.hand.length !== 1) {
-        return { ...state, message: 'ניתן לקרוא לולוס רק עם קלף אחד ביד!' }
-      }
-      const newPlayers = state.players.map((p, i) =>
-        i === state.currentPlayerIndex ? { ...p, calledLolos: true } : p
-      )
-      return {
-        ...state,
-        players: newPlayers,
-        message: `${currentPlayer.name} קרא/ה לולוס!`,
-      }
+      return state
     }
 
     case 'END_TURN': {
@@ -448,17 +447,13 @@ function gameReducer(state: GameState, action: GameAction): GameState {
       // Operation penalty: only if player didn't counter (didn't play cards this turn)
       if (s.activeOperation && !state.hasPlayedCards) {
         s = drawFromPile(s, 2, s.currentPlayerIndex)
-        s.message = `${state.players[state.currentPlayerIndex].name} קיבל/ה עונש ${state.activeOperation}! שלף/ה 2 קלפים.`
+        s.message = tf('legacy.opPenaltyEndTurn', {
+          name: state.players[state.currentPlayerIndex].name,
+          op: state.activeOperation!,
+        })
       } else if (s.activeOperation && state.hasPlayedCards) {
         // Player countered or played operation — pass activeOperation to next player
         keepActiveOp = true
-      }
-
-      // LOLOS penalty check (use updated player state after potential penalty draws)
-      const updatedPlayer = s.players[s.currentPlayerIndex]
-      if (updatedPlayer.hand.length === 1 && !updatedPlayer.calledLolos) {
-        s = drawFromPile(s, 1, s.currentPlayerIndex)
-        s.message = `${updatedPlayer.name} שכח/ה לקרוא לולוס! שלף/ה קלף עונשין.`
       }
 
       const nextIndex = (s.currentPlayerIndex + 1) % s.players.length
@@ -502,7 +497,13 @@ export const GameContext = createContext<{
 })
 
 export function GameProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(gameReducer, initialState)
+  const loc = useLocaleOptional()
+  const tf = useMemo(
+    () => loc?.t ?? ((key: string, params?: MsgParams) => translateStatic('he', key, params)),
+    [loc?.t],
+  )
+  const reducer = useCallback((s: GameState, a: GameAction) => gameReducer(s, a, tf), [tf])
+  const [state, dispatch] = useReducer(reducer, initialState)
 
   return (
     <GameContext.Provider value={{ state, dispatch }}>

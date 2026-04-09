@@ -4,16 +4,18 @@
 // ============================================================
 
 import type { Server, Socket } from 'socket.io';
-import type { ClientToServerEvents, ServerToClientEvents, ServerGameState, Operation } from '../../shared/types';
+import type { AppLocale, ClientToServerEvents, ServerToClientEvents, ServerGameState, Operation } from '../../shared/types';
+import type { LocalizedMessage } from '../../shared/i18n';
+import { t, lastMoveSignature, formatLastMove } from '../../shared/i18n';
 import {
   createRoom, joinRoom, leaveRoom, reconnectPlayer,
-  getRoomBySocket, isHost, getRoom,
+  getRoomBySocket, isHost,
 } from './roomManager';
 import {
   startGame, beginTurn, doRollDice, confirmEquation,
   stageCard, unstageCard, confirmStaged,
   playIdentical, playFraction, defendFractionSolve, defendFractionPenalty,
-  playOperation, playJoker, drawCard, callLulos, doEndTurn,
+  playOperation, playJoker, drawCard, doEndTurn,
   getPlayerView,
   forceTurnTimeout,
   withOnlineTurnDeadline,
@@ -22,6 +24,29 @@ import type { Room } from './roomManager';
 
 type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
+
+function playerLocale(room: Room, playerId: string): AppLocale {
+  return room.players.find((p) => p.id === playerId)?.locale ?? 'he';
+}
+
+/** Per-player toast text (mixed locales in one room). */
+function emitRoomToasts(io: IOServer, room: Room): void {
+  if (!room.state?.lastMoveMessage) return;
+  for (const player of room.players) {
+    if (!player.isConnected) continue;
+    const text = formatLastMove(player.locale, room.state.lastMoveMessage);
+    if (!text) continue;
+    for (const [, sock] of io.sockets.sockets) {
+      if (sock.rooms.has(room.code)) {
+        const info = getRoomBySocket(sock.id);
+        if (info && info.playerId === player.id) {
+          sock.emit('toast', { message: text });
+          break;
+        }
+      }
+    }
+  }
+}
 
 // ── Helper: broadcast updated state to all players in room ──
 
@@ -45,11 +70,11 @@ function scheduleRoomTurnTimer(io: IOServer, room: Room): void {
     }
     const res = forceTurnTimeout(room.state);
     if ('error' in res) return;
-    const prevToast = room.state.lastMoveMessage;
+    const prevSig = lastMoveSignature(room.state.lastMoveMessage);
     room.state = withOnlineTurnDeadline(res);
     room.lastActivity = Date.now();
-    if (room.state.lastMoveMessage && room.state.lastMoveMessage !== prevToast) {
-      io.to(room.code).emit('toast', { message: room.state.lastMoveMessage });
+    if (lastMoveSignature(room.state.lastMoveMessage) !== prevSig && room.state.lastMoveMessage) {
+      emitRoomToasts(io, room);
     }
     broadcastState(io, room);
     scheduleRoomTurnTimer(io, room);
@@ -67,7 +92,7 @@ function broadcastState(io: IOServer, room: Room): void {
       if (sock.rooms.has(room.code)) {
         const info = getRoomBySocket(sock.id);
         if (info && info.playerId === player.id) {
-          sock.emit('state_update', getPlayerView(room.state, player.id));
+          sock.emit('state_update', getPlayerView(room.state, player.id, player.locale));
           break;
         }
       }
@@ -78,29 +103,40 @@ function broadcastState(io: IOServer, room: Room): void {
 // ── Helper: apply a game action that may return error ──
 
 function applyAction(
-  io: IOServer, socket: IOSocket, room: Room,
-  actionFn: (st: ServerGameState) => ServerGameState | { error: string }
+  io: IOServer, socket: IOSocket, room: Room, actorPlayerId: string,
+  actionFn: (st: ServerGameState) => ServerGameState | { error: LocalizedMessage }
 ): void {
-  if (!room.state) { socket.emit('error', { message: 'המשחק לא התחיל' }); return; }
+  if (!room.state) {
+    socket.emit('error', { message: t(playerLocale(room, actorPlayerId), 'game.notStarted') });
+    return;
+  }
+
+  if (room.state.identicalCelebration) {
+    room.state = { ...room.state, identicalCelebration: null };
+  }
 
   const result = actionFn(room.state);
 
   if ('error' in result) {
-    socket.emit('error', { message: result.error });
+    socket.emit('error', {
+      message: t(playerLocale(room, actorPlayerId), result.error.key, result.error.params),
+    });
     return;
   }
 
-  // Check for toast message
-  const prevToast = room.state.lastMoveMessage;
+  const prevSig = lastMoveSignature(room.state.lastMoveMessage);
   room.state = withOnlineTurnDeadline(result);
   room.lastActivity = Date.now();
 
-  // If there's a new toast message, broadcast it
-  if (room.state.lastMoveMessage && room.state.lastMoveMessage !== prevToast) {
-    io.to(room.code).emit('toast', { message: room.state.lastMoveMessage });
+  if (lastMoveSignature(room.state.lastMoveMessage) !== prevSig && room.state.lastMoveMessage) {
+    emitRoomToasts(io, room);
   }
 
   broadcastState(io, room);
+  if (room.state.identicalCelebration) {
+    room.state = { ...room.state, identicalCelebration: null };
+    broadcastState(io, room);
+  }
   scheduleRoomTurnTimer(io, room);
 }
 
@@ -108,7 +144,21 @@ function applyAction(
 
 function isMyTurn(room: Room, playerId: string): boolean {
   if (!room.state) return false;
-  return room.state.players[room.state.currentPlayerIndex]?.id === playerId;
+  const current = room.state.players[room.state.currentPlayerIndex];
+  if (!current) return false;
+  if (current.isEliminated || current.isSpectator) return false;
+  return current.id === playerId;
+}
+
+function canPlayerAct(room: Room, playerId: string): { ok: true } | { ok: false; reason: LocalizedMessage } {
+  if (!room.state) return { ok: false, reason: { key: 'game.notStarted' } };
+  const player = room.state.players.find((p) => p.id === playerId);
+  if (!player) return { ok: false, reason: { key: 'game.playerNotFound' } };
+  if (player.isEliminated || player.isSpectator) {
+    return { ok: false, reason: { key: 'game.eliminatedSpectator' } };
+  }
+  if (!isMyTurn(room, playerId)) return { ok: false, reason: { key: 'game.notYourTurn' } };
+  return { ok: true };
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -119,8 +169,9 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
 
   // ── Room Management ──
 
-  socket.on('create_room', ({ playerName }) => {
-    const { room, playerId } = createRoom(playerName, socket.id);
+  socket.on('create_room', ({ playerName, locale }) => {
+    const loc = locale ?? 'he';
+    const { room, playerId } = createRoom(playerName, socket.id, loc);
     socket.join(room.code);
     socket.emit('room_created', { roomCode: room.code, playerId });
     io.to(room.code).emit('player_joined', {
@@ -128,9 +179,13 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     });
   });
 
-  socket.on('join_room', ({ roomCode, playerName }) => {
-    const result = joinRoom(roomCode, playerName, socket.id);
-    if ('error' in result) { socket.emit('error', { message: result.error }); return; }
+  socket.on('join_room', ({ roomCode, playerName, locale }) => {
+    const loc = locale ?? 'he';
+    const result = joinRoom(roomCode, playerName, socket.id, loc);
+    if ('error' in result) {
+      socket.emit('error', { message: t(loc, result.error.key, result.error.params) });
+      return;
+    }
     const { room, playerId } = result;
     socket.join(room.code);
     socket.emit('room_created', { roomCode: room.code, playerId });
@@ -152,13 +207,16 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     }
   });
 
-  socket.on('reconnect', ({ roomCode, playerId }) => {
-    const result = reconnectPlayer(roomCode, playerId, socket.id);
-    if ('error' in result) { socket.emit('error', { message: result.error }); return; }
+  socket.on('reconnect', ({ roomCode, playerId, locale }) => {
+    const result = reconnectPlayer(roomCode, playerId, socket.id, locale);
+    if ('error' in result) {
+      socket.emit('error', { message: t(locale ?? 'he', result.error.key, result.error.params) });
+      return;
+    }
     const { room, player } = result;
     socket.join(room.code);
     if (room.state) {
-      socket.emit('state_update', getPlayerView(room.state, playerId));
+      socket.emit('state_update', getPlayerView(room.state, playerId, player.locale));
     }
     io.to(room.code).emit('player_joined', {
       players: room.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost, isConnected: p.isConnected })),
@@ -169,11 +227,12 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
 
   socket.on('start_game', ({ difficulty, gameSettings }) => {
     const info = getRoomBySocket(socket.id);
-    if (!info) { socket.emit('error', { message: 'לא נמצא חדר' }); return; }
+    const loc = info ? playerLocale(info.room, info.playerId) : 'he';
+    if (!info) { socket.emit('error', { message: t(loc, 'game.noRoom') }); return; }
     const { room, playerId } = info;
-    if (!isHost(room, playerId)) { socket.emit('error', { message: 'רק המארח יכול להתחיל' }); return; }
-    if (room.players.length < 2) { socket.emit('error', { message: 'דרושים לפחות 2 שחקנים' }); return; }
-    if (room.state) { socket.emit('error', { message: 'המשחק כבר התחיל' }); return; }
+    if (!isHost(room, playerId)) { socket.emit('error', { message: t(loc, 'game.hostOnlyStart') }); return; }
+    if (room.players.length < 2) { socket.emit('error', { message: t(loc, 'game.minTwoPlayers') }); return; }
+    if (room.state) { socket.emit('error', { message: t(loc, 'room.gameAlreadyStarted') }); return; }
 
     room.state = startGame(room, difficulty, gameSettings);
     room.lastActivity = Date.now();
@@ -185,7 +244,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
         if (sock.rooms.has(room.code)) {
           const si = getRoomBySocket(sock.id);
           if (si && si.playerId === player.id) {
-            sock.emit('game_started', getPlayerView(room.state, player.id));
+            sock.emit('game_started', getPlayerView(room.state!, player.id, player.locale));
             break;
           }
         }
@@ -200,122 +259,168 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => beginTurn(st));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => beginTurn(st));
   });
 
   socket.on('roll_dice', () => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => doRollDice(st));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => doRollDice(st));
   });
 
-  socket.on('confirm_equation', ({ result, equationDisplay }) => {
+  socket.on('confirm_equation', ({ result, equationDisplay, equationCommit }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => confirmEquation(st, result, equationDisplay));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => confirmEquation(st, result, equationDisplay, equationCommit));
   });
 
   socket.on('stage_card', ({ cardId }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => stageCard(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => stageCard(st, cardId));
   });
 
   socket.on('unstage_card', ({ cardId }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => unstageCard(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => unstageCard(st, cardId));
   });
 
   socket.on('confirm_staged', () => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => confirmStaged(st));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => confirmStaged(st));
   });
 
   socket.on('place_identical', ({ cardId }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => playIdentical(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => playIdentical(st, cardId));
   });
 
   socket.on('play_fraction', ({ cardId }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => playFraction(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => playFraction(st, cardId));
   });
 
-  socket.on('defend_fraction_solve', ({ cardId }) => {
+  socket.on('defend_fraction_solve', ({ cardId, wildResolve }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => defendFractionSolve(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => defendFractionSolve(st, cardId, wildResolve));
   });
 
   socket.on('defend_fraction_penalty', () => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => defendFractionPenalty(st));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => defendFractionPenalty(st));
   });
 
   socket.on('play_operation', ({ cardId }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => playOperation(st, cardId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => playOperation(st, cardId));
   });
 
   socket.on('play_joker', ({ cardId, chosenOperation }) => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => playJoker(st, cardId, chosenOperation));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => playJoker(st, cardId, chosenOperation));
   });
 
   socket.on('draw_card', () => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => drawCard(st));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => drawCard(st));
   });
 
   socket.on('end_turn', () => {
     const info = getRoomBySocket(socket.id);
     if (!info) return;
     const { room, playerId } = info;
-    if (!room.state || !isMyTurn(room, playerId)) { socket.emit('error', { message: 'לא התור שלך' }); return; }
-    applyAction(io, socket, room, (st) => doEndTurn(st));
-  });
-
-  // ── call_lulos — any player can call, not just current ──
-
-  socket.on('call_lulos', () => {
-    const info = getRoomBySocket(socket.id);
-    if (!info) return;
-    const { room, playerId } = info;
-    if (!room.state) { socket.emit('error', { message: 'המשחק לא התחיל' }); return; }
-    applyAction(io, socket, room, (st) => callLulos(st, playerId));
+    const canAct = canPlayerAct(room, playerId);
+    if (!canAct.ok) {
+      socket.emit('error', { message: t(playerLocale(room, playerId), canAct.reason.key, canAct.reason.params) });
+      return;
+    }
+    applyAction(io, socket, room, playerId, (st) => doEndTurn(st));
   });
 
   // ── Disconnect ──

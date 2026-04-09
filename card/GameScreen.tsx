@@ -1072,9 +1072,9 @@ function ZoneDEquationHub({ onConfirmReady }: { onConfirmReady?: (data: { onConf
         <Text style={{ color: GOOG.RED, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>חלוקה לא חוקית</Text>
       )}
 
-      {/* 2-dice hint */}
+      {/* רמז: סיום משתי קוביות בלבד (בלי השלישית) */}
       {subResult !== null && socket3 === null && op2 === null && !isSolved && (
-        <Text style={{ color: '#6B7280', fontSize: 10, fontStyle: 'italic', textAlign: 'center' }}>אפשר לסיים עם 2 קוביות</Text>
+        <Text style={{ color: '#6B7280', fontSize: 10, fontStyle: 'italic', textAlign: 'center' }}>אפשר לסיים עם 2 קוביות בלבד</Text>
       )}
 
       {/* Solved instruction */}
@@ -1345,7 +1345,7 @@ function ZoneIHand() {
 
   if (count === 0) return <View style={{ height: 200 }} />;
 
-  const fanH = CARD_H * FAN_CENTER_SCALE + 50;
+  const fanH = CARD_H * FAN_CENTER_SCALE + 50 - 100;
 
   return (
     <View style={{ width: SCREEN_W, height: fanH, overflow: 'visible' }} {...panResponder.panHandlers}>
@@ -1497,13 +1497,6 @@ function ZoneFActions({ eqConfirm }: { eqConfirm: { onConfirm: () => void } | nu
             onPress={() => dispatch({ type: 'CONFIRM_STAGED' })}
           />
         </View>
-      )}
-
-      {/* Revert to building */}
-      {so && !hp && !hasFracDefense && (
-        <TouchableOpacity onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })} activeOpacity={0.7} style={{ alignItems: 'center' }}>
-          <Text style={{ color: '#93C5FD', fontSize: 12, fontWeight: '600', textDecorationLine: 'underline' }}>חזרה לתרגיל</Text>
-        </TouchableOpacity>
       )}
 
       {/* Main action buttons row */}
@@ -1721,6 +1714,25 @@ export function GameScreen() {
       {/* ═══ Overlays ═══ */}
       {showCel && <CelebrationFlash onDone={() => setShowCel(false)} />}
       <NotificationToast />
+      {state.phase === 'solved' && !state.hasPlayedCards && state.pendingFractionTarget === null && (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 210 }]} pointerEvents="box-none">
+          <View
+            style={{
+              position: 'absolute',
+              top: 460,
+              left: 0,
+              right: 0,
+              alignItems: 'center',
+              ...(Platform.OS === 'android' ? { elevation: 28 } : {}),
+            }}
+            pointerEvents="box-none"
+          >
+            <TouchableOpacity onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })} activeOpacity={0.7} style={{ alignItems: 'center' }}>
+              <Text style={{ color: '#93C5FD', fontSize: 12, fontWeight: '600', textDecorationLine: 'underline' }}>חזרה לתרגיל</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </LinearGradient>
   );
 }

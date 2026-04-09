@@ -1,6 +1,7 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import { useGame } from '../../hooks/useGame'
+import { useLocale } from '../../i18n/LocaleContext'
 import { Operation } from '../../types/game'
 import Button from '../ui/Button'
 import Modal from '../ui/Modal'
@@ -8,15 +9,13 @@ import EquationBuilder from './EquationBuilder'
 
 export default function ActionBar() {
   const { state, dispatch } = useGame()
+  const { t } = useLocale()
   const currentPlayer = state.players[state.currentPlayerIndex]
   if (!currentPlayer) return null
 
   const isSelectPhase = state.phase === 'select-cards'
   const hasPlayed = state.hasPlayedCards
   const hasActiveOp = isSelectPhase && !!state.activeOperation && !hasPlayed
-
-  const canCallLolos =
-    isSelectPhase && currentPlayer.hand.length === 1 && !currentPlayer.calledLolos
 
   const handleJokerChoice = (op: Operation) => {
     const jokerCard = state.selectedCards[0]
@@ -28,13 +27,13 @@ export default function ActionBar() {
       {/* Operation challenge — info only, counter by tapping cards in hand */}
       {hasActiveOp && (
         <View style={styles.opSection}>
-          <Text style={styles.opTitle}>אתגר פעולה: {state.activeOperation}</Text>
+          <Text style={styles.opTitle}>{t('game.opChallenge', { op: state.activeOperation! })}</Text>
           <Text style={styles.opHint}>
-            הגן/י עם קלף פעולה תואם או ג'וקר מהיד שלך, או קבל/י עונש של 2 קלפים.
+            {t('game.opChallengeHint')}
           </Text>
           <View style={styles.row}>
             <Button variant="danger" size="sm" onPress={() => dispatch({ type: 'END_TURN' })}>
-              קבל/י עונש
+              {t('game.takePenalty')}
             </Button>
           </View>
         </View>
@@ -46,24 +45,18 @@ export default function ActionBar() {
           <EquationBuilder />
           <View style={styles.row}>
             <Button variant="secondary" onPress={() => dispatch({ type: 'DRAW_CARD' })}>
-              שלוף קלף
+              {t('game.drawCard')}
             </Button>
           </View>
         </>
       )}
 
-      {/* LOLOS + End Turn (End Turn only enabled after playing or drawing) */}
+      {/* End Turn (enabled after playing or drawing) */}
       {isSelectPhase && !hasActiveOp && (
         <View style={styles.row}>
-          {canCallLolos && (
-            <Button variant="danger" size="lg" onPress={() => dispatch({ type: 'CALL_LOLOS' })}>
-              לולוס!
-            </Button>
-          )}
-
           {(hasPlayed || state.hasDrawnCard) && (
             <Button variant="secondary" onPress={() => dispatch({ type: 'END_TURN' })}>
-              סיים תור
+              {t('game.endTurn')}
             </Button>
           )}
         </View>
@@ -80,7 +73,7 @@ export default function ActionBar() {
       <Modal
         visible={state.jokerModalOpen}
         onClose={() => dispatch({ type: 'CLOSE_JOKER_MODAL' })}
-        title="בחר/י פעולה לג'וקר"
+        title={t('game.pickJokerOp')}
       >
         <View style={styles.jokerGrid}>
           {(['+', '-', 'x', '÷'] as Operation[]).map((op) => (

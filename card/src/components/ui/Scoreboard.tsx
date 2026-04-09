@@ -1,14 +1,15 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import { useGame } from '../../hooks/useGame'
-import Badge from './Badge'
+import { useLocale } from '../../i18n/LocaleContext'
 
 export default function Scoreboard() {
+  const { t } = useLocale()
   const { state } = useGame()
 
   return (
     <View style={styles.container}>
-      <Text style={styles.heading}>שחקנים</Text>
+      <Text style={styles.heading}>{t('game.playersHeading')}</Text>
       {state.players.map((player, idx) => (
         <View
           key={player.id}
@@ -18,12 +19,9 @@ export default function Scoreboard() {
             {idx === state.currentPlayerIndex ? '▸ ' : ''}
             {player.name}
           </Text>
-          <View style={styles.badges}>
-            {player.calledLolos && <Badge color="yellow">לולוס!</Badge>}
-            <Badge color={player.hand.length <= 2 ? 'red' : 'gray'}>
-              {`${player.hand.length} קלפים`}
-            </Badge>
-          </View>
+          <Text style={[styles.cardsCount, player.hand.length <= 2 && styles.cardsCountDanger]}>
+            {t('game.cardsCount', { n: String(player.hand.length) })}
+          </Text>
         </View>
       ))}
     </View>
@@ -61,8 +59,12 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 13,
   },
-  badges: {
-    flexDirection: 'row',
-    gap: 6,
+  cardsCount: {
+    color: '#D1D5DB',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  cardsCountDanger: {
+    color: '#FCA5A5',
   },
 })

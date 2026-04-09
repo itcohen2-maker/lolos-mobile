@@ -1,4 +1,11 @@
-export const WELCOME_GAME_BODY_CORE =
-  'ברוכים הבאים. המטרה — להפטר מהקלפים. שחקן שיישאר עם 2 קלפים בלבד ינצח.';
+import type { AppLocale } from '../../shared/i18n/types';
+import { t } from '../../shared/i18n';
 
-export const WELCOME_GAME_NOTIFICATION_BODY = `${WELCOME_GAME_BODY_CORE}\n\nבהצלחה!`;
+export function welcomeGameBody(locale: AppLocale): string {
+  return t(locale, 'welcome.body');
+}
+
+/** Full notification body including good-luck line (for any code still composing local notifications). */
+export function welcomeGameNotificationBody(locale: AppLocale): string {
+  return `${t(locale, 'welcome.body')}\n${t(locale, 'welcome.goodLuck')}`;
+}

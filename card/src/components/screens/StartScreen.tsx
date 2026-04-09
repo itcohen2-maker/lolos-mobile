@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,26 +6,30 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-} from 'react-native'
-import { useGame } from '../../hooks/useGame'
-import Button from '../ui/Button'
-import { WELCOME_GAME_BODY_CORE } from '../../copy/welcomeGame'
+} from 'react-native';
+import { useGame } from '../../hooks/useGame';
+import SalindaLogoOption06 from '../branding/SalindaLogoOption06';
+import Button from '../ui/Button';
+import { useLocale } from '../../i18n/LocaleContext';
+import { CARDS_PER_PLAYER } from '../../../shared/gameConstants';
 
 export default function StartScreen() {
-  const { dispatch } = useGame()
-  const [playerCount, setPlayerCount] = useState(2)
-  const [names, setNames] = useState<string[]>(Array(10).fill(''))
-  const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full')
-  const [showRules, setShowRules] = useState(false)
+  const { t, isRTL } = useLocale();
+  const { dispatch } = useGame();
+  const [playerCount, setPlayerCount] = useState(2);
+  const [names, setNames] = useState<string[]>(Array(10).fill(''));
+  const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
+  const [showRules, setShowRules] = useState(false);
 
-  const maxPlayers = difficulty === 'easy' ? 8 : 10
+  const maxPlayers = difficulty === 'easy' ? 8 : 10;
+  const ta = isRTL ? 'right' : 'left';
 
   const handleStart = () => {
     const players = Array.from({ length: playerCount }, (_, i) => ({
-      name: names[i].trim() || `שחקן ${i + 1}`,
-    }))
-    dispatch({ type: 'START_GAME', players, difficulty })
-  }
+      name: names[i].trim() || t('start.playerPlaceholder', { n: String(i + 1) }),
+    }));
+    dispatch({ type: 'START_GAME', players, difficulty });
+  };
 
   return (
     <ScrollView
@@ -33,10 +37,12 @@ export default function StartScreen() {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>משחק קלפים</Text>
-      <Text style={styles.subtitle}>משחק קלפים חשבוני חינוכי</Text>
+      <View style={styles.logoWrap}>
+        <SalindaLogoOption06 width={300} />
+      </View>
+      <Text style={styles.subtitle}>{t('start.subtitle')}</Text>
 
-      <Text style={styles.label}>מספר שחקנים</Text>
+      <Text style={[styles.label, { textAlign: ta }]}>{t('start.playerCount')}</Text>
       <View style={styles.countRow}>
         {Array.from({ length: maxPlayers - 1 }, (_, i) => i + 2).map((n) => (
           <TouchableOpacity
@@ -44,96 +50,107 @@ export default function StartScreen() {
             onPress={() => setPlayerCount(n)}
             style={[styles.countBtn, playerCount === n && styles.countBtnActive]}
           >
-            <Text style={[styles.countText, playerCount === n && styles.countTextActive]}>
-              {n}
-            </Text>
+            <Text style={[styles.countText, playerCount === n && styles.countTextActive]}>{n}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      <Text style={styles.label}>שמות השחקנים</Text>
+      <Text style={[styles.label, { textAlign: ta }]}>{t('start.playerNames')}</Text>
       {Array.from({ length: playerCount }, (_, i) => (
         <TextInput
           key={i}
-          placeholder={`שחקן ${i + 1}`}
+          placeholder={t('start.playerPlaceholder', { n: String(i + 1) })}
           placeholderTextColor="#6B7280"
           value={names[i]}
           onChangeText={(text) => {
-            const newNames = [...names]
-            newNames[i] = text
-            setNames(newNames)
+            const newNames = [...names];
+            newNames[i] = text;
+            setNames(newNames);
           }}
-          style={styles.input}
-          textAlign="right"
+          style={[styles.input, { textAlign: ta }]}
         />
       ))}
 
-      <Text style={styles.label}>רמת קושי</Text>
+      <Text style={[styles.label, { textAlign: ta }]}>{t('start.difficulty')}</Text>
       <View style={styles.diffRow}>
         <TouchableOpacity
           style={[styles.diffBtn, difficulty === 'full' && styles.diffFull]}
           onPress={() => setDifficulty('full')}
         >
-          <Text style={[styles.diffText, difficulty === 'full' && { color: '#FFF' }]}>
-            מלא (0-25)
-          </Text>
+          <Text style={[styles.diffText, difficulty === 'full' && { color: '#FFF' }]}>{t('start.diffFull')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.diffBtn, difficulty === 'easy' && styles.diffEasy]}
           onPress={() => {
-            setDifficulty('easy')
-            setPlayerCount((c) => Math.min(c, 8))
+            setDifficulty('easy');
+            setPlayerCount((c) => Math.min(c, 8));
           }}
         >
-          <Text style={[styles.diffText, difficulty === 'easy' && { color: '#FFF' }]}>
-            קל (0-12)
-          </Text>
+          <Text style={[styles.diffText, difficulty === 'easy' && { color: '#FFF' }]}>{t('start.diffEasy')}</Text>
         </TouchableOpacity>
       </View>
 
-      <Button variant="success" size="lg" onPress={handleStart} style={{ width: '100%', marginTop: 12 }}>
-        התחל משחק
-      </Button>
       <Button
-        variant="secondary"
-        size="sm"
-        onPress={() => setShowRules(!showRules)}
-        style={{ width: '100%', marginTop: 8 }}
+        variant="primary"
+        size="lg"
+        onPress={handleStart}
+        style={{ width: 220, height: 56, borderRadius: 28, marginTop: 12, alignSelf: 'center' }}
       >
-        {showRules ? 'הסתר חוקים' : 'איך משחקים?'}
+        {t('start.startGame')}
+      </Button>
+      <Button variant="secondary" size="sm" onPress={() => setShowRules(!showRules)} style={{ width: '100%', marginTop: 8 }}>
+        {showRules ? t('start.hideRules') : t('start.showRules')}
       </Button>
 
       {showRules && (
         <View style={styles.rules}>
-          <Text style={styles.rulesTitle}>איך משחקים במשחק</Text>
+          <Text style={[styles.rulesTitle, { textAlign: ta }]}>{t('start.rulesTitle')}</Text>
           <View style={styles.newUserBox}>
-            <Text style={styles.newUserTitle}>משתמש חדש?</Text>
-            <Text style={styles.newUserText}>{WELCOME_GAME_BODY_CORE}</Text>
+            <Text style={[styles.newUserTitle, { textAlign: ta }]}>{t('start.quickOpen')}</Text>
+            <Text style={[styles.newUserText, { textAlign: ta }]}>{t('welcome.body')}</Text>
           </View>
-          <Text style={styles.ruleItem}>1. כל שחקן מקבל 10 קלפים. הראשון שמרוקן את היד מנצח!</Text>
-          <Text style={styles.ruleItem}>2. הטל 3 קוביות וצור מספר יעד באמצעות חשבון (+, -, x, ÷).</Text>
-          <Text style={styles.ruleItem}>3. שחק קלפי מספר מהיד שסכומם שווה ליעד.</Text>
-          <Text style={styles.ruleItem}>4. קלף זהה: שחק קלף התואם לקלף העליון בערימה (עד פעמיים).</Text>
-          <Text style={styles.ruleItem}>5. קלפי שבר: חלק את הקלף העליון במכנה השבר.</Text>
-          <Text style={styles.ruleItem}>6. קלפי פעולה: משלבים סימן בתרגיל וכך נפטרים מהקלף.</Text>
-          <Text style={styles.ruleItem}>7. ג'וקר: בוחרים לו סימן ומשלבים בתרגיל כדי להיפטר מהקלף.</Text>
-          <Text style={styles.ruleItem}>8. שלישייה בקוביות: כל שאר השחקנים שולפים N קלפים!</Text>
-          <Text style={styles.ruleItem}>9. עם קלף אחד ביד - לחץ על כפתור הסיום, אחרת תשלוף קלף עונשין.</Text>
+
+          <View style={styles.rulesSection}>
+            <Text style={[styles.sectionTitle, { textAlign: ta }]}>{t('start.goalTitle')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('start.rules.goal1', { n: String(CARDS_PER_PLAYER) })}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('start.rules.goal2')}</Text>
+          </View>
+
+          <View style={styles.rulesSection}>
+            <Text style={[styles.sectionTitle, { textAlign: ta }]}>{t('start.turnTitle')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('start.rules.t1')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('start.rules.t2')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('start.rules.t3')}</Text>
+          </View>
+
+          <View style={styles.challengeSection}>
+            <Text style={[styles.challengeTitle, { textAlign: ta }]}>{t('start.challengesTitle')}</Text>
+            <Text style={[styles.challengeItem, { textAlign: ta }]}>{t('start.rules.c1')}</Text>
+            <Text style={[styles.challengeItem, { textAlign: ta }]}>{t('start.rules.c2')}</Text>
+            <Text style={[styles.challengeItem, { textAlign: ta }]}>{t('start.rules.c3')}</Text>
+          </View>
+
+          <View style={styles.rulesSection}>
+            <Text style={[styles.sectionTitle, { textAlign: ta }]}>{t('start.cardTypesTitle')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('rulesLine.fracCard')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('rulesLine.opCard')}</Text>
+            <Text style={[styles.ruleItem, { textAlign: ta }]}>{t('rulesLine.jokerCard')}</Text>
+          </View>
         </View>
       )}
     </ScrollView>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: '#111827' },
-  container: { padding: 24, paddingTop: 60, alignItems: 'flex-end' },
-  title: { fontSize: 48, fontWeight: '900', color: '#F59E0B', letterSpacing: 4, alignSelf: 'center' },
-  subtitle: { color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center' },
-  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'flex-end', marginBottom: 8, marginTop: 16 },
+  container: { padding: 24, paddingTop: 60, alignItems: 'stretch' },
+  logoWrap: { alignSelf: 'center', marginBottom: 8, maxWidth: '100%' },
+  subtitle: { color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center', textAlign: 'center' },
+  label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'stretch', marginBottom: 8, marginTop: 16 },
   countRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignSelf: 'flex-end', direction: 'ltr' },
   countBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#374151', alignItems: 'center', justifyContent: 'center' },
-  countBtnActive: { backgroundColor: '#2563EB' },
+  countBtnActive: { backgroundColor: '#F59E0B' },
   countText: { color: '#D1D5DB', fontWeight: '700', fontSize: 14 },
   countTextActive: { color: '#FFF' },
   input: { width: '100%', backgroundColor: '#374151', borderWidth: 1, borderColor: '#4B5563', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, color: '#FFF', fontSize: 14, marginBottom: 6 },
@@ -142,10 +159,37 @@ const styles = StyleSheet.create({
   diffEasy: { backgroundColor: '#16A34A' },
   diffFull: { backgroundColor: '#DC2626' },
   diffText: { color: '#D1D5DB', fontWeight: '600', fontSize: 14 },
-  rules: { marginTop: 16, backgroundColor: 'rgba(55,65,81,0.5)', borderRadius: 10, padding: 16, width: '100%' },
-  rulesTitle: { color: '#FFF', fontWeight: '700', fontSize: 15, marginBottom: 10, textAlign: 'right' },
-  newUserBox: { backgroundColor: 'rgba(59,130,246,0.15)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)', padding: 12, marginBottom: 14 },
-  newUserTitle: { fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 6, textAlign: 'right' },
-  newUserText: { color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 20, textAlign: 'right' },
-  ruleItem: { color: '#D1D5DB', fontSize: 12, marginBottom: 4, lineHeight: 18, textAlign: 'right' },
-})
+  rules: {
+    marginTop: 16,
+    backgroundColor: '#1F2937',
+    borderWidth: 1,
+    borderColor: '#374151',
+    borderRadius: 10,
+    padding: 16,
+    width: '100%',
+  },
+  rulesTitle: { color: '#FFF', fontWeight: '700', fontSize: 15, marginBottom: 10 },
+  newUserBox: { backgroundColor: 'rgba(245,158,11,0.08)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(245,158,11,0.45)', padding: 12, marginBottom: 12 },
+  newUserTitle: { fontSize: 14, fontWeight: '800', color: '#F59E0B', marginBottom: 6 },
+  newUserText: { color: '#E5E7EB', fontSize: 13, lineHeight: 20 },
+  rulesSection: {
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#374151',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  sectionTitle: { color: '#F9FAFB', fontWeight: '700', fontSize: 13, marginBottom: 6 },
+  ruleItem: { color: '#D1D5DB', fontSize: 12, marginBottom: 4, lineHeight: 18 },
+  challengeSection: {
+    backgroundColor: '#3F1D0B',
+    borderWidth: 1,
+    borderColor: '#C2410C',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  challengeTitle: { color: '#FDBA74', fontSize: 13, fontWeight: '700', marginBottom: 6 },
+  challengeItem: { color: '#FED7AA', fontSize: 12, marginBottom: 4, lineHeight: 18 },
+});

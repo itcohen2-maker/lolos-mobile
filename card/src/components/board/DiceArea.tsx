@@ -1,11 +1,13 @@
 import React, { useState } from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import { useGame } from '../../hooks/useGame'
+import { useLocale } from '../../i18n/LocaleContext'
 import Die from '../dice/Die'
 import Button from '../ui/Button'
 
 export default function DiceArea() {
   const { state, dispatch } = useGame()
+  const { t } = useLocale()
   const [rolling, setRolling] = useState(false)
 
   const handleRoll = () => {
@@ -26,12 +28,12 @@ export default function DiceArea() {
       </View>
       {state.phase === 'roll-dice' && (
         <Button onPress={handleRoll} variant="primary" disabled={rolling}>
-          {rolling ? 'מגלגל...' : 'הטל קוביות'}
+          {rolling ? t('game.rolling') : t('game.rollDice')}
         </Button>
       )}
       {state.dice && !rolling && (
         <Text style={styles.info}>
-          תוצאה: {state.dice.die1}, {state.dice.die2}, {state.dice.die3}
+          {t('game.diceLine', { d1: state.dice.die1, d2: state.dice.die2, d3: state.dice.die3 })}
         </Text>
       )}
     </View>

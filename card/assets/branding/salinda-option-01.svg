@@ -1,0 +1,7 @@
+<svg width="1200" height="500" viewBox="0 0 1200 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="500" rx="30" fill="#111827"/>
+  <rect x="78" y="112" width="210" height="274" rx="24" fill="#F8FAFC" transform="rotate(-8 78 112)"/>
+  <path d="M178 174L196 210L236 214L206 243L214 284L178 264L142 284L150 243L120 214L160 210L178 174Z" fill="#F59E0B"/>
+  <text x="360" y="238" font-size="118" font-weight="900" fill="#22D3EE" font-family="Arial, sans-serif">Salinda</text>
+  <text x="364" y="320" font-size="62" font-weight="800" fill="#E5E7EB" font-family="Arial, sans-serif" direction="rtl" unicode-bidi="plaintext">&#x05E1;&#x05DC;&#x05D9;&#x05E0;&#x05D3;&#x05D4;</text>
+</svg>

@@ -1,4 +1,4 @@
-# Render Blueprint — Lolos multiplayer API (card/server).
+# Render Blueprint — Lolos multiplayer API (card/server) + Salinda Web (Expo static).
 # Dashboard: Blueprints → Connect repository (main).
 services:
   - type: web
@@ -13,3 +13,26 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+
+  # Expo Web static export — guest join-in-browser + lobby deep links (?room=&server=)
+  - type: web
+    name: salinda-web
+    runtime: static
+    region: oregon
+    plan: free
+    rootDir: card
+    buildCommand: npm install && npx expo export --platform web
+    staticPublishPath: card/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Must match your live Socket service URL (rename if your API host is not lolos-mobile).
+      - key: EXPO_PUBLIC_SERVER_URL
+        value: https://lolos-mobile.onrender.com
+      # Must match this service’s public URL (https://salinda-web.onrender.com when deployed from this name).
+      - key: EXPO_PUBLIC_WEB_APP_URL
+        value: https://salinda-web.onrender.com

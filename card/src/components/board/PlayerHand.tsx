@@ -1,10 +1,12 @@
 import React from 'react'
 import { View, Text, ScrollView, StyleSheet } from 'react-native'
 import { useGame } from '../../hooks/useGame'
+import { useLocale } from '../../i18n/LocaleContext'
 import { validateIdenticalPlay } from '../../utils/validation'
 import GameCard from '../cards/GameCard'
 
 export default function PlayerHand() {
+  const { t } = useLocale()
   const { state, dispatch } = useGame()
   const currentPlayer = state.players[state.currentPlayerIndex]
   if (!currentPlayer) return null
@@ -51,8 +53,8 @@ export default function PlayerHand() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.name}>היד של {currentPlayer.name}</Text>
-        <Text style={styles.count}>({currentPlayer.hand.length} קלפים)</Text>
+        <Text style={styles.name}>{t('game.yourHand', { name: currentPlayer.name })}</Text>
+        <Text style={styles.count}>({t('game.cardsCount', { n: String(currentPlayer.hand.length) })})</Text>
       </View>
       <ScrollView
         horizontal

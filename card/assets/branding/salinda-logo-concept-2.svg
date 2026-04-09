@@ -1,0 +1,27 @@
+<svg width="1200" height="500" viewBox="0 0 1200 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g2" x1="300" y1="120" x2="1050" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.5" stop-color="#A855F7"/>
+      <stop offset="1" stop-color="#FB7185"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="500" rx="36" fill="#111827"/>
+
+  <g transform="translate(76 118)">
+    <rect x="0" y="0" width="240" height="250" rx="28" fill="#1F2937"/>
+    <rect x="18" y="18" width="204" height="214" rx="22" fill="#F8FAFC"/>
+    <circle cx="120" cy="123" r="56" fill="#22D3EE"/>
+    <rect x="85" y="88" width="70" height="70" rx="14" fill="#A855F7"/>
+    <circle cx="100" cy="44" r="10" fill="#F59E0B"/>
+    <circle cx="150" cy="40" r="8" fill="#FB7185"/>
+    <circle cx="180" cy="76" r="7" fill="#22D3EE"/>
+    <path d="M250 95C302 78 336 112 334 160" stroke="#FB7185" stroke-width="12" stroke-linecap="round"/>
+    <path d="M333 160L307 161L324 182" fill="#FB7185"/>
+  </g>
+
+  <text x="370" y="224" font-size="112" font-weight="900" fill="url(#g2)" font-family="Fredoka, Baloo, Arial Rounded MT Bold, Arial, sans-serif">Salinda</text>
+  <text x="374" y="305" font-size="60" font-weight="800" fill="#E5E7EB" font-family="Rubik, Arial, sans-serif" direction="rtl" unicode-bidi="plaintext">&#x05E1;&#x05DC;&#x05D9;&#x05E0;&#x05D3;&#x05D4;</text>
+  <text x="373" y="352" font-size="28" font-weight="700" fill="#9CA3AF" font-family="Rubik, Arial, sans-serif">Card Math Game</text>
+</svg>

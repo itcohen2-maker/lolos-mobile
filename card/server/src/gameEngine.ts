@@ -5,8 +5,11 @@
 
 import type {
   Card, Player, ServerGameState, PlayerView, Operation, Fraction,
-  DiceResult, HostGameSettings,
+  DiceResult, HostGameSettings, EquationCommitPayload, AppLocale,
 } from '../../shared/types';
+import type { GameStatusMessage, LastMovePayload, LocalizedMessage } from '../../shared/i18n';
+import { formatGameMessage, formatLastMove } from '../../shared/i18n';
+import { CARDS_PER_PLAYER } from '../../shared/gameConstants';
 
 const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
   diceMode: '3',
@@ -18,23 +21,84 @@ const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
 };
 import { generateDeck, shuffle, dealCards } from './deck';
 import {
-  applyOperation, fractionDenominator, validateIdenticalPlay,
+  fractionDenominator, validateIdenticalPlay,
   validateFractionPlay, validateStagedCards,
+  getEffectiveNumber, resolveDiscardNumberCardFromStaged,
   rollDice, isTriple, generateValidTargets,
 } from './equations';
 import type { Room } from './roomManager';
 import { randomInt, randomUUID } from 'node:crypto';
 
-const CARDS_PER_PLAYER = 10;
+function locMsg(key: string, params?: Record<string, string | number>): LocalizedMessage {
+  return { key, params };
+}
 
-/** זמן המתנה לפעולת שחקן במשחק מקוון (אני מוכן / הטלת קוביות) */
-export const ONLINE_TURN_ACTION_MS = 30_000;
+function locErr(key: string, params?: Record<string, string | number>): { error: LocalizedMessage } {
+  return { error: { key, params } };
+}
+
+/** ASCII-friendly card label for toasts (sentence is localized; label is readable in both locales). */
+function identicalCardLabel(
+  card: Card,
+  effectiveVal: number | null,
+): string {
+  if (card.type === 'number') return String(card.value ?? '');
+  if (card.type === 'fraction') return String(card.fraction ?? '');
+  if (card.type === 'operation') return String(card.operation ?? '');
+  if (card.type === 'wild') return effectiveVal != null ? `Wild(${effectiveVal})` : 'Wild';
+  return 'Joker';
+}
+
+/** זמן המתנה לפעולת שחקן במשחק מקוון (אני מוכן) */
+export const ONLINE_TURN_ACTION_MS = 15_000;
+
+function resolveConfiguredTurnTimerSeconds(st: ServerGameState): number | null {
+  const cfg = st.hostGameSettings?.timerSetting ?? 'off';
+  if (cfg === '30') return 30;
+  if (cfg === '60') return 60;
+  if (cfg === 'custom') {
+    const custom = Math.max(1, Number(st.hostGameSettings?.timerCustomSeconds ?? 60));
+    return custom;
+  }
+  return null;
+}
 
 export function withOnlineTurnDeadline(st: ServerGameState): ServerGameState {
-  if (st.phase === 'turn-transition' || st.phase === 'pre-roll') {
+  if (st.phase === 'turn-transition') {
     return { ...st, turnDeadlineAt: Date.now() + ONLINE_TURN_ACTION_MS };
   }
+  const configuredSeconds = resolveConfiguredTurnTimerSeconds(st);
+  // In online game:
+  // - If host enabled turn timer -> use only configured timer.
+  // - If host timer is off -> fallback safety timeout after dice roll (60s).
+  const isPostRollWindow =
+    (st.phase === 'building' || st.phase === 'solved') &&
+    st.dice !== null &&
+    !st.hasPlayedCards;
+  if (configuredSeconds !== null && isPostRollWindow) {
+    return { ...st, turnDeadlineAt: Date.now() + configuredSeconds * 1000 };
+  }
+  if (configuredSeconds === null && isPostRollWindow) {
+    return { ...st, turnDeadlineAt: Date.now() + 60_000 };
+  }
   return { ...st, turnDeadlineAt: null };
+}
+
+function isActivePlayer(player: Player): boolean {
+  return !player.isEliminated && !player.isSpectator;
+}
+
+function getNextActivePlayerIndex(players: Player[], fromIndex: number): number {
+  if (players.length === 0) return fromIndex;
+  for (let step = 1; step <= players.length; step++) {
+    const idx = (fromIndex + step) % players.length;
+    if (isActivePlayer(players[idx])) return idx;
+  }
+  return fromIndex;
+}
+
+function getActivePlayers(players: Player[]): Player[] {
+  return players.filter(isActivePlayer);
 }
 
 // ── Helper: draw N cards from draw pile for a player ──
@@ -60,13 +124,15 @@ function drawFromPile(st: ServerGameState, count: number, pi: number): ServerGam
 
 function checkWin(st: ServerGameState): ServerGameState {
   const cp = st.players[st.currentPlayerIndex];
-  if (cp.hand.length === 0 && cp.calledLolos)
-    return { ...st, phase: 'game-over', winner: cp };
-  if (cp.hand.length === 0 && !cp.calledLolos) {
-    const s = drawFromPile(st, 1, st.currentPlayerIndex);
-    if (s.players[st.currentPlayerIndex].hand.length === 0)
-      return { ...s, phase: 'game-over', winner: cp };
-    return { ...s, message: `${cp.name} שכח/ה לקרוא לולוס! שלף/י קלף אחד.` };
+  if (cp.hand.length <= 2) return { ...st, phase: 'game-over', winner: cp };
+  if (cp.hand.length === 3) {
+    const warn = locMsg('toast.threeCardsLeft', { name: cp.name });
+    const mergedToast: LastMovePayload = st.lastMoveMessage
+      ? Array.isArray(st.lastMoveMessage)
+        ? [...st.lastMoveMessage, warn]
+        : [st.lastMoveMessage, warn]
+      : warn;
+    return { ...st, lastMoveMessage: mergedToast, message: warn };
   }
   return st;
 }
@@ -75,14 +141,7 @@ function checkWin(st: ServerGameState): ServerGameState {
 
 function endTurnLogic(st: ServerGameState): ServerGameState {
   let s = { ...st };
-
-  const up = s.players[s.currentPlayerIndex];
-  if (up.hand.length === 1 && !up.calledLolos) {
-    s = drawFromPile(s, 1, s.currentPlayerIndex);
-    s.message = `${up.name} שכח/ה לקרוא לולוס! שלף/ה קלף עונשין.`;
-  }
-
-  const next = (s.currentPlayerIndex + 1) % s.players.length;
+  const next = getNextActivePlayerIndex(s.players, s.currentPlayerIndex);
   return {
     ...s,
     players: s.players.map(p => ({ ...p, calledLolos: false })),
@@ -90,6 +149,7 @@ function endTurnLogic(st: ServerGameState): ServerGameState {
     stagedCards: [], equationResult: null, validTargets: [],
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: null, fractionPenalty: 0,
+    equationCommit: null,
   };
 }
 
@@ -113,7 +173,7 @@ export function startGame(
     ...DEFAULT_HOST_GAME_SETTINGS,
     ...partialSettings,
   };
-  const deck = shuffle(generateDeck(difficulty));
+  const deck = shuffle(generateDeck(difficulty, hostGameSettings.showFractions));
   const { hands, remaining } = dealCards(deck, room.players.length, CARDS_PER_PLAYER);
   let drawPile = remaining;
 
@@ -133,6 +193,9 @@ export function startGame(
     ...p,
     hand: hands[i],
     calledLolos: false,
+    afkWarnings: 0,
+    isEliminated: false,
+    isSpectator: false,
   }));
 
   const firstIdx = randomInt(0, players.length);
@@ -156,130 +219,244 @@ export function startGame(
     hasDrawnCard: false,
     lastCardValue: null,
     consecutiveIdenticalPlays: 0,
+    identicalCelebration: null,
     lastMoveMessage: null,
     lastEquationDisplay: null,
     difficulty,
     hostGameSettings,
     winner: null,
-    message: '',
+    message: '' as GameStatusMessage,
     openingDrawId,
     turnDeadlineAt: null,
+    equationCommit: null,
   };
   return withOnlineTurnDeadline(initial);
 }
 
 export function beginTurn(st: ServerGameState): ServerGameState {
   if (st.pendingFractionTarget !== null && !st.fractionAttackResolved) {
-    return { ...st, phase: 'pre-roll', message: `התקפת שבר! נדרש: ${st.pendingFractionTarget}. הגן/י בקלף מספר, חסום/י בשבר, או שלוף/י ${st.fractionPenalty} קלפים.` };
+    return {
+      ...st,
+      phase: 'pre-roll',
+      message: locMsg('toast.fractionDefenseRequired', {
+        target: st.pendingFractionTarget,
+        penalty: st.fractionPenalty,
+      }),
+    };
   }
-  return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: '' };
+  return {
+    ...st,
+    phase: 'pre-roll',
+    fractionAttackResolved: false,
+    pendingFractionTarget: null,
+    fractionPenalty: 0,
+    message: '',
+  };
 }
 
-export function doRollDice(st: ServerGameState): ServerGameState | { error: string } {
-  if (st.phase !== 'pre-roll') return { error: 'לא ניתן להטיל קוביות כעת' };
+export function doRollDice(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'pre-roll') return locErr('dice.cannotRollNow');
   const dice = rollDice();
   let ns: ServerGameState = { ...st, dice };
+  let statusMsg: GameStatusMessage = '';
 
   if (isTriple(dice)) {
     let s = { ...ns, players: ns.players.map(p => ({ ...p, hand: [...p.hand] })) };
     for (let i = 0; i < s.players.length; i++)
       if (i !== st.currentPlayerIndex) s = drawFromPile(s, dice.die1, i);
-    s.message = `שלישייה של ${dice.die1}! כל שאר השחקנים שולפים ${dice.die1} קלפים!`;
+    statusMsg = locMsg('toast.tripleDice', { n: dice.die1 });
     ns = s;
   }
 
   const vt = generateValidTargets(dice);
-  return { ...ns, validTargets: vt, phase: 'building', consecutiveIdenticalPlays: 0, message: ns.message || '' };
-}
-
-/** דילוג תור אם השחקן לא הגיב בזמן — מעבר לשחקן הבא + begin_turn + roll אוטומטי */
-export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error: string } {
-  if (st.phase !== 'turn-transition' && st.phase !== 'pre-roll') {
-    return { error: 'לא בשלב המתנה' };
-  }
-  const skippedIdx = st.currentPlayerIndex;
-  const skippedName = st.players[skippedIdx]?.name ?? 'שחקן';
-  const next = (skippedIdx + 1) % st.players.length;
-  const nextName = st.players[next]?.name ?? 'שחקן';
-
-  const base: ServerGameState = {
-    ...st,
-    currentPlayerIndex: next,
-    phase: 'turn-transition',
-    dice: null,
-    validTargets: [],
-    equationResult: null,
-    stagedCards: [],
-    hasPlayedCards: false,
-    hasDrawnCard: false,
-    lastCardValue: null,
+  return {
+    ...ns,
+    validTargets: vt,
+    phase: 'building',
     consecutiveIdenticalPlays: 0,
-    message: '',
-    pendingFractionTarget: null,
-    fractionPenalty: 0,
-    fractionAttackResolved: true,
+    equationCommit: null,
+    message: statusMsg,
   };
+}
 
-  const tMsg = `⏱️ ${skippedName} לא הגיב/ה בזמן — התור עבר ל-${nextName}`;
-  const afterBegin = beginTurn(base);
-  if (afterBegin.phase !== 'pre-roll') {
-    return { ...afterBegin, lastMoveMessage: tMsg };
+/** דילוג תור אם השחקן לא הגיב בזמן — קנס ושליפה + מעבר לשחקן הבא */
+export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
+  const isTurnTransitionTimeout = st.phase === 'turn-transition';
+  const isInTurnTimeout = (st.phase === 'building' || st.phase === 'solved');
+  if (!isTurnTransitionTimeout && !isInTurnTimeout) {
+    return locErr('timer.notActivePhase');
   }
-  const rolled = doRollDice(afterBegin);
-  if ('error' in rolled) return rolled;
-  const combinedMsg = [tMsg, rolled.message].filter(Boolean).join(' ').trim();
-  return { ...rolled, lastMoveMessage: combinedMsg || tMsg };
+
+  // During active turn (after roll): end turn by existing rules.
+  // doEndTurn already applies penalties/rules for "no move".
+  if (isInTurnTimeout) {
+    const cp = st.players[st.currentPlayerIndex];
+    const ended = doEndTurn(st);
+    return {
+      ...ended,
+      lastMoveMessage: locMsg('toast.turnTimeoutEnded', {
+        name: cp?.name ?? '…',
+      }),
+      message: '',
+    };
+  }
+
+  const skippedIdx = st.currentPlayerIndex;
+  const skippedPlayer = st.players[skippedIdx];
+  const skippedName = skippedPlayer?.name ?? '…';
+  if (!skippedPlayer) return locErr('timer.currentPlayerNotFound');
+
+  const nextWarnings = (skippedPlayer.afkWarnings ?? 0) + 1;
+  const playersAfterWarning = st.players.map((p, idx) =>
+    idx === skippedIdx ? { ...p, afkWarnings: nextWarnings } : p
+  );
+
+  if (nextWarnings >= 3) {
+    const playersAfterElimination = playersAfterWarning.map((p, idx) =>
+      idx === skippedIdx ? { ...p, isEliminated: true, isSpectator: true } : p
+    );
+    const remainingActive = getActivePlayers(playersAfterElimination);
+    if (remainingActive.length <= 1) {
+      return {
+        ...st,
+        players: playersAfterElimination,
+        phase: 'game-over',
+        winner: remainingActive[0] ?? null,
+        turnDeadlineAt: null,
+        lastMoveMessage: locMsg('toast.playerEliminatedAfk', { name: skippedName }),
+        message: remainingActive[0]
+          ? locMsg('toast.winnerAfterKick', { winner: remainingActive[0].name, kicked: skippedName })
+          : locMsg('toast.gameOverNoActive'),
+      };
+    }
+
+    const nextAfterKick = getNextActivePlayerIndex(playersAfterElimination, skippedIdx);
+    const nextNameAfterKick = playersAfterElimination[nextAfterKick]?.name ?? '…';
+    return {
+      ...st,
+      players: playersAfterElimination.map((p) => ({ ...p, calledLolos: false })),
+      currentPlayerIndex: nextAfterKick,
+      phase: 'turn-transition',
+      dice: null,
+      validTargets: [],
+      equationResult: null,
+      stagedCards: [],
+      hasPlayedCards: false,
+      hasDrawnCard: false,
+      lastCardValue: null,
+      consecutiveIdenticalPlays: 0,
+      message: '',
+      pendingFractionTarget: null,
+      fractionPenalty: 0,
+      fractionAttackResolved: true,
+      lastMoveMessage: locMsg('toast.eliminatedTurnTo', { name: skippedName, next: nextNameAfterKick }),
+    };
+  }
+
+  const next = getNextActivePlayerIndex(playersAfterWarning, skippedIdx);
+  const nextName = playersAfterWarning[next]?.name ?? '…';
+
+  const penalized = drawFromPile({ ...st, players: playersAfterWarning }, 1, skippedIdx);
+  const base = endTurnLogic(penalized);
+  const tMsg = locMsg('toast.afkWarnPenalty', {
+    name: skippedName,
+    warn: nextWarnings,
+    next: nextName,
+  });
+  return { ...base, lastMoveMessage: tMsg, message: '' };
 }
 
-export function confirmEquation(st: ServerGameState, result: number, equationDisplay: string): ServerGameState | { error: string } {
-  if (st.phase !== 'building') return { error: 'לא בשלב בניית תרגיל' };
-  if (!st.validTargets.some(t => t.result === result)) return { error: 'תוצאה לא חוקית' };
-  return { ...st, phase: 'solved', equationResult: result, lastEquationDisplay: equationDisplay, stagedCards: [], message: '' };
+function validateEquationCommitPayload(
+  st: ServerGameState,
+  payload: EquationCommitPayload | null | undefined,
+): { error: LocalizedMessage } | { ok: true; commit: EquationCommitPayload | null } {
+  if (payload == null) return { ok: true, commit: null };
+  const card = findCard(st, payload.cardId);
+  if (!card) return locErr('equation.commitCardNotInHand');
+  if (card.type !== 'operation' && card.type !== 'joker') return locErr('equation.invalidCommitCard');
+  if (payload.position !== 0 && payload.position !== 1) return locErr('equation.invalidOpPosition');
+  if (card.type === 'joker') {
+    if (payload.jokerAs == null) return locErr('equation.chooseJokerOp');
+  } else if (payload.jokerAs != null) {
+    return locErr('equation.regularOpNoJoker');
+  }
+  return { ok: true, commit: { cardId: payload.cardId, position: payload.position, jokerAs: payload.jokerAs } };
 }
 
-export function stageCard(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.phase !== 'solved' || st.hasPlayedCards) return { error: 'לא ניתן לשלב קלף כעת' };
+export function confirmEquation(
+  st: ServerGameState,
+  result: number,
+  equationDisplay: string,
+  equationCommit?: EquationCommitPayload | null,
+): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'building') return locErr('equation.notBuildingPhase');
+  if (!st.validTargets.some(t => t.result === result)) return locErr('equation.invalidResult');
+  const validated = validateEquationCommitPayload(st, equationCommit);
+  if ('error' in validated) return validated;
+  return {
+    ...st,
+    phase: 'solved',
+    equationResult: result,
+    lastEquationDisplay: equationDisplay,
+    stagedCards: [],
+    equationCommit: validated.commit,
+    message: '',
+  };
+}
+
+export function stageCard(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'solved' || st.hasPlayedCards) return locErr('stage.cannotStageNow');
+  if (st.equationCommit?.cardId === cardId) return locErr('stage.alreadyInEquation');
   const card = findCard(st, cardId);
-  if (!card) return { error: 'קלף לא נמצא' };
-  if (st.stagedCards.some(c => c.id === card.id)) return { error: 'הקלף כבר באזור ההנחה' };
-  if (card.type !== 'number' && card.type !== 'operation') return { error: 'ניתן לשלב רק קלפי מספר או פעולה' };
+  if (!card) return locErr('stage.cardNotFound');
+  if (st.stagedCards.some(c => c.id === card.id)) return locErr('stage.alreadyInStaging');
+  if (card.type !== 'number' && card.type !== 'operation' && card.type !== 'wild') {
+    return locErr('stage.onlyNumberWildOp');
+  }
+  if (card.type === 'wild' && st.stagedCards.some(c => c.type === 'wild')) {
+    return locErr('stage.oneWildOnly');
+  }
   if (card.type === 'operation' && st.stagedCards.some(c => c.type === 'operation')) {
-    return { error: 'אפשר רק סימן פעולה אחד באזור ההנחה' };
+    return locErr('stage.oneOpOnly');
   }
   return { ...st, stagedCards: [...st.stagedCards, card], message: '' };
 }
 
-export function unstageCard(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.phase !== 'solved') return { error: 'לא בשלב הנכון' };
+export function unstageCard(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'solved') return locErr('unstage.wrongPhase');
   return { ...st, stagedCards: st.stagedCards.filter(c => c.id !== cardId), message: '' };
 }
 
-export function confirmStaged(st: ServerGameState): ServerGameState | { error: string } {
-  if (st.phase !== 'solved' || st.hasPlayedCards) return { error: 'לא ניתן לאשר כעת' };
-  const stNumbers = st.stagedCards.filter(c => c.type === 'number');
+export function confirmStaged(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'solved' || st.hasPlayedCards) return locErr('confirm.cannotConfirm');
+  const stNumbers = st.stagedCards.filter(c => c.type === 'number' || c.type === 'wild');
   const stOpCards = st.stagedCards.filter(c => c.type === 'operation');
   const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
-  if (stNumbers.length === 0) return { error: 'יש לבחור לפחות קלף מספר אחד' };
-  if (st.equationResult === null) return { error: 'אין תוצאת תרגיל' };
+  if (stNumbers.length === 0) return locErr('confirm.needNumberOrWild');
+  if (st.equationResult === null) return locErr('confirm.noEquationResult');
   if (!validateStagedCards(stNumbers, stOpCard, st.equationResult)) {
-    return { error: 'השילוב הזה לא מגיע לתוצאה, נסה לשנות' };
+    return locErr('confirm.sumMismatch');
   }
 
   const stIds = new Set(st.stagedCards.map(c => c.id));
+  if (st.equationCommit) stIds.add(st.equationCommit.cardId);
   const stCp = st.players[st.currentPlayerIndex];
   const stNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: stCp.hand.filter(c => !stIds.has(c.id)) } : p);
-  const stagedLast = st.stagedCards[st.stagedCards.length - 1];
-  const displayCard = stagedLast?.type === 'number'
-    ? stagedLast
-    : stNumbers[stNumbers.length - 1];
-  const stDiscard = displayCard ? [...st.discardPile, displayCard] : [...st.discardPile];
-  const stToast = `✅ ${stCp.name}: ${st.lastEquationDisplay || ''} → הניח ${displayCard?.value ?? '?'}`;
+  const discardDisplayCard = resolveDiscardNumberCardFromStaged(st.stagedCards, st.equationResult);
+  const lastCardVal = getEffectiveNumber(discardDisplayCard);
+  const stDiscard = [...st.discardPile, discardDisplayCard];
+  const stToast = locMsg('toast.equationPlayed', {
+    name: stCp.name,
+    equation: st.lastEquationDisplay || '',
+    value: lastCardVal ?? '?',
+  });
 
   let stNs: ServerGameState = {
     ...st, players: stNp, discardPile: stDiscard,
     stagedCards: [], consecutiveIdenticalPlays: 0,
-    hasPlayedCards: true, lastCardValue: displayCard?.value ?? null,
+    hasPlayedCards: true, lastCardValue: lastCardVal,
     lastMoveMessage: stToast, lastEquationDisplay: null,
+    equationCommit: null,
     message: '',
   };
   stNs = checkWin(stNs);
@@ -287,38 +464,43 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: s
   return endTurnLogic(stNs);
 }
 
-export function playIdentical(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.phase !== 'pre-roll') return { error: 'לא בשלב הנכון' };
-  if (st.consecutiveIdenticalPlays >= 2) return { error: 'חריגה ממגבלת קלף זהה' };
+export function playIdentical(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
+  if (st.phase !== 'pre-roll') return locErr('identical.wrongPhase');
+  if (st.consecutiveIdenticalPlays >= 2) return locErr('identical.identicalLimit');
   const card = findCard(st, cardId);
-  if (!card) return { error: 'קלף לא נמצא' };
+  if (!card) return locErr('stage.cardNotFound');
   const td = st.discardPile[st.discardPile.length - 1];
-  if (!validateIdenticalPlay(card, td)) return { error: 'הקלף לא זהה לקלף בראש הערימה' };
+  if (!validateIdenticalPlay(card, td)) return locErr('identical.notMatchingTop');
+
+  const effectiveVal = getEffectiveNumber(td);
+  const cardToDiscard = card.type === 'wild' && effectiveVal != null
+    ? { ...card, resolvedValue: effectiveVal }
+    : card;
 
   const cp = st.players[st.currentPlayerIndex];
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
   const newConsecutive = st.consecutiveIdenticalPlays + 1;
-  const cardDisplay = card.type === 'number' ? `${card.value}` :
-                      card.type === 'fraction' ? card.fraction! :
-                      card.type === 'operation' ? card.operation! : 'ג׳וקר';
-  const toast = `🔄 ${cp.name}: הניח קלף זהה (${cardDisplay}) — דילוג על קוביות`;
+  const cardLabel = identicalCardLabel(card, effectiveVal);
+  const toast = locMsg('toast.identicalPlay', { name: cp.name, card: cardLabel });
+  const celebration = { playerName: cp.name, cardDisplay: cardLabel, consecutive: newConsecutive };
 
   let ns: ServerGameState = {
-    ...st, players: np, discardPile: [...st.discardPile, card],
+    ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     hasPlayedCards: true,
     consecutiveIdenticalPlays: newConsecutive,
-    lastCardValue: card.type === 'number' ? card.value ?? null : null,
+    lastCardValue: card.type === 'number' ? card.value ?? null : card.type === 'wild' ? effectiveVal : null,
     lastMoveMessage: toast, message: '',
+    identicalCelebration: celebration,
   };
   ns = checkWin(ns);
-  if (ns.phase === 'game-over') return ns;
+  if (ns.phase === 'game-over') return { ...ns, identicalCelebration: null };
   return endTurnLogic(ns);
 }
 
-export function playFraction(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.hasPlayedCards) return { error: 'כבר שיחקת קלף בתור הזה' };
+export function playFraction(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
+  if (st.hasPlayedCards) return locErr('fraction.alreadyPlayed');
   const card = findCard(st, cardId);
-  if (!card || card.type !== 'fraction') return { error: 'קלף שבר לא נמצא' };
+  if (!card || card.type !== 'fraction') return locErr('fraction.notFound');
   const cp = st.players[st.currentPlayerIndex];
   const denom = fractionDenominator(card.fraction!);
 
@@ -328,7 +510,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
     const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
     let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true });
     if (ns.phase === 'game-over') return ns;
-    const next = (ns.currentPlayerIndex + 1) % ns.players.length;
+    const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
     return {
       ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
       currentPlayerIndex: next, phase: 'turn-transition', dice: null,
@@ -337,22 +519,25 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
       hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
       pendingFractionTarget: newTarget, fractionPenalty: denom,
       fractionAttackResolved: false,
-      lastMoveMessage: `⚔️ ${cp.name}: חסם בשבר ${card.fraction} — אתגר!`,
-      message: `${cp.name} חסם/ה בשבר ${card.fraction}!`,
+      equationCommit: null,
+      lastMoveMessage: locMsg('toast.fractionBlock', { name: cp.name, fraction: String(card.fraction) }),
+      message: locMsg('toast.msg.fractionBlocked', { name: cp.name, fraction: String(card.fraction) }),
     };
   }
 
   // ── ATTACK MODE: fraction on a number card ──
   if (st.phase !== 'pre-roll' && st.phase !== 'building' && st.phase !== 'solved') {
-    return { error: 'לא ניתן לשחק שבר בשלב הזה' };
+    return locErr('fraction.cannotPlayPhase');
   }
   const td = st.discardPile[st.discardPile.length - 1];
-  if (!validateFractionPlay(card, td)) return { error: 'לא ניתן לשחק שבר על הקלף הנוכחי' };
-  const newTarget = td.value! / denom;
+  if (!validateFractionPlay(card, td)) return locErr('fraction.cannotPlayOnTop');
+  const effTop = getEffectiveNumber(td);
+  if (effTop === null) return locErr('fraction.cannotPlayOnTop');
+  const newTarget = effTop / denom;
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
   let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true });
   if (ns.phase === 'game-over') return ns;
-  const next = (ns.currentPlayerIndex + 1) % ns.players.length;
+  const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
   return {
     ...ns, players: ns.players.map(p => ({ ...p, calledLolos: false })),
     currentPlayerIndex: next, phase: 'turn-transition', dice: null,
@@ -361,77 +546,100 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: newTarget, fractionPenalty: denom,
     fractionAttackResolved: false,
-    lastMoveMessage: `⚔️ ${cp.name}: הניח שבר ${card.fraction} — אתגר!`,
-    message: `${cp.name} שיחק/ה שבר ${card.fraction}!`,
+    equationCommit: null,
+    lastMoveMessage: locMsg('toast.fractionAttack', { name: cp.name, fraction: String(card.fraction) }),
+    message: locMsg('toast.msg.fractionPlayed', { name: cp.name, fraction: String(card.fraction) }),
   };
 }
 
-export function defendFractionSolve(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  if (st.pendingFractionTarget === null) return { error: 'אין התקפת שבר פעילה' };
+export function defendFractionSolve(st: ServerGameState, cardId: string, wildResolve?: number): ServerGameState | { error: LocalizedMessage } {
+  if (st.pendingFractionTarget === null) return locErr('defend.noActiveAttack');
   const card = findCard(st, cardId);
-  const v = card?.value;
-  // Align with client (index.tsx): any hand number divisible by the attack denominator counts as defense
-  if (!card || card.type !== 'number' || v == null || v <= 0 || st.fractionPenalty <= 0 || v % st.fractionPenalty !== 0) {
-    return { error: 'הקלף לא מתאים להגנה' };
+  const maxWild = st.difficulty === 'easy' ? 12 : 25;
+  if (!card) return locErr('stage.cardNotFound');
+  if (st.fractionPenalty <= 0) return locErr('defend.cardMismatch');
+
+  let cardToDiscard: Card;
+  let lastVal: number;
+  if (card.type === 'number') {
+    const v = card.value;
+    if (v == null || v <= 0 || v % st.fractionPenalty !== 0) return locErr('defend.cardMismatch');
+    cardToDiscard = card;
+    lastVal = v;
+  } else if (card.type === 'wild') {
+    const v = wildResolve;
+    if (v == null || v <= 0 || v > maxWild || v % st.fractionPenalty !== 0) return locErr('defend.cardMismatch');
+    cardToDiscard = { ...card, resolvedValue: v };
+    lastVal = v;
+  } else {
+    return locErr('defend.cardMismatch');
   }
+
   const cp = st.players[st.currentPlayerIndex];
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
   let ns = checkWin({
-    ...st, players: np, discardPile: [...st.discardPile, card],
+    ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     pendingFractionTarget: null, fractionPenalty: 0,
-    fractionAttackResolved: true, lastCardValue: card.value ?? null,
-    lastMoveMessage: '🛡️ הגנה מוצלחת — התור עובר לשחקן הבא',
-    message: 'הגנה מוצלחת!',
+    fractionAttackResolved: true, lastCardValue: lastVal,
+    lastMoveMessage: locMsg('toast.defenseOk'),
+    message: locMsg('msg.defenseOk'),
   });
   if (ns.phase === 'game-over') return ns;
   return endTurnLogic(ns);
 }
 
-export function defendFractionPenalty(st: ServerGameState): ServerGameState | { error: string } {
-  if (st.pendingFractionTarget === null) return { error: 'אין התקפת שבר פעילה' };
+export function defendFractionPenalty(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
+  if (st.pendingFractionTarget === null) return locErr('defend.noActiveAttack');
   const cp = st.players[st.currentPlayerIndex];
   let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
   s = {
     ...s,
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true,
-    lastMoveMessage: `${cp.name} שלף ${st.fractionPenalty} קלפי עונשין 📥`,
-    message: `${cp.name} שלף/ה ${st.fractionPenalty} קלפי עונשין.`,
+    lastMoveMessage: locMsg('toast.penaltyDraw', { name: cp.name, count: st.fractionPenalty }),
+    message: locMsg('msg.penaltyDraw', { name: cp.name, count: st.fractionPenalty }),
   };
   return endTurnLogic(s);
 }
 
-export function playOperation(st: ServerGameState, cardId: string): ServerGameState | { error: string } {
-  return { error: 'קלף סימן משולב רק בתוך התרגיל' };
+export function playOperation(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
+  void cardId;
+  return locErr('operation.onlyInEquation');
 }
 
-export function playJoker(st: ServerGameState, cardId: string, chosenOperation: Operation): ServerGameState | { error: string } {
-  return { error: 'ג׳וקר משולב רק בתוך התרגיל' };
+export function playJoker(st: ServerGameState, cardId: string, chosenOperation: Operation): ServerGameState | { error: LocalizedMessage } {
+  void cardId;
+  void chosenOperation;
+  return locErr('joker.onlyInEquation');
 }
 
-export function drawCard(st: ServerGameState): ServerGameState | { error: string } {
-  if (st.hasPlayedCards || st.hasDrawnCard) return { error: 'לא ניתן לשלוף קלף כעת' };
+export function drawCard(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
+  if (st.hasPlayedCards || st.hasDrawnCard) return locErr('draw.cannotDrawNow');
   const drawCp = st.players[st.currentPlayerIndex];
   let s = reshuffleDiscard(st);
   if (s.drawPile.length === 0) return { ...s, hasDrawnCard: true, message: '' };
   s = drawFromPile(s, 1, s.currentPlayerIndex);
-  s = { ...s, hasDrawnCard: true, lastMoveMessage: `${drawCp.name} שלף קלף מהחבילה 📥` };
+  s = { ...s, hasDrawnCard: true, lastMoveMessage: locMsg('toast.drawOne', { name: drawCp.name }) };
   return endTurnLogic(s);
 }
 
-export function callLulos(st: ServerGameState, playerId: string): ServerGameState | { error: string } {
-  const pi = st.players.findIndex(p => p.id === playerId);
-  if (pi === -1) return { error: 'שחקן לא נמצא' };
-  const cp = st.players[pi];
-  if (cp.hand.length > 2) return { error: 'יותר מדי קלפים לקריאת לולוס' };
-  return {
-    ...st,
-    players: st.players.map((p, i) => i === pi ? { ...p, calledLolos: true } : p),
-    message: `${cp.name} קרא/ה לולוס!`,
-  };
+export function callLulos(st: ServerGameState, playerId: string): ServerGameState | { error: LocalizedMessage } {
+  void st;
+  void playerId;
+  return locErr('call.notAvailable');
 }
 
 export function doEndTurn(st: ServerGameState): ServerGameState {
+  if (!st.hasPlayedCards && !st.hasDrawnCard) {
+    const cp = st.players[st.currentPlayerIndex];
+    const penalized = drawFromPile(st, 1, st.currentPlayerIndex);
+    const withMsg: ServerGameState = {
+      ...penalized,
+      lastMoveMessage: locMsg('toast.endTurnNoMove', { name: cp.name }),
+      message: '',
+    };
+    return endTurnLogic(withMsg);
+  }
   return endTurnLogic(st);
 }
 
@@ -439,7 +647,7 @@ export function doEndTurn(st: ServerGameState): ServerGameState {
 //  PLAYER VIEW — what each player sees (hides other hands)
 // ══════════════════════════════════════════════════════════════
 
-export function getPlayerView(state: ServerGameState, playerId: string): PlayerView {
+export function getPlayerView(state: ServerGameState, playerId: string, locale: AppLocale): PlayerView {
   const myPlayer = state.players.find(p => p.id === playerId);
   const pileTop = state.discardPile.length > 0 ? state.discardPile[state.discardPile.length - 1] : null;
 
@@ -457,6 +665,9 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
         isConnected: p.isConnected,
         isHost: p.isHost,
         calledLolos: p.calledLolos,
+        afkWarnings: p.afkWarnings,
+        isEliminated: p.isEliminated,
+        isSpectator: p.isSpectator,
       })),
     players: state.players.map(p => ({
       id: p.id,
@@ -465,6 +676,9 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
       isConnected: p.isConnected,
       isHost: p.isHost,
       calledLolos: p.calledLolos,
+      afkWarnings: p.afkWarnings,
+      isEliminated: p.isEliminated,
+      isSpectator: p.isSpectator,
     })),
     currentPlayerIndex: state.currentPlayerIndex,
     pileTop,
@@ -480,12 +694,14 @@ export function getPlayerView(state: ServerGameState, playerId: string): PlayerV
     hasDrawnCard: state.hasDrawnCard,
     lastCardValue: state.lastCardValue,
     consecutiveIdenticalPlays: state.consecutiveIdenticalPlays,
-    lastMoveMessage: state.lastMoveMessage,
+    identicalCelebration: state.identicalCelebration ?? null,
+    lastMoveMessage: formatLastMove(locale, state.lastMoveMessage),
     difficulty: state.difficulty,
     gameSettings: state.hostGameSettings,
     winner: state.winner ? { id: state.winner.id, name: state.winner.name } : null,
-    message: state.message,
+    message: formatGameMessage(locale, state.message),
     openingDrawId: state.openingDrawId,
     turnDeadlineAt: state.turnDeadlineAt,
+    equationCommit: state.equationCommit,
   };
 }

@@ -2,6 +2,8 @@ import React from 'react'
 import { Text, View, StyleSheet } from 'react-native'
 import Card from './Card'
 import { Card as CardType } from '../../types/game'
+import { useLocaleOptional, deviceDefaultLocale } from '../../i18n/LocaleContext'
+import { t } from '../../../shared/i18n'
 
 interface Props {
   card: CardType
@@ -11,11 +13,12 @@ interface Props {
 }
 
 export default function OperationCard({ card, selected, onPress, small }: Props) {
+  const loc = useLocaleOptional()?.locale ?? deviceDefaultLocale()
   return (
     <Card borderColor="#F97316" bgColor="#FFF7ED" selected={selected} onPress={onPress} small={small}>
       <View style={styles.inner}>
         <Text style={[styles.op, { fontSize: small ? 20 : 30 }]}>{card.operation}</Text>
-        {!small && <Text style={styles.label}>פעולה</Text>}
+        {!small && <Text style={styles.label}>{t(loc, 'cardLabel.operation')}</Text>}
       </View>
     </Card>
   )

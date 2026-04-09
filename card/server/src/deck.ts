@@ -20,8 +20,8 @@ export function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-/** Generate a full Lolos deck */
-export function generateDeck(difficulty: 'easy' | 'full'): Card[] {
+/** Generate a full Lolos deck (מיושר ל־index.tsx: מספרים, שברים אופציונליים, פעולות, ג'וקרים, פרא) */
+export function generateDeck(difficulty: 'easy' | 'full', includeFractions: boolean = true): Card[] {
   resetCardIds();
   const cards: Card[] = [];
   const maxNumber = difficulty === 'easy' ? 12 : 25;
@@ -31,24 +31,29 @@ export function generateDeck(difficulty: 'easy' | 'full'): Card[] {
     for (let v = 0; v <= maxNumber; v++)
       cards.push({ id: makeId(), type: 'number', value: v });
 
-  // Fraction cards
-  const fracs: { frac: Fraction; count: number }[] = [
-    { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
-    { frac: '1/4', count: 4 }, { frac: '1/5', count: 4 },
-  ];
-  for (const { frac, count } of fracs)
-    for (let i = 0; i < count; i++)
-      cards.push({ id: makeId(), type: 'fraction', fraction: frac });
+  if (includeFractions) {
+    const fracs: { frac: Fraction; count: number }[] = [
+      { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
+      { frac: '1/4', count: 3 }, { frac: '1/5', count: 2 },
+    ];
+    for (const { frac, count } of fracs)
+      for (let i = 0; i < count; i++)
+        cards.push({ id: makeId(), type: 'fraction', fraction: frac });
+  }
 
   // Operation cards: 4 of each
   const operations: Operation[] = ['+', '-', 'x', '÷'];
   for (const op of operations)
-    for (let i = 0; i < 4; i++)
+    for (let i = 0; i < (op === '÷' ? 3 : 4); i++)
       cards.push({ id: makeId(), type: 'operation', operation: op });
 
   // Joker cards: 4
   for (let i = 0; i < 4; i++)
     cards.push({ id: makeId(), type: 'joker' });
+
+  // Wild (פרא): 4
+  for (let i = 0; i < 4; i++)
+    cards.push({ id: makeId(), type: 'wild' });
 
   return cards;
 }

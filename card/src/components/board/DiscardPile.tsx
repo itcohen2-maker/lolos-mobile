@@ -1,9 +1,11 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import { useGame } from '../../hooks/useGame'
+import { useLocale } from '../../i18n/LocaleContext'
 import GameCard from '../cards/GameCard'
 
 export default function DiscardPile() {
+  const { t } = useLocale()
   const { state } = useGame()
   const topCard = state.discardPile[state.discardPile.length - 1]
 
@@ -13,10 +15,10 @@ export default function DiscardPile() {
         <GameCard card={topCard} />
       ) : (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>ריק</Text>
+          <Text style={styles.emptyText}>{t('game.discardEmpty')}</Text>
         </View>
       )}
-      <Text style={styles.label}>ערימה</Text>
+      <Text style={styles.label}>{t('game.discardPile')}</Text>
     </View>
   )
 }

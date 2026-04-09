@@ -2,6 +2,8 @@ import React from 'react'
 import { Text, View, StyleSheet } from 'react-native'
 import Card from './Card'
 import { Card as CardType } from '../../types/game'
+import { useLocaleOptional, deviceDefaultLocale } from '../../i18n/LocaleContext'
+import { t } from '../../../shared/i18n'
 
 interface Props {
   card: CardType
@@ -17,6 +19,7 @@ function getColors(value: number) {
 }
 
 export default function NumberCard({ card, selected, onPress, small }: Props) {
+  const loc = useLocaleOptional()?.locale ?? deviceDefaultLocale()
   const value = card.value ?? 0
   const { border, text } = getColors(value)
 
@@ -24,7 +27,7 @@ export default function NumberCard({ card, selected, onPress, small }: Props) {
     <Card borderColor={border} bgColor="#FFF" selected={selected} onPress={onPress} small={small}>
       <View style={styles.inner}>
         <Text style={[styles.value, { color: text, fontSize: small ? 18 : 24 }]}>{value}</Text>
-        {!small && <Text style={styles.label}>מספר</Text>}
+        {!small && <Text style={styles.label}>{t(loc, 'cardLabel.number')}</Text>}
       </View>
     </Card>
   )

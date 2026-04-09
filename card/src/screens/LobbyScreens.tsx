@@ -13,26 +13,101 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Share,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Clipboard from 'expo-clipboard';
 import { useMultiplayer } from '../hooks/useMultiplayer';
 import type { HostGameSettings } from '../../shared/types';
+import type { MsgParams } from '../../shared/i18n';
+import { useLocale } from '../i18n/LocaleContext';
+import SalindaLogoOption06 from '../components/branding/SalindaLogoOption06';
+import { brand } from '../theme/brand';
 
-function lobbyTimerLabel(ts: HostGameSettings['timerSetting'], customSec: number): string {
-  if (ts === 'off') return 'ללא';
+const WEB_INVITE_BASE_STORAGE_KEY = 'salinda_web_invite_base';
+
+type TFn = (key: string, params?: MsgParams) => string;
+
+function lobbyTimerLabel(t: TFn, ts: HostGameSettings['timerSetting'], customSec: number): string {
+  if (ts === 'off') return t('lobby.timerOff');
   if (ts === 'custom') {
     return customSec >= 60
-      ? `${Math.floor(customSec / 60)} דק׳ ${customSec % 60} שנ׳`
-      : `${customSec} שנ׳`;
+      ? t('lobby.timerFmtMinSec', { m: Math.floor(customSec / 60), s: customSec % 60 })
+      : t('lobby.timerSec', { n: customSec });
   }
-  if (ts === '60') return '1 דקה';
-  return `${ts} שנ׳`;
+  if (ts === '60') return t('lobby.timerMin');
+  return t('lobby.timerSec', { n: ts });
+}
+
+export function LanguageToggle() {
+  const { locale, setLocale, t } = useLocale();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8, alignSelf: 'stretch', justifyContent: 'center' }}>
+      <Text style={{ color: '#9CA3AF', fontSize: 12 }}>{t('lang.label')}:</Text>
+      <TouchableOpacity onPress={() => void setLocale('he')} style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: locale === 'he' ? brand.gold : brand.surface2 }}>
+        <Text style={{ color: locale === 'he' ? '#111827' : '#fff', fontWeight: '700', fontSize: 12 }}>{t('lang.he')}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => void setLocale('en')} style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: locale === 'en' ? brand.gold : brand.surface2 }}>
+        <Text style={{ color: locale === 'en' ? '#111827' : '#fff', fontWeight: '700', fontSize: 12 }}>{t('lang.en')}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+/** בסיס URL של לקוח ה-Web המפורסם (ללא "/" בסוף). בלי הגדרה — ריק; המארח יכול למלא ידנית. */
+function getInviteWebBaseUrl(): string {
+  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_WEB_APP_URL) {
+    return String(process.env.EXPO_PUBLIC_WEB_APP_URL).trim();
+  }
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return '';
+}
+
+function isLocalServerUrl(url: string): boolean {
+  const raw = (url || '').trim().toLowerCase();
+  return (
+    raw.includes('localhost') ||
+    raw.includes('127.0.0.1') ||
+    raw.includes('0.0.0.0') ||
+    raw.includes('10.0.2.2')
+  );
+}
+
+function guestInviteSearchParams(roomCode: string, serverUrl: string): URLSearchParams {
+  const fallbackPublicServer =
+    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
+      ? String(process.env.EXPO_PUBLIC_SERVER_URL).trim()
+      : '';
+  const safeServerUrl = isLocalServerUrl(serverUrl) ? fallbackPublicServer : serverUrl.trim();
+  const params = new URLSearchParams({ room: roomCode });
+  if (safeServerUrl) params.set('server', safeServerUrl);
+  return params;
+}
+
+function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: string; name?: string } {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return {};
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      roomCode: params.get('room') ?? undefined,
+      serverUrl: params.get('server') ?? undefined,
+      name: params.get('name') ?? undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } = {}) {
-  const { createRoom, joinRoom, error, clearError } = useMultiplayer();
+  const { t, isRTL } = useLocale();
+  const { createRoom, joinRoom, error, clearError, setServerUrl } = useMultiplayer();
+  const ta = isRTL ? 'right' : 'left';
   const [step, setStep] = useState<'create' | 'join'>('create');
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
+  const [joinFromLinkReady, setJoinFromLinkReady] = useState(false);
 
   useEffect(() => {
     if (error) {
@@ -40,6 +115,16 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
       return () => clearTimeout(t);
     }
   }, [error, clearError]);
+
+  useEffect(() => {
+    const { roomCode: roomFromUrl, serverUrl, name } = parseJoinParamsFromUrl();
+    if (!roomFromUrl) return;
+    setStep('join');
+    setRoomCode(roomFromUrl.slice(0, 4));
+    if (name) setPlayerName(name.slice(0, 7));
+    if (serverUrl) setServerUrl(serverUrl);
+    setJoinFromLinkReady(true);
+  }, [setServerUrl]);
 
   const handleCreate = () => {
     if (!playerName.trim()) return;
@@ -54,23 +139,32 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <LanguageToggle />
       {onBackToChoice && (
         <TouchableOpacity style={styles.backBtn} onPress={onBackToChoice}>
-          <Text style={styles.backBtnText}>→ בחירת אופן משחק</Text>
+          <Text style={styles.backBtnText}>{t('lobby.backToMode')}</Text>
         </TouchableOpacity>
       )}
-      <Text style={styles.title}>התחבר למשחק</Text>
-      <Text style={styles.subtitle}>הזן שם וצור חדר או הצטרף עם קוד</Text>
+      <View style={styles.logoWrap}>
+        <SalindaLogoOption06 width={260} />
+      </View>
+      <Text style={styles.title}>{t('lobby.connectTitle')}</Text>
+      <Text style={styles.subtitle}>{t('lobby.connectSubtitle')}</Text>
+      {joinFromLinkReady && (
+        <View style={styles.infoBox}>
+          <Text style={[styles.infoText, { textAlign: ta }]}>{t('lobby.inviteLinkHint')}</Text>
+        </View>
+      )}
 
       <>
-        <Text style={styles.label}>השם שלך</Text>
+        <Text style={styles.label}>{t('lobby.yourName')}</Text>
           <TextInput
             style={styles.input}
             value={playerName}
-            onChangeText={(t) => setPlayerName(t.slice(0, 7))}
-            placeholder="השם שלי (עד 7 אותיות)"
+            onChangeText={(x) => setPlayerName(x.slice(0, 7))}
+            placeholder={t('lobby.namePlaceholder')}
             placeholderTextColor="#6B7280"
-            textAlign="right"
+            textAlign={ta}
             maxLength={7}
           />
           {step === 'create' && (
@@ -79,12 +173,12 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
               onPress={handleCreate}
               disabled={!playerName.trim()}
             >
-              <Text style={styles.primaryBtnText}>צור חדר</Text>
+              <Text style={styles.primaryBtnText}>{t('lobby.createRoom')}</Text>
             </TouchableOpacity>
           )}
           {step === 'join' && (
             <>
-              <Text style={styles.label}>קוד החדר (4 ספרות)</Text>
+              <Text style={styles.label}>{t('lobby.roomCode')}</Text>
               <TextInput
                 style={styles.input}
                 value={roomCode}
@@ -100,12 +194,12 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
                 onPress={handleJoin}
                 disabled={!playerName.trim() || roomCode.length < 4}
               >
-                <Text style={styles.primaryBtnText}>הצטרף לחדר</Text>
+                <Text style={styles.primaryBtnText}>{t('lobby.joinRoom')}</Text>
               </TouchableOpacity>
             </>
           )}
         <TouchableOpacity style={styles.secondaryBtn} onPress={() => setStep(step === 'create' ? 'join' : 'create')}>
-          <Text style={styles.secondaryBtnText}>{step === 'create' ? 'יש לי קוד חדר — הצטרף' : 'צור חדר חדש'}</Text>
+          <Text style={styles.secondaryBtnText}>{step === 'create' ? t('lobby.toggleToJoin') : t('lobby.toggleToCreate')}</Text>
         </TouchableOpacity>
       </>
 
@@ -119,15 +213,38 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
 }
 
 export function LobbyScreen() {
-  const { roomCode, players, isHost, startGame, leaveRoom, error, clearError } = useMultiplayer();
+  const { t, isRTL } = useLocale();
+  const ta = isRTL ? 'right' : 'left';
+  const { roomCode, players, isHost, startGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
   const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
-  const [diceMode, setDiceMode] = useState<HostGameSettings['diceMode']>('3');
   const [showFractions, setShowFractions] = useState(true);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timerSetting, setTimerSetting] = useState<HostGameSettings['timerSetting']>('off');
   const [timerCustomSeconds, setTimerCustomSeconds] = useState(60);
   const [starting, setStarting] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  /** עוקף בסיס Web אוטומטי; ריק = שימוש ב־EXPO_PUBLIC_WEB_APP_URL או במקור הדף (Web). נשמר במכשיר. */
+  const [manualWebInviteBase, setManualWebInviteBase] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(WEB_INVITE_BASE_STORAGE_KEY)
+      .then((v) => {
+        if (!cancelled && v?.trim()) setManualWebInviteBase(v.trim());
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const v = manualWebInviteBase.trim();
+    const t = setTimeout(() => {
+      if (v) void AsyncStorage.setItem(WEB_INVITE_BASE_STORAGE_KEY, v);
+      else void AsyncStorage.removeItem(WEB_INVITE_BASE_STORAGE_KEY);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [manualWebInviteBase]);
 
   useEffect(() => {
     if (error) {
@@ -141,7 +258,7 @@ export function LobbyScreen() {
     if (!isHost || players.length < 2) return;
     setStarting(true);
     const gameSettings: HostGameSettings = {
-      diceMode,
+      diceMode: '3',
       showFractions,
       showPossibleResults,
       showSolveExercise,
@@ -153,126 +270,201 @@ export function LobbyScreen() {
 
   const hostSettingsSummary = useMemo(() => {
     const ts = timerSetting === 'custom' ? timerCustomSeconds : 60;
+    const diffLabel = difficulty === 'easy' ? t('lobby.diffEasyRange') : t('lobby.diffFullRange');
     const lines = [
-      `קושי: ${difficulty === 'easy' ? 'קל (0–12)' : 'מלא (0–25)'}`,
-      `קוביות: ${diceMode}`,
-      `שברים: ${showFractions ? 'כן' : 'לא'}`,
-      `תוצאות אפשריות: ${showPossibleResults ? 'הצג' : 'הסתר'}`,
-      `פתרון תרגיל: ${showSolveExercise ? 'מופעל' : 'כבוי'}`,
-      `טיימר: ${lobbyTimerLabel(timerSetting, ts)}`,
+      t('lobby.summary.difficulty', { value: diffLabel }),
+      t('lobby.summary.dice'),
+      t('lobby.summary.fractions', { value: showFractions ? t('lobby.yes') : t('lobby.no') }),
+      t('lobby.summary.possible', { value: showPossibleResults ? t('lobby.show') : t('lobby.hide') }),
+      t('lobby.summary.solve', { value: showSolveExercise ? t('lobby.on') : t('lobby.off') }),
+      t('lobby.summary.timer', { value: lobbyTimerLabel(t, timerSetting, ts) }),
     ];
     return lines.join('\n');
-  }, [difficulty, diceMode, showFractions, showPossibleResults, showSolveExercise, timerSetting, timerCustomSeconds]);
+  }, [t, difficulty, showFractions, showPossibleResults, showSolveExercise, timerSetting, timerCustomSeconds]);
+
+  const configuredWebBase = getInviteWebBaseUrl().replace(/\/$/, '');
+  const inviteSuffix = useMemo(() => {
+    if (!roomCode) return '';
+    return `?${guestInviteSearchParams(roomCode, serverUrl).toString()}`;
+  }, [roomCode, serverUrl]);
+
+  const effectiveWebBase = (manualWebInviteBase.trim() || configuredWebBase).replace(/\/$/, '');
+  const inviteLink = useMemo(() => {
+    if (!roomCode || !inviteSuffix) return '';
+    if (!effectiveWebBase) return '';
+    return `${effectiveWebBase}${inviteSuffix}`;
+  }, [roomCode, inviteSuffix, effectiveWebBase]);
+
+  const copyableInvite = inviteLink || inviteSuffix;
+
+  const handleShareInvite = async () => {
+    if (!copyableInvite) return;
+    try {
+      const body = inviteLink
+        ? inviteLink
+        : t('lobby.shareBodyNoLink', { suffix: inviteSuffix, room: roomCode ?? '' });
+      await Share.share({
+        message: t('lobby.shareTitle', { body }),
+      });
+    } catch {
+      // ignore user-cancel or share not available
+    }
+  };
+
+  const handleCopyInvite = async () => {
+    if (!copyableInvite) return;
+    try {
+      await Clipboard.setStringAsync(copyableInvite);
+      setCopyFeedback(inviteLink ? t('lobby.copyDoneLink') : t('lobby.copyDoneSuffix'));
+    } catch {
+      setCopyFeedback(t('lobby.copyFail'));
+    }
+  };
+
+  useEffect(() => {
+    if (!copyFeedback) return;
+    const t = setTimeout(() => setCopyFeedback(null), 2500);
+    return () => clearTimeout(t);
+  }, [copyFeedback]);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+      <LanguageToggle />
       <TouchableOpacity style={styles.backBtn} onPress={() => leaveRoom()}>
-        <Text style={styles.backBtnText}>→ עזוב חדר</Text>
+        <Text style={styles.backBtnText}>{t('lobby.leaveRoom')}</Text>
       </TouchableOpacity>
-      <Text style={styles.title}>החדר מוכן</Text>
-      <View style={styles.codeBox}>
-        <Text style={styles.codeLabel}>קוד החדר</Text>
-        <Text style={styles.codeValue}>{roomCode}</Text>
-        <Text style={styles.codeHint}>שתף את הקוד עם החברים כדי שיוכלו להצטרף</Text>
+      <View style={styles.logoWrap}>
+        <SalindaLogoOption06 width={260} />
       </View>
-      <Text style={styles.label}>שחקנים בחדר ({players.length}/6)</Text>
+      <Text style={styles.title}>{t('lobby.roomReady')}</Text>
+      <View style={styles.codeBox}>
+        <Text style={styles.codeLabel}>{t('lobby.roomCodeLabel')}</Text>
+        <Text style={styles.codeValue}>{roomCode}</Text>
+        <Text style={[styles.codeHint, { textAlign: ta }]}>{t('lobby.shareCodeHint')}</Text>
+        {isHost && (
+          <View style={styles.inviteBox}>
+            <Text style={[styles.inviteLabel, { textAlign: ta }]}>{t('lobby.browserInvite')}</Text>
+            <Text style={[styles.inviteHint, { textAlign: ta }]}>
+              {configuredWebBase
+                ? t('lobby.inviteHintConfigured', { base: configuredWebBase })
+                : t('lobby.inviteHintMobile')}
+            </Text>
+            <Text style={styles.inviteFieldLabel}>{t('lobby.baseUrl')}</Text>
+            <TextInput
+              style={styles.input}
+              value={manualWebInviteBase}
+              onChangeText={setManualWebInviteBase}
+              placeholder={configuredWebBase ? t('lobby.baseDefault', { base: configuredWebBase }) : t('lobby.basePlaceholder')}
+              placeholderTextColor="#6B7280"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              textAlign={isRTL ? 'right' : 'left'}
+            />
+            {inviteLink ? (
+              <Text selectable style={styles.inviteLink}>{inviteLink}</Text>
+            ) : (
+              <>
+                <Text style={[styles.inviteSuffixCaption, { textAlign: ta }]}>{t('lobby.suffixCaption')}</Text>
+                <Text selectable style={styles.inviteLink}>{inviteSuffix || '—'}</Text>
+              </>
+            )}
+            <View style={styles.inviteActionsRow}>
+              <TouchableOpacity style={[styles.inviteBtn, !copyableInvite && styles.inviteBtnDisabled]} onPress={handleShareInvite} disabled={!copyableInvite}>
+                <Text style={styles.inviteBtnText}>{t('lobby.share')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.inviteBtn, styles.inviteCopyBtn, !copyableInvite && styles.inviteBtnDisabled]} onPress={handleCopyInvite} disabled={!copyableInvite}>
+                <Text style={[styles.inviteBtnText, styles.inviteCopyBtnLabel]}>{t('lobby.copy')}</Text>
+              </TouchableOpacity>
+            </View>
+            {copyFeedback && <Text style={styles.copyFeedbackText}>{copyFeedback}</Text>}
+          </View>
+        )}
+      </View>
+      <Text style={styles.label}>{t('lobby.playersInRoom', { count: players.length })}</Text>
       {players.map((p) => (
         <View key={p.id} style={styles.playerRow}>
           <Text style={styles.playerName}>{p.name}</Text>
-          {p.isHost && <Text style={styles.hostBadge}>מארח</Text>}
-          {!p.isConnected && <Text style={styles.disconnectedBadge}>מנותק</Text>}
+          {p.isHost && <Text style={styles.hostBadge}>{t('lobby.host')}</Text>}
+          {!p.isConnected && <Text style={styles.disconnectedBadge}>{t('lobby.disconnected')}</Text>}
         </View>
       ))}
       {isHost && (
         <>
-          <Text style={styles.label}>רמת קושי</Text>
+          <Text style={styles.label}>{t('lobby.difficulty')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
               style={[styles.diffBtn, difficulty === 'easy' && styles.diffBtnActive]}
               onPress={() => setDifficulty('easy')}
             >
-              <Text style={[styles.diffText, difficulty === 'easy' && styles.diffTextActive]}>קל</Text>
+              <Text style={[styles.diffText, difficulty === 'easy' && styles.diffTextActive]}>{t('lobby.diffShortEasy')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, difficulty === 'full' && styles.diffBtnActive]}
               onPress={() => setDifficulty('full')}
             >
-              <Text style={[styles.diffText, difficulty === 'full' && styles.diffTextActive]}>מלא</Text>
+              <Text style={[styles.diffText, difficulty === 'full' && styles.diffTextActive]}>{t('lobby.diffShortFull')}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.label}>קוביות</Text>
-          <View style={styles.diffRow}>
-            <TouchableOpacity
-              style={[styles.diffBtn, diceMode === '2' && styles.diffBtnActive]}
-              onPress={() => setDiceMode('2')}
-            >
-              <Text style={[styles.diffText, diceMode === '2' && styles.diffTextActive]}>2 קוביות</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.diffBtn, diceMode === '3' && styles.diffBtnActive]}
-              onPress={() => setDiceMode('3')}
-            >
-              <Text style={[styles.diffText, diceMode === '3' && styles.diffTextActive]}>3 קוביות</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.label}>שברים</Text>
+          <Text style={styles.label}>{t('lobby.fractions')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
               style={[styles.diffBtn, showFractions && styles.diffBtnActive]}
               onPress={() => setShowFractions(true)}
             >
-              <Text style={[styles.diffText, showFractions && styles.diffTextActive]}>עם שברים</Text>
+              <Text style={[styles.diffText, showFractions && styles.diffTextActive]}>{t('lobby.withFractions')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, !showFractions && styles.diffBtnActive]}
               onPress={() => setShowFractions(false)}
             >
-              <Text style={[styles.diffText, !showFractions && styles.diffTextActive]}>בלי שברים</Text>
+              <Text style={[styles.diffText, !showFractions && styles.diffTextActive]}>{t('lobby.noFractions')}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.label}>תוצאות אפשריות</Text>
+          <Text style={styles.label}>{t('lobby.possibleResults')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
               style={[styles.diffBtn, showPossibleResults && styles.diffBtnActive]}
               onPress={() => setShowPossibleResults(true)}
             >
-              <Text style={[styles.diffText, showPossibleResults && styles.diffTextActive]}>הצג</Text>
+              <Text style={[styles.diffText, showPossibleResults && styles.diffTextActive]}>{t('lobby.show')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, !showPossibleResults && styles.diffBtnActive]}
               onPress={() => setShowPossibleResults(false)}
             >
-              <Text style={[styles.diffText, !showPossibleResults && styles.diffTextActive]}>הסתר</Text>
+              <Text style={[styles.diffText, !showPossibleResults && styles.diffTextActive]}>{t('lobby.hide')}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.label}>פתרון תרגיל (מיני־קלפים)</Text>
+          <Text style={styles.label}>{t('lobby.solveExercise')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
               style={[styles.diffBtn, showSolveExercise && styles.diffBtnActive]}
               onPress={() => setShowSolveExercise(true)}
             >
-              <Text style={[styles.diffText, showSolveExercise && styles.diffTextActive]}>מופעל</Text>
+              <Text style={[styles.diffText, showSolveExercise && styles.diffTextActive]}>{t('lobby.on')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, !showSolveExercise && styles.diffBtnActive]}
               onPress={() => setShowSolveExercise(false)}
             >
-              <Text style={[styles.diffText, !showSolveExercise && styles.diffTextActive]}>כבוי</Text>
+              <Text style={[styles.diffText, !showSolveExercise && styles.diffTextActive]}>{t('lobby.off')}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.label}>טיימר לתור</Text>
+          <Text style={styles.label}>{t('lobby.turnTimer')}</Text>
           <View style={styles.timerGrid}>
-            {([
-              ['off', 'ללא'] as const,
-              ['30', '30 שנ׳'] as const,
-              ['60', '1 דקה'] as const,
-              ['custom', 'מותאם'] as const,
-            ]).map(([key, label]) => (
+            {(
+              [
+                ['off', t('lobby.timerOff')] as const,
+                ['30', t('lobby.timerSec', { n: 30 })] as const,
+                ['60', t('lobby.timerMin')] as const,
+                ['custom', t('lobby.timerCustom')] as const,
+              ]
+            ).map(([key, label]) => (
               <TouchableOpacity
                 key={key}
                 style={[styles.timerChip, timerSetting === key && styles.diffBtnActive]}
@@ -284,12 +476,12 @@ export function LobbyScreen() {
           </View>
           {timerSetting === 'custom' && (
             <>
-              <Text style={styles.hint}>שניות לתור (10–600)</Text>
+              <Text style={styles.hint}>{t('lobby.timerCustomHint')}</Text>
               <TextInput
                 style={styles.input}
                 value={String(timerCustomSeconds)}
-                onChangeText={(t) => {
-                  const n = parseInt(t.replace(/\D/g, ''), 10);
+                onChangeText={(tx) => {
+                  const n = parseInt(tx.replace(/\D/g, ''), 10);
                   if (Number.isNaN(n)) {
                     setTimerCustomSeconds(60);
                     return;
@@ -303,9 +495,9 @@ export function LobbyScreen() {
             </>
           )}
 
-          <Text style={styles.label}>סיכום לפני התחלה (כל השחקנים)</Text>
+          <Text style={styles.label}>{t('lobby.summaryTitle')}</Text>
           <View style={styles.summaryBox}>
-            <Text style={styles.summaryText}>{hostSettingsSummary}</Text>
+            <Text style={[styles.summaryText, { textAlign: ta }]}>{hostSettingsSummary}</Text>
           </View>
 
           <TouchableOpacity
@@ -314,18 +506,18 @@ export function LobbyScreen() {
             disabled={players.length < 2 || starting}
           >
             {starting ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color="#111827" />
             ) : (
-              <Text style={styles.primaryBtnText}>התחל משחק</Text>
+              <Text style={styles.primaryBtnText}>{t('lobby.startGame')}</Text>
             )}
           </TouchableOpacity>
           {players.length < 2 && (
-            <Text style={styles.hint}>נדרשים לפחות 2 שחקנים כדי להתחיל</Text>
+            <Text style={styles.hint}>{t('lobby.minPlayers')}</Text>
           )}
         </>
       )}
       {!isHost && (
-        <Text style={styles.waitingText}>מחכים שהמארח יתחיל את המשחק… ההגדרות יופיעו אצל כולם עם תרחיש המשחק.</Text>
+        <Text style={[styles.waitingText, { textAlign: ta }]}>{t('lobby.waitHost')}</Text>
       )}
       {error && (
         <View style={styles.errorBox}>
@@ -337,10 +529,11 @@ export function LobbyScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: { flex: 1, backgroundColor: '#0a1628' },
+  scroll: { flex: 1, backgroundColor: brand.bg },
   container: { padding: 24, paddingTop: 60, alignItems: 'center' },
+  logoWrap: { alignSelf: 'center', marginBottom: 12 },
   backBtn: { alignSelf: 'flex-start', marginBottom: 16, paddingVertical: 8, paddingHorizontal: 12 },
-  backBtnText: { color: '#93C5FD', fontSize: 14, fontWeight: '600' },
+  backBtnText: { color: brand.cyan, fontSize: 14, fontWeight: '600' },
   title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8 },
   subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24 },
   label: { color: '#D1D5DB', fontSize: 14, fontWeight: '600', alignSelf: 'flex-start', marginTop: 16, marginBottom: 8 },
@@ -358,7 +551,7 @@ const styles = StyleSheet.create({
   },
   hint: { color: '#6B7280', fontSize: 12, marginTop: 4, marginBottom: 12 },
   primaryBtn: {
-    backgroundColor: '#2563EB',
+    backgroundColor: brand.gold,
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 12,
@@ -367,20 +560,54 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   primaryBtnDisabled: { opacity: 0.5 },
-  primaryBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  primaryBtnText: { color: '#111827', fontSize: 16, fontWeight: '700' },
   secondaryBtn: { marginTop: 12 },
-  secondaryBtnText: { color: '#93C5FD', fontSize: 14 },
+  secondaryBtnText: { color: brand.cyan, fontSize: 14 },
   codeBox: {
     width: '100%',
-    backgroundColor: 'rgba(59,130,246,0.15)',
+    backgroundColor: 'rgba(245,158,11,0.12)',
     borderRadius: 12,
     padding: 20,
     alignItems: 'center',
     marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.35)',
   },
-  codeLabel: { color: '#93C5FD', fontSize: 12, marginBottom: 4 },
+  codeLabel: { color: brand.gold, fontSize: 12, marginBottom: 4 },
   codeValue: { fontSize: 36, fontWeight: '800', color: '#FFF', letterSpacing: 8 },
   codeHint: { color: '#6B7280', fontSize: 11, marginTop: 8 },
+  inviteBox: {
+    marginTop: 12,
+    width: '100%',
+    backgroundColor: 'rgba(17,24,39,0.72)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.4)',
+    padding: 10,
+  },
+  inviteLabel: { color: brand.cyan, fontSize: 12, textAlign: 'right', marginBottom: 6 },
+  inviteHint: { color: '#94A3B8', fontSize: 11, textAlign: 'right', lineHeight: 16, marginBottom: 8 },
+  inviteFieldLabel: { color: '#CBD5E1', fontSize: 11, fontWeight: '600', alignSelf: 'flex-start', marginBottom: 4 },
+  inviteSuffixCaption: { color: 'rgba(34,211,238,0.85)', fontSize: 11, textAlign: 'right', marginTop: 8, marginBottom: 4 },
+  inviteLink: { color: '#E2E8F0', fontSize: 12, textAlign: 'left' },
+  inviteActionsRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  inviteBtn: {
+    backgroundColor: brand.gold,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  inviteCopyBtn: { backgroundColor: '#0D9488' },
+  inviteBtnDisabled: { opacity: 0.45 },
+  inviteBtnText: { color: '#111827', fontWeight: '700', fontSize: 12 },
+  inviteCopyBtnLabel: { color: '#FFF' },
+  copyFeedbackText: { color: '#A7F3D0', fontSize: 11, marginTop: 8, textAlign: 'center' },
   playerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -391,13 +618,13 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   playerName: { color: '#E2E8F0', fontSize: 16, flex: 1, textAlign: 'right' },
-  hostBadge: { backgroundColor: '#2563EB', color: '#FFF', fontSize: 10, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 8 },
+  hostBadge: { backgroundColor: brand.gold, color: '#111827', fontSize: 10, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 8 },
   disconnectedBadge: { color: '#EF4444', fontSize: 10 },
   diffRow: { flexDirection: 'row', gap: 10, width: '100%', marginBottom: 8 },
   diffBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#374151', alignItems: 'center' },
-  diffBtnActive: { backgroundColor: '#2563EB' },
+  diffBtnActive: { backgroundColor: brand.gold },
   diffText: { color: '#9CA3AF', fontWeight: '600' },
-  diffTextActive: { color: '#FFF' },
+  diffTextActive: { color: '#111827' },
   timerGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -429,4 +656,15 @@ const styles = StyleSheet.create({
   summaryText: { color: '#E2E8F0', fontSize: 13, fontWeight: '600', lineHeight: 21, textAlign: 'right' },
   errorBox: { marginTop: 16, padding: 12, backgroundColor: 'rgba(239,68,68,0.2)', borderRadius: 10, width: '100%' },
   errorText: { color: '#FCA5A5', textAlign: 'center' },
+  infoBox: {
+    width: '100%',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.35)',
+    backgroundColor: 'rgba(34,211,238,0.08)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  infoText: { color: brand.text, fontSize: 12, textAlign: 'right' },
 });

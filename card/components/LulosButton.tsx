@@ -5,7 +5,7 @@ import { HtmlCanvasEmbed } from './HtmlCanvasEmbed';
 
 export interface LulosButtonProps {
   text: string;
-  color: 'blue' | 'yellow' | 'green' | 'red' | 'purple';
+  color: 'blue' | 'yellow' | 'green' | 'red' | 'purple' | 'orange';
   onPress: () => void;
   disabled?: boolean;
   width?: number;
@@ -45,6 +45,13 @@ const PALETTES = {
     twinkle: 'rgba(255,240,180,0.5)', twinkleGlow: 'rgba(210,160,30,0)',
     text: { fill: '#1a1510', stroke: 'rgba(180,140,30,0.4)', shadow: 'rgba(80,50,0,0.5)' },
     rnShadow: '#2a1a00',
+  },
+  orange: {
+    s1: '#3A1400', s2: '#5A2200', s3: '#7A3300', s4: '#A34705',
+    hi: 'rgba(255,145,40,', sym: '#B85A16', symhi: '#F08C3A',
+    twinkle: 'rgba(255,210,170,0.52)', twinkleGlow: 'rgba(255,140,40,0)',
+    text: { fill: '#FFF3E4', stroke: 'rgba(130,55,10,0.55)', shadow: 'rgba(70,25,0,0.72)' },
+    rnShadow: '#4a1c00',
   },
   purple: {
     s1: '#1A0028', s2: '#2A0042', s3: '#3A005C', s4: '#4A0A6B',

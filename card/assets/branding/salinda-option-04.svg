@@ -1,0 +1,9 @@
+<svg width="1200" height="500" viewBox="0 0 1200 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="500" rx="30" fill="#111827"/>
+  <circle cx="132" cy="126" r="11" fill="#F59E0B"/>
+  <circle cx="182" cy="154" r="10" fill="#22D3EE"/>
+  <circle cx="152" cy="208" r="11" fill="#F472B6"/>
+  <rect x="88" y="258" width="196" height="94" rx="20" fill="#1F2937"/>
+  <text x="360" y="238" font-size="116" font-weight="900" fill="#22D3EE" font-family="Arial, sans-serif">Salinda</text>
+  <text x="364" y="320" font-size="62" font-weight="800" fill="#F8FAFC" font-family="Arial, sans-serif" direction="rtl" unicode-bidi="plaintext">&#x05E1;&#x05DC;&#x05D9;&#x05E0;&#x05D3;&#x05D4;</text>
+</svg>

@@ -15,7 +15,8 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_SERVER_URL": "https://lolos-mobile.onrender.com"
+        "EXPO_PUBLIC_SERVER_URL": "https://lolos-mobile.onrender.com",
+        "EXPO_PUBLIC_WEB_APP_URL": "https://salinda-web.onrender.com"
       }
     }
   },

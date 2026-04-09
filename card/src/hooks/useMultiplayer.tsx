@@ -5,8 +5,10 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
+import { Platform } from 'react-native';
 import { io, type Socket } from 'socket.io-client';
 import type { PlayerView, HostGameSettings } from '../../shared/types';
+import { useLocale } from '../i18n/LocaleContext';
 
 // Default server URL — same machine. For device use your computer's LAN IP (e.g. 192.168.1.x:3001)
 const getServerUrl = () => {
@@ -89,6 +91,9 @@ function playerViewToGameState(view: PlayerView): any {
       name: p.name,
       hand,
       calledLolos: p.calledLolos,
+      afkWarnings: p.afkWarnings ?? 0,
+      isEliminated: p.isEliminated ?? false,
+      isSpectator: p.isSpectator ?? false,
     };
   });
   const drawPileFake = Array.from({ length: view.deckCount }, (_, i) => ({ id: `deck-${i}`, type: 'number' as const, value: 0 }));
@@ -100,6 +105,17 @@ function playerViewToGameState(view: PlayerView): any {
     timerSetting: 'off' as const,
     timerCustomSeconds: 60,
   };
+  let equationOpCard: any = null;
+  let equationOpPosition: number | null = null;
+  let equationOpJokerOp: any = null;
+  if (view.equationCommit) {
+    const c = view.myHand.find((x) => x.id === view.equationCommit!.cardId);
+    if (c) {
+      equationOpCard = c;
+      equationOpPosition = view.equationCommit.position;
+      equationOpJokerOp = view.equationCommit.jokerAs;
+    }
+  }
   return {
     phase: view.phase,
     players,
@@ -123,11 +139,11 @@ function playerViewToGameState(view: PlayerView): any {
     hasDrawnCard: view.hasDrawnCard,
     lastCardValue: view.lastCardValue,
     consecutiveIdenticalPlays: view.consecutiveIdenticalPlays ?? 0,
-    identicalAlert: null,
+    identicalAlert: view.identicalCelebration ?? null,
     jokerModalOpen: false,
-    equationOpCard: null,
-    equationOpPosition: null,
-    equationOpJokerOp: null,
+    equationOpCard,
+    equationOpPosition,
+    equationOpJokerOp,
     lastMoveMessage: view.lastMoveMessage,
     lastDiscardCount: 0,
     lastEquationDisplay: null,
@@ -145,6 +161,7 @@ function playerViewToGameState(view: PlayerView): any {
     roundsPlayed: 0,
     notifications: [],
     moveHistory: [],
+    suppressIdenticalOverlayOnline: false,
   };
 }
 
@@ -154,29 +171,35 @@ function actionToSocketEvent(action: any): { event: string; data?: any } | null 
     case 'BEGIN_TURN': return { event: 'begin_turn' };
     case 'ROLL_DICE': return { event: 'roll_dice' };
     case 'CONFIRM_EQUATION':
-      return { event: 'confirm_equation', data: { result: action.result, equationDisplay: action.equationDisplay || '' } };
+      return {
+        event: 'confirm_equation',
+        data: {
+          result: action.result,
+          equationDisplay: action.equationDisplay || '',
+          equationCommit: action.equationCommit ?? null,
+        },
+      };
     case 'STAGE_CARD': return { event: 'stage_card', data: { cardId: action.card?.id } };
     case 'UNSTAGE_CARD': return { event: 'unstage_card', data: { cardId: action.card?.id } };
     case 'CONFIRM_STAGED': return { event: 'confirm_staged' };
     case 'PLAY_IDENTICAL': return { event: 'place_identical', data: { cardId: action.card?.id } };
     case 'PLAY_FRACTION': return { event: 'play_fraction', data: { cardId: action.card?.id } };
-    case 'DEFEND_FRACTION_SOLVE': return { event: 'defend_fraction_solve', data: { cardId: action.card?.id } };
+    case 'DEFEND_FRACTION_SOLVE':
+      return { event: 'defend_fraction_solve', data: { cardId: action.card?.id, wildResolve: action.wildResolve } };
     case 'DEFEND_FRACTION_PENALTY': return { event: 'defend_fraction_penalty' };
     case 'PLAY_OPERATION': return null;
     case 'FORWARD_CHALLENGE': return null;
     case 'PLAY_JOKER':
       return { event: 'play_joker', data: { cardId: action.card?.id, chosenOperation: action.chosenOperation } };
     case 'DRAW_CARD': return { event: 'draw_card' };
-    case 'CALL_LOLOS': return { event: 'call_lulos' };
+    case 'CALL_LOLOS': return null;
     case 'END_TURN': return { event: 'end_turn' };
     default: return null;
   }
 }
 
 export function MultiplayerProvider({ children }: { children: ReactNode }) {
-  // #region agent log
-  if (typeof __DEV__ !== 'undefined' && __DEV__) { fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d4b6'},body:JSON.stringify({sessionId:'68d4b6',location:'useMultiplayer.tsx:MultiplayerProvider',message:'MultiplayerProvider render',data:{hypothesisId:'H3'},timestamp:Date.now()})}).catch(()=>{}); }
-  // #endregion
+  const { locale } = useLocale();
   const [playMode, setPlayMode] = useState<PlayMode>('choose');
   const [serverUrl, setServerUrlState] = useState(getServerUrl);
   const [connected, setConnected] = useState(false);
@@ -251,17 +274,17 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const createRoom = useCallback((playerName: string) => {
     connect();
     setTimeout(() => {
-      socketRef.current?.emit('create_room', { playerName });
+      socketRef.current?.emit('create_room', { playerName, locale });
       setIsHost(true);
     }, 500);
-  }, [connect]);
+  }, [connect, locale]);
 
   const joinRoom = useCallback((code: string, playerName: string) => {
     connect();
     setTimeout(() => {
-      socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName });
+      socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName, locale });
     }, 500);
-  }, [connect]);
+  }, [connect, locale]);
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit('leave_room');
@@ -295,6 +318,10 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       if (action?.type === 'RESET_GAME') {
         leaveRoom();
         setServerState(null);
+        return;
+      }
+      const me = serverState.players.find((p) => p.id === serverState.myPlayerId);
+      if (me && (me.isEliminated || me.isSpectator)) {
         return;
       }
       const ev = actionToSocketEvent(action);

@@ -14,19 +14,19 @@ interface ButtonProps {
 }
 
 const bgColors: Record<Variant, string> = {
-  primary: '#2563EB',
+  primary: '#F59E0B',
   secondary: '#4B5563',
   danger: '#DC2626',
   success: '#16A34A',
-  gold: '#EAB308',
+  gold: '#F59E0B',
 }
 
 const textColors: Record<Variant, string> = {
-  primary: '#FFF',
+  primary: '#111827',
   secondary: '#FFF',
   danger: '#FFF',
   success: '#FFF',
-  gold: '#000',
+  gold: '#111827',
 }
 
 const paddings: Record<Size, [number, number]> = {

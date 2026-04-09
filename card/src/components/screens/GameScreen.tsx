@@ -7,8 +7,11 @@ import PlayerHand from '../board/PlayerHand'
 import DiceArea from '../board/DiceArea'
 import ActionBar from '../board/ActionBar'
 import Scoreboard from '../ui/Scoreboard'
+import SalindaLogoOption06 from '../branding/SalindaLogoOption06'
+import { useLocale } from '../../i18n/LocaleContext'
 
 export default function GameScreen() {
+  const { t } = useLocale()
   const { state } = useGame()
   const currentPlayer = state.players[state.currentPlayerIndex]
 
@@ -16,9 +19,9 @@ export default function GameScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.logo}>לולוס</Text>
+        <SalindaLogoOption06 width={148} />
         <Text style={styles.turnInfo}>
-          תורו/ה של <Text style={styles.playerName}>{currentPlayer?.name}</Text>
+          {t('game.turnOf', { name: currentPlayer?.name ?? '—' })}
         </Text>
       </View>
 
@@ -64,9 +67,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 8,
   },
-  logo: { color: '#F59E0B', fontSize: 20, fontWeight: '900', letterSpacing: 2, textAlign: 'right' },
-  turnInfo: { color: '#D1D5DB', fontSize: 13 },
-  playerName: { color: '#FFF', fontWeight: '700' },
+  turnInfo: { color: '#D1D5DB', fontSize: 13, flex: 1, textAlign: 'left', marginStart: 12 },
   scroll: { flex: 1 },
   scrollContent: {
     padding: 12,

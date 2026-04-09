@@ -9,10 +9,12 @@ export interface CasinoButtonProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  /** Optional row before label (e.g. compact turn countdown inside the felt area) */
+  leadingContent?: React.ReactNode;
   style?: any;
 }
 
-export function CasinoButton({ text, onPress, disabled, width = 300, height = 62, fontSize = 26, style }: CasinoButtonProps) {
+export function CasinoButton({ text, onPress, disabled, width = 300, height = 62, fontSize = 26, leadingContent, style }: CasinoButtonProps) {
   const pressAnim = useRef(new Animated.Value(0)).current;
   const twinkleAnim = useRef(new Animated.Value(0)).current;
 
@@ -182,22 +184,32 @@ export function CasinoButton({ text, onPress, disabled, width = 300, height = 62
             borderColor: 'rgba(255,248,180,0.25)',
           }} />
 
-          {/* Text label */}
+          {/* Text label (+ optional leading slot, e.g. timer) */}
           <View style={{
             position: 'absolute', top: 0, left: 0, right: 0,
             height: height,
+            flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'center',
+            gap: leadingContent ? 8 : 0,
+            paddingHorizontal: leadingContent ? 10 : 0,
           }}>
-            <Text style={{
-              color: '#F0E8C0',
-              fontSize,
-              fontWeight: '900',
-              textShadowColor: 'rgba(0,0,0,0.7)',
-              textShadowOffset: { width: 0, height: 2 },
-              textShadowRadius: 6,
-              letterSpacing: 0.5,
-            }}>{text}</Text>
+            {leadingContent}
+            <Text
+              style={{
+                color: '#F0E8C0',
+                fontSize,
+                fontWeight: '900',
+                textShadowColor: 'rgba(0,0,0,0.7)',
+                textShadowOffset: { width: 0, height: 2 },
+                textShadowRadius: 6,
+                letterSpacing: 0.5,
+                flexShrink: 1,
+              }}
+              numberOfLines={1}
+            >
+              {text}
+            </Text>
           </View>
         </Animated.View>
       </TouchableOpacity>

@@ -2,6 +2,8 @@ import React from 'react'
 import { Text, View, StyleSheet } from 'react-native'
 import Card from './Card'
 import { Card as CardType } from '../../types/game'
+import { useLocaleOptional, deviceDefaultLocale } from '../../i18n/LocaleContext'
+import { t } from '../../../shared/i18n'
 
 interface Props {
   card: CardType
@@ -18,6 +20,7 @@ const display: Record<string, { num: string; den: string; sym: string }> = {
 }
 
 export default function FractionCard({ card, selected, onPress, small }: Props) {
+  const loc = useLocaleOptional()?.locale ?? deviceDefaultLocale()
   const f = display[card.fraction ?? '1/2']
   return (
     <Card borderColor="#8B5CF6" bgColor="#F5F3FF" selected={selected} onPress={onPress} small={small}>
@@ -29,7 +32,7 @@ export default function FractionCard({ card, selected, onPress, small }: Props) 
             <Text style={styles.num}>{f.num}</Text>
             <View style={styles.line} />
             <Text style={styles.den}>{f.den}</Text>
-            <Text style={styles.label}>שבר</Text>
+            <Text style={styles.label}>{t(loc, 'cardLabel.fraction')}</Text>
           </>
         )}
       </View>
