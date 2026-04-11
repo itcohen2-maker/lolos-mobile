@@ -651,4 +651,17 @@ export const en: Record<string, string> = {
   'lab.steal.d1': 'Mechanic: one random visible card from an opponent, or pick-by-rules.',
   'lab.steal.d2': 'Affects “call” strategy — strong cards stolen before finish; or steal weak cards.',
   'lab.steal.d3': 'Pair with shield (see shield-card-design) to block same-turn steals.',
+
+  // vs-bot feature — StartScreen mode/difficulty labels (M6.1)
+  'start.mode': 'Mode',
+  'start.modePassAndPlay': 'Pass and play',
+  'start.modeVsBot': 'Play vs Bot',
+  'start.botDifficulty': 'Bot difficulty',
+  'start.botEasy': 'Easy',
+  'start.botHard': 'Hard',
+  'start.advancedSettings': 'Advanced game settings',
+
+  // vs-bot feature — runtime strings (M6.1)
+  'botOffline.botName': 'Bot',
+  'botOffline.thinking': 'Bot is thinking\u2026',
 };

@@ -664,5 +664,19 @@ export const he: Record<string, string> = {
   'lobby.botOfferTitle': 'עדיין אין יריב',
   'lobby.botOfferBody': 'עדיין לא נכנס שחקן נוסף. אפשר להתחיל עכשיו מול בוט ולהשאיר את קוד החדר להזמנה בהמשך.',
   'lobby.startBotGame': 'התחל מול בוט',
+
+  // vs-bot feature — StartScreen mode/difficulty labels (M6.1)
+  'start.mode': 'מצב',
+  'start.modePassAndPlay': 'משחק מקומי',
+  'start.modeVsBot': 'שחק מול בוט',
+  'start.botDifficulty': 'רמת בוט',
+  'start.botEasy': 'קל',
+  'start.botHard': 'קשה',
+  'start.advancedSettings': 'הגדרות מתקדמות',
+
+  // vs-bot feature — runtime strings (M6.1)
+  'botOffline.botName': 'בוט',
+  'botOffline.thinking': 'הבוט חושב\u2026',
+
   ...heLateOverrides,
 };
