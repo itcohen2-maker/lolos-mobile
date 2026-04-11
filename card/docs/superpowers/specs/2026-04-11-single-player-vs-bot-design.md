@@ -122,18 +122,21 @@ Added to the existing `Player` type inside `index.tsx`:
 isBot: boolean;   // defaults false; set true for bot players in START_GAME
 ```
 
-(If `Player` already has an `isBot` field inside `index.tsx`, we reuse it as-is. To be verified during Task 1 of the plan.)
+**REQUIRED: `Player` does not have an `isBot` field today — it must be added as `isBot: boolean` (default `false` for PLAY_AGAIN preservation and RESET_GAME).** Per survey doc section 4, the `Player` interface at line 152 is exactly `{ id: number; name: string; hand: Card[]; calledLolos: false }` — no `isBot` field exists anywhere on the interface. This is a new field addition, not a verification of an existing one. Player construction at line 1005 (survey doc section 7) is currently `{ id: i, name: p.name, hand: hands[i], calledLolos: false }` — adding `isBot` must be done explicitly.
 
 Added to the `GameAction` union inside `index.tsx`:
 
 ```typescript
-| { type: 'START_GAME';                    // EXISTING — amended signature
-    players: Array<{ name: string; isBot: boolean }>;
-    difficulty: 'easy' | 'full';
-    mode: 'pass-and-play' | 'vs-bot';
-    botDifficulty?: BotDifficulty;
-    hostGameSettings?: Partial<HostGameSettings>;
-  }
+// BEFORE (current shape at line 357, per survey doc section 3):
+| { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
+
+// AFTER (amended to support vs-bot):
+| { type: 'START_GAME'; players: Array<{ name: string; isBot: boolean }>; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty }
+```
+
+Note: the current `START_GAME` action shape has **no** `mode`, `botDifficulty`, or `botPlayerIds` fields (survey doc Finding 3 and section 3, line 357). These fields must be **added** to the action type union in `index.tsx` — they do not exist today. The `players` array's items must also be amended from `{ name: string }` to `{ name: string; isBot: boolean }`. No `hostGameSettings` nesting — all game settings are individual top-level fields on both the action and `GameState`.
+
+```typescript
 | { type: 'BOT_STEP' }                     // NEW — fired by bot clock
 ```
 
@@ -225,18 +228,30 @@ function applyBotActionAtomically(
   // After confirmEquation, stage every card in action.stagedCardIds.
   // The plan is captured at decision time (in the action itself); we do
   // NOT re-run the planner here, which would risk target drift.
+  const alreadyStaged: string[] = [];  // track cards staged so far for rollback
   for (const cardId of action.stagedCardIds) {
     const stageTranslated = translateBotAction(next, {
       kind: 'stageCard',
       cardId,
     });
     if (!stageTranslated) {
-      // A planned card is no longer stageable — the local reducer
-      // rejected it. Roll back by returning drawCard instead.
+      // A planned card is no longer stageable — the local reducer rejected it.
+      // IMPORTANT: Roll back by unstaging all cards already staged in previous
+      // loop iterations before falling back to drawCard. This fixes a latent bug
+      // in the server bot (server bot reference doc Finding #1): the server's
+      // handleBotBuilding calls drawCard without unstaging already-staged cards
+      // if stageCard fails mid-loop, potentially leaving orphan staged cards in
+      // room state. The local bot explicitly fixes this by unstaging first.
+      let rollback = next;
+      for (const stagedId of alreadyStaged) {
+        const unstageTranslated = translateBotAction(rollback, { kind: 'unstageCard', cardId: stagedId });
+        if (unstageTranslated) rollback = gameReducer(rollback, unstageTranslated, tf);
+      }
       const drawTranslated = translateBotAction(st, { kind: 'drawCard' });
       if (!drawTranslated) return st;
-      return gameReducer(st, drawTranslated, tf);
+      return gameReducer(rollback, drawTranslated, tf);
     }
+    alreadyStaged.push(cardId);
     next = gameReducer(next, stageTranslated, tf);
   }
 
@@ -295,9 +310,19 @@ useEffect(() => {
   }
 
   // Only schedule in phases the bot can act in.
+  // Note: 'roll-dice' is an additional phase in the live code (survey doc section 6,
+  // Finding 1: type GamePhase = 'setup' | 'turn-transition' | 'pre-roll' | 'building' |
+  // 'solved' | 'roll-dice' | 'game-over' — 7 phases, not 6). The render tree (survey doc
+  // section 12) does NOT handle 'roll-dice' explicitly for local play — it falls to the
+  // default branch (renders StartScreen). Investigation: 'roll-dice' appears only in
+  // gamePhasesForToasts (index.tsx line 8684) and is likely a dormant/online-only phase
+  // not reachable in local single-player flow. The bot clock treats 'roll-dice' the same
+  // as 'pre-roll' (i.e., acts in it) as a belt-and-suspenders measure in case the phase
+  // becomes reachable in a future build.
   if (
     localState.phase !== 'turn-transition' &&
     localState.phase !== 'pre-roll' &&
+    localState.phase !== 'roll-dice' &&   // treat same as 'pre-roll'; see Finding note above
     localState.phase !== 'building' &&
     localState.phase !== 'solved'
   ) {
@@ -369,7 +394,14 @@ The `turnSignature` ref is the key innovation: unrelated re-renders (notificatio
 
 #### 0.5.3 Context value must be memoized before the bot clock ships
 
-**Frontend C1:** `index.tsx:1641` currently returns `<GameContext.Provider value={{ state, dispatch }}>` — a fresh object literal every render. Without `useMemo`, every `useGame()` consumer re-renders on every `BOT_STEP` dispatch. With 15+ consumers × ~12 bot turns × ~1 dispatch/sec, this is ~180 useless whole-screen reconciles per game on mid-range Android.
+**Frontend C1:** `index.tsx:1641` currently returns `<GameContext.Provider value={{ state, dispatch }}>{children}</GameContext.Provider>` — a fresh object literal every render. This is confirmed by survey doc section 9 Finding 8 and the verbatim quote of line 1641:
+
+```typescript
+// Current line 1641 (survey doc section 9):
+return <GameContext.Provider value={{ state, dispatch }}>{children}</GameContext.Provider>;
+```
+
+The `value` prop is `{ state, dispatch }` — a new object literal created on every render, NOT wrapped in `useMemo`. Without memoization, every `useGame()` consumer re-renders on every `BOT_STEP` dispatch. With 15+ consumers × ~12 bot turns × ~1 dispatch/sec, this is ~180 useless whole-screen reconciles per game on mid-range Android.
 
 **This is a prerequisite fix.** It must land in M5 alongside the bot clock, not as a follow-up, because shipping the bot without it makes the app visibly laggy in dev testing and masks other perf issues.
 
@@ -381,11 +413,11 @@ const contextValue = useMemo(() => ({ state, dispatch }), [state, dispatch]);
 return <GameContext.Provider value={contextValue}>{children}</GameContext.Provider>;
 ```
 
-Verify in M1 that `state` and `dispatch` are themselves stable across unrelated renders (they should be — `state` comes from the reducer, `dispatch` from `useCallback`).
+Per survey doc section 9: `dispatch` is wrapped in `useCallback` (line 1615) and `state` is either `localState` (stable reference when unchanged) or the merged object. So the `useMemo` dependency array `[state, dispatch]` correctly captures the only two values that should trigger consumer re-renders.
 
 #### 0.5.4 Input lock overlay during bot turns
 
-**Frontend input-race fix:** during the 900–1600 ms bot "think" window, `currentPlayerIndex` already points at the bot and human taps on `PlayerHand` / `ActionBar` / `DrawPile` / `DiscardPile` may be accepted by existing "is my turn" checks that don't know about bots. The least-invasive mitigation is a single overlay component that renders on top of the game area when the current player is a bot and absorbs all touches.
+**Frontend input-race fix:** during the 900–1599 ms bot "think" window (exact delay formula: `900 + Math.floor(Math.random() * 700)` — range is 900 to 1599 ms inclusive, per server bot reference doc section 6 / Finding #5), `currentPlayerIndex` already points at the bot and human taps on `PlayerHand` / `ActionBar` / `DrawPile` / `DiscardPile` may be accepted by existing "is my turn" checks that don't know about bots. The least-invasive mitigation is a single overlay component that renders on top of the game area when the current player is a bot and absorbs all touches.
 
 Add an inline component inside `index.tsx` (matching the codebase convention of inline components):
 
@@ -436,25 +468,35 @@ export function translateBotAction(
 
 Translation table:
 
+> **Translator note:** The bot brain (`botBrain.ts`) works with string `cardId` values (matching server bot semantics). The **translator** (`executor.ts`) is responsible for resolving `cardId → Card` by looking up `state.players[currentPlayerIndex].hand.find(c => c.id === cardId)`. If `findCard` returns `undefined` (card no longer in hand), `translateBotAction` must return `null` to trigger the drawCard fallback. All card-carrying actions (`STAGE_CARD`, `UNSTAGE_CARD`, `PLAY_IDENTICAL`, `PLAY_FRACTION`, `DEFEND_FRACTION_SOLVE`) take a full `Card` object, NOT a `cardId` string — per survey doc section 3.
+
 | BotAction | Translated to local GameAction |
 |---|---|
 | `{ kind: 'beginTurn' }` | `{ type: 'BEGIN_TURN' }` |
 | `{ kind: 'rollDice' }` | `{ type: 'ROLL_DICE' }` |
-| `{ kind: 'playIdentical', cardId }` | `{ type: 'PLAY_IDENTICAL', card: findCard(cardId) }` |
-| `{ kind: 'playFractionAttack', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` |
-| `{ kind: 'playFractionBlock', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` |
-| `{ kind: 'confirmEquation', target, equationDisplay, equationCommits }` | `{ type: 'CONFIRM_EQUATION', equationResult: target, equationDisplay, equationCommits }` (exact field names TBD during Task 2; reducer's existing signature is the source of truth) |
-| `{ kind: 'stageCard', cardId }` | `{ type: 'STAGE_CARD', cardId }` |
-| `{ kind: 'unstageCard', cardId }` | `{ type: 'UNSTAGE_CARD', cardId }` (verify name exists in reducer) |
+| `{ kind: 'playIdentical', cardId }` | `{ type: 'PLAY_IDENTICAL', card: findCard(cardId) }` — `card` is a full `Card` object (survey doc section 3, line 370) |
+| `{ kind: 'playFractionAttack', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` — `card` is a full `Card` object (survey doc section 3, line 377) |
+| `{ kind: 'playFractionBlock', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` — `card` is a full `Card` object (survey doc section 3, line 377) |
+| `{ kind: 'confirmEquation', target, equationDisplay, equationCommits, equationOps }` | `{ type: 'CONFIRM_EQUATION', result: target, equationDisplay: equationDisplay, equationOps: equationOps, equationCommits: equationCommits }` — field is `result` (NOT `equationResult`); `equationOps: Operation[]` is **required** (survey doc section 3, line 201). Per the `CONFIRM_EQUATION` reducer case at `index.tsx:1082–1097`, `equationOps` is stored into `state.equationOpsUsed` (line 1089) and represents the list of operators used in the committed equation. |
+| `{ kind: 'stageCard', cardId }` | `{ type: 'STAGE_CARD', card: findCard(cardId) }` — `card` is a full `Card` object (survey doc section 3, line 366) |
+| `{ kind: 'unstageCard', cardId }` | `{ type: 'UNSTAGE_CARD', card: findCard(cardId) }` — `card` is a full `Card` object (survey doc section 3, line 367); `UNSTAGE_CARD` EXISTS in the reducer |
 | `{ kind: 'confirmStaged' }` | `{ type: 'CONFIRM_STAGED' }` |
 | `{ kind: 'drawCard' }` | `{ type: 'DRAW_CARD' }` |
 | `{ kind: 'endTurn' }` | `{ type: 'END_TURN' }` |
-| `{ kind: 'defendFractionSolve', cardId, wildResolve? }` | `{ type: 'DEFEND_FRACTION_SOLVE', card: findCard(cardId), wildResolve }` |
+| `{ kind: 'defendFractionSolve', cardId, wildResolve? }` | `{ type: 'DEFEND_FRACTION_SOLVE', card: findCard(cardId), wildResolve }` — `card` is a full `Card` object (survey doc section 3, line 378) |
 | `{ kind: 'defendFractionPenalty' }` | `{ type: 'DEFEND_FRACTION_PENALTY' }` |
 
-The exact field names in each translated action must match the existing `GameAction` union in `index.tsx`. Task 1 of the implementation plan is to read and document that union so Task 2 (writing the translator) has a ground-truth reference.
+> **`PLAY_OPERATION` does NOT exist** in the `GameAction` union (survey doc section 3: "PLAY_OPERATION — does NOT exist in the union"). Operation cards are played via `STAGE_CARD` (staged into the play area along with number cards) or via `SELECT_EQ_OP` / `SELECT_EQ_JOKER` / `PLACE_EQ_OP` for the equation-hand slots. The bot never needs to dispatch `PLAY_OPERATION`. Operation cards committed to the equation go into `equationCommits` on the `CONFIRM_EQUATION` action — this is exactly how the server bot works (server bot reference doc sections 1 and 2: `buildBotCommits` returns `EquationCommitPayload[]` placed in `equationCommits`).
+
+> **`BotAction.confirmEquation` must carry `equationOps: Operation[]`** in addition to the fields already listed in §0.5.1. The bot brain must populate this from `buildBotCommits` / the plan — it corresponds to the operator(s) committed via `equationCommits` resolved to their `Operation` type. Per survey doc section 3, line 201, `equationOps` is a required field on `CONFIRM_EQUATION`.
+
+The exact field names in each translated action match the `GameAction` union in `index.tsx` as documented by the survey doc (section 3).
 
 **`PLAY_FRACTION` note:** because `index.tsx`'s `PLAY_FRACTION` attack rule differs from the server engine's (newTarget = denom vs. newTarget = topOfDiscard / denom), the bot's attack-fraction heuristic must be retargeted to the local rule. Specifically, `handleBotPreRoll`'s "play an attack fraction if `validateFractionPlay(card, topDiscard)` returns true" check uses a shared validator. If that validator also lives in `index.tsx` inline (not imported from `shared/`), the bot must use the local validator, not the one imported from `server/` or `shared/`. This is verified in Task 1.
+
+**`buildBotCommits` joker fallback note (Correction 13):** the client bot brain's `buildBotCommits` port should use the same `enabledOperators?.[0] ?? '+'` fallback pattern as the server bot (server bot reference doc section 1). If the local `GameState.enabledOperators` is an empty array, `[0]` returns `undefined` and the joker resolves as `'+'`. However, `enabledOperators` is guaranteed non-empty in practice: the `START_GAME` reducer branch at `index.tsx:320-322` (survey doc section 7) uses `action.enabledOperators && action.enabledOperators.length > 0 ? action.enabledOperators : stageCfg.enabledOperators` — it always falls back to the stage config's operators, which are non-empty by construction. The `initialState` also sets `enabledOperators: ['+']`. The fallback `?? '+'` is therefore belt-and-suspenders; document that both conditions hold (non-empty by construction AND fallback present as safety net).
+
+**`buildBotStagedPlan` scoring note (Correction 14):** `buildBotStagedPlan` scores plans purely by `stagedCards.length + equationCommits.length` — a greedy card-count maximizer with no strategic value weighting and no lookahead (server bot reference doc section 2: `const score = stagedCards.length + equationCommits.length`). Profile 3 Easy = minimizer comparator and Profile 3 Hard = maximizer comparator refer to **raw card count** — the total number of cards discarded per equation solve. A Profile 3 implementer must NOT assume there is a value-weighted scoring function to flip — "maximum" and "minimum" are purely about card count. Easy discards the fewest cards per equation; Hard discards the most cards per equation. The comparator switch (`score > bestPlan.score` for Hard vs `score < bestPlan.score` for Easy) is the only code change between the two profiles.
 
 ### 0.7 Revised i18n (split by scope)
 
@@ -489,12 +531,12 @@ Nine milestones, each a mergeable commit. M0 was added because the project has n
 |---|---|---|---|
 | M0 | Install and configure Jest + `jest-expo` preset for the `card/` package. Add `jest` devDependency, `jest-expo` devDependency, `@types/jest`, `@testing-library/react-native` (for future tests), and appropriate transform-ignore / module-name-mapper settings for React Native + Expo. Add `jest.config.js` (or `jest` block in `package.json`). Add `"test": "jest"` script to `card/package.json`. Write one trivial smoke test at `src/__tests__/smoke.test.ts` that asserts `1 + 1 === 2` to verify the runner actually runs. Verify `npm test` passes. | `card/package.json`, `card/jest.config.js` (new), `card/src/__tests__/smoke.test.ts` (new) | `npm test` reports 1 passing smoke test; no warnings about unresolved Expo/RN modules |
 | M1 | Survey `index.tsx` — document the exact signature of `gameReducer` (including `tf`), every field of `GameState`, every variant of `GameAction` (exact field names), the `Player` / `Card` / `HostGameSettings` / `BotDifficulty` / `EquationCommitPayload` types, the inline `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` helpers, the exact phase transitions, whether `index.tsx` can `export type GameAction` (or requires a tsconfig tweak), and the project's test runner (Vitest / Jest / none). Write findings into `docs/superpowers/specs/2026-04-11-index-tsx-survey.md`. | None (read-only) | Survey doc exists; the doc answers every question in this cell |
-| M2 | Create `src/bot/types.ts` (BotDifficulty, BotAction union — note that `confirmEquation` carries `stagedCardIds: ReadonlyArray<string>`) and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Imports `GameState` and local `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` from `index.tsx` so the brain uses the **local** reducer's rules, not the server's. Profile 3 Easy = minimizer comparator in the planner. | `src/bot/types.ts`, `src/bot/botBrain.ts` | File compiles against real `index.tsx` types |
+| M2 | Create `src/bot/types.ts` (BotDifficulty, BotAction union — note that `confirmEquation` carries `stagedCardIds: ReadonlyArray<string>` and `equationOps: Operation[]`) and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Imports `GameState` and local `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` from `index.tsx` so the brain uses the **local** reducer's rules, not the server's. Profile 3 Easy = minimizer comparator in the planner (card-count only — see §0.6 scoring note). Bot brain reads game-settings fields (`enabledOperators`, `mathRangeMax`, etc.) **directly from top-level `GameState`** — NOT from a nested `hostGameSettings` object (which does NOT exist on the local `GameState`). Per survey doc section 2, all these fields are flat top-level fields on `GameState`: `enabledOperators: Operation[]`, `mathRangeMax: 12 \| 25`, `timerSetting`, `allowNegativeTargets`, etc. | `src/bot/types.ts`, `src/bot/botBrain.ts` | File compiles against real `index.tsx` types |
 | M3 | Bot brain unit tests: `src/bot/__tests__/botBrain.test.ts`. Cover every phase transition from the decision table, plus the Profile 3 Easy vs Hard comparison. Fixture states must include at least two distinct valid plans so Easy/Hard produce different scores (otherwise the Profile 3 test is vacuous). | `src/bot/__tests__/botBrain.test.ts`, plus whatever test runner config M1 says the project needs | All bot brain unit tests pass |
 | M4 | Create `src/bot/executor.ts` — `translateBotAction(state, action): GameAction \| null` + `findCardInHand(state, cardId)`. Imports `GameAction` type from `index.tsx`. Includes the recursion guard rejecting any `BOT_STEP` translation. Unit tests in `src/bot/__tests__/executor.test.ts` covering every BotAction kind, cardId-not-found, and the recursion guard. | `src/bot/executor.ts`, `src/bot/__tests__/executor.test.ts` | Translator unit tests pass |
-| M4.5 | Integration test against the live local reducer: `src/bot/__tests__/integration.test.ts`. Add `export { gameReducer, initialState }; export type { GameState, GameAction };` to `index.tsx` so the test can import them. Runs full bot turns from fixture states: pre-roll normal, pre-roll under fraction defense, building with plan, building without plan, solved phase draining. Asserts state advances to the next player without errors and without the bot getting stuck. This is the "drift detector" for local-vs-server rule differences — the single test that catches the `PLAY_FRACTION` attack math divergence and similar. | `src/bot/__tests__/integration.test.ts`, `index.tsx` (one export statement only) | All integration tests pass; each scenario completes a full bot turn; pass-and-play sanity check still works |
-| M5 | Wire the bot into `index.tsx`: (a) `useMemo` the context value at line 1641 — prerequisite fix; (b) add `botConfig` and `botTickSeq` to `GameState` and `initialState`; (c) add `isBot` to `Player` (or confirm it exists); (d) amend `START_GAME` handler; (e) amend `RESET_GAME` handler; (f) add `BOT_STEP` case with `applyBotActionAtomically` helper; (g) add bot clock `useEffect` + `useRef` deadline in `GameProvider` reading from `localState`; (h) add inline `BotThinkingOverlay` component; (i) render overlay as last child of `GameScreen`. | `index.tsx` (targeted edits; no refactor of existing code) | App compiles; pass-and-play 2-player still works; bot game Hard plays end-to-end manually; bot game Easy plays end-to-end manually; input lock works (human cannot tap during bot think-time) |
-| M6 | `StartScreen` vs-bot entry point: mode toggle using existing `HorizontalWheelOption` pattern (line ~4687), bot difficulty toggle (visible only when mode === 'vs-bot'), advanced settings disclosure reusing the existing `advancedSetupOpen` precedent (line ~4643), vs-bot `START_GAME` dispatch path. Add new `start.*` labels and `botOffline.*` runtime keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. Verify RTL behavior on Hebrew locale. `Keyboard.dismiss()` on mode change. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
+| M4.5 | Integration test against the live local reducer: `src/bot/__tests__/integration.test.ts`. Add `export { gameReducer, initialState }; export type { GameState, GameAction };` to `index.tsx` so the test can import them. Note: `index.tsx` **already has one existing export** at line 3024 (`export type EquationBuilderRef = { resetAll: () => void } \| null;` — per survey doc section 13), so the file is already a module and adding further export statements is safe with no tsconfig blockers. The new exports should be placed near line 3024 or wherever is stylistically consistent — the implementer decides placement in M4.5. Runs full bot turns from fixture states: pre-roll normal, pre-roll under fraction defense, building with plan, building without plan, solved phase draining. Asserts state advances to the next player without errors and without the bot getting stuck. This is the "drift detector" for local-vs-server rule differences — the single test that catches the `PLAY_FRACTION` attack math divergence and similar. | `src/bot/__tests__/integration.test.ts`, `index.tsx` (new export statement near line 3024) | All integration tests pass; each scenario completes a full bot turn; pass-and-play sanity check still works |
+| M5 | Wire the bot into `index.tsx`: (a) `useMemo` the context value at line 1641 — prerequisite fix (current line is NOT memoized per survey doc Finding 8); (b) add `botConfig` and `botTickSeq` to `GameState` and `initialState`; (c) REQUIRED: add `isBot: boolean` to `Player` interface (it does NOT exist today — survey doc section 4 confirms `Player` is `{ id: number; name: string; hand: Card[]; calledLolos: boolean }` with no `isBot` field); (d) amend `START_GAME` handler — the action shape must ALSO be amended to add `mode`, `botDifficulty`, and `isBot` per-player fields (none exist today per survey doc section 3 Finding 3); (e) amend `RESET_GAME` handler; (f) add `BOT_STEP` case with `applyBotActionAtomically` helper; (g) add bot clock `useEffect` + `useRef` deadline in `GameProvider` reading from `localState`; (h) add inline `BotThinkingOverlay` component; (i) render overlay as last child of `GameScreen`. | `index.tsx` (targeted edits; no refactor of existing code) | App compiles; pass-and-play 2-player still works; bot game Hard plays end-to-end manually; bot game Easy plays end-to-end manually; input lock works (human cannot tap during bot think-time) |
+| M6 | `StartScreen` vs-bot entry point: mode toggle using the existing **two-option toggle pattern** (`hsS.toggleGroup` + styled `toggleBtn`/`toggleOn`/`toggleOff`, same template as the `numberRange` row at `index.tsx:5732–5746` — NOT `HorizontalOptionWheel` which is for 3+ options); bot difficulty toggle using the same two-option pattern (visible only when mode === 'vs-bot'), conditionally rendered like the custom-timer row at line 5835 (`{timer === 'custom' && ...}`); advanced settings disclosure reusing the existing `advancedSetupOpen` precedent (line ~4643); vs-bot `START_GAME` dispatch path. `botBrain.ts` reads `enabledOperators`, `mathRangeMax`, and other game-settings fields **directly from top-level `GameState`** (not from a nested `hostGameSettings` object — those fields are all top-level per survey doc section 2). Add new `start.*` labels and `botOffline.*` runtime keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. Verify RTL behavior on Hebrew locale. `Keyboard.dismiss()` on mode change. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
 | M7 | Verification pass: full manual checklist (§0.9); inspect any bot-game edge cases discovered during M5–M6; confirm no regressions in pass-and-play or online. | None (verification only) | Checklist clean |
 
 #### 0.8.1 Why Jest + jest-expo (not Vitest)
@@ -538,7 +580,7 @@ Each integration test asserts:
 2. Offline pass-and-play, 4 players: completes end-to-end.
 3. Offline vs bot, Easy: completes; bot visibly plays timidly (discards 1–2 cards per equation); human wins most games over 3 playthroughs.
 4. Offline vs bot, Hard: completes; bot plays aggressively (discards 3–4 cards per equation); human loses some games over 3 playthroughs.
-5. **Input lock test:** during the bot's 900–1600ms think-time, tap `PlayerHand`, `DrawPile`, and `DiscardPile` repeatedly. No dispatches should fire; the "Bot is thinking…" overlay should absorb all touches. (Regresses §0.5.4.)
+5. **Input lock test:** during the bot's 900–1599ms think-time (range is `900 + Math.floor(Math.random() * 700)` ms — 900 to 1599 inclusive), tap `PlayerHand`, `DrawPile`, and `DiscardPile` repeatedly. No dispatches should fire; the "Bot is thinking…" overlay should absorb all touches. (Regresses §0.5.4.)
 6. **Frozen bot test:** start a vs-bot game where the bot's first hand is all fractions and jokers (no valid equations). The bot should fall back to `drawCard` on every turn and the game should make forward progress. (Regresses the `botTickSeq` no-op path and the `drawCard` fallback.)
 7. **Transition test:** start an offline vs-bot game, play 2 turns, then navigate to the online lobby, then back out. Confirm the bot clock does not fire while online (check console for unexpected `BOT_STEP` logs) and resumes cleanly when returning offline.
 8. **Unrelated-re-render test:** during a bot think-time, trigger a notification or sound toggle that causes `GameProvider` to re-render. The bot should still fire its move at the original scheduled deadline, not reset its timer. (Regresses §0.5.2 `useRef` deadline stability.)
