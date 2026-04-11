@@ -4851,6 +4851,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
   const safe = useGameSafeArea();
   const [playerCount, setPlayerCount] = useState(2);
   const [numberRange, setNumberRange] = useState<'easy' | 'full'>('full');
+  const [gameMode, setGameMode] = useState<'pass-and-play' | 'vs-bot'>('pass-and-play');
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>('easy');
   const [difficultyStage, setDifficultyStage] = useState<DifficultyStageId>('E');
   const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+']);
   const [allowNegativeTargets, setAllowNegativeTargets] = useState(false);
