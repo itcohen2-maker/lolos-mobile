@@ -5028,12 +5028,29 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
 
   const startGame = () => {
     // שמות יוכנסו במסך השחקן — כל שחקן מזין את שמו בתורו
-    const players = Array.from({ length: playerCount }, (_, i) => ({ name: t('start.playerPlaceholder', { n: String(i + 1) }) }));
+    const players =
+      gameMode === 'vs-bot'
+        ? [
+            {
+              name: t('start.playerPlaceholder', { n: String(1) }),
+              isBot: false,
+            },
+            {
+              name: t('botOffline.botName'),
+              isBot: true,
+            },
+          ]
+        : Array.from({ length: playerCount }, (_, i) => ({
+            name: t('start.playerPlaceholder', { n: String(i + 1) }),
+            isBot: false,
+          }));
     if (gameState.soundsEnabled !== false) {
       void playSfx('start', { cooldownMs: 250, volumeOverride: 0.4 });
     }
     dispatch({
       type: 'START_GAME',
+      mode: gameMode,
+      botDifficulty: gameMode === 'vs-bot' ? botDifficulty : undefined,
       players,
       difficulty: numberRange,
       fractions,
@@ -5046,9 +5063,6 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
       allowNegativeTargets,
       mathRangeMax: numberRange === 'easy' ? 12 : 25,
       abVariant,
-      // M5.3: mode is required on START_GAME. M6 will replace this hardcoded
-      // 'pass-and-play' with a user-controlled mode toggle.
-      mode: 'pass-and-play',
     });
   };
 
