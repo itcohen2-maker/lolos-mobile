@@ -111,4 +111,28 @@ describe('decideBotAction', () => {
     expect((result as { wildResolve?: number }).wildResolve).toBeUndefined();
   });
 
+  test('pre-roll defense uses wild card with wildResolve', () => {
+    const wildCard = makeCard('wild');
+    const indivisibleCard = makeCard('number', 5); // 5 % 2 !== 0, not divisible
+    const botPlayer = makePlayer(0, 'Bot', [indivisibleCard, wildCard]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [makeCard('number', 4)],
+      pendingFractionTarget: 2,
+      fractionPenalty: 2,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    // wildResolve = Math.max(fractionPenalty, 1) = Math.max(2, 1) = 2
+    expect(result).toEqual({
+      kind: 'defendFractionSolve',
+      cardId: wildCard.id,
+      wildResolve: 2,
+    });
+  });
+
 });
