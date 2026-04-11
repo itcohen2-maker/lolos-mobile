@@ -193,4 +193,58 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'playIdentical', cardId: identicalCard.id });
   });
 
+  test('building returns confirmEquation with full plan', () => {
+    resetCardSeq(); // ensure stable IDs for this test
+    const card3 = makeCard('number', 3);
+    const card4 = makeCard('number', 4);
+    const card2 = makeCard('number', 2);
+    const opCard = makeCard('operation', undefined, undefined, '+');
+    // Hand order: op first so buildBotCommits picks it up immediately
+    const botPlayer = makePlayer(0, 'Bot', [opCard, card3, card4, card2]);
+
+    const state = makeFixtureState({
+      phase: 'building',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      validTargets: [{ equation: '3+4', result: 7 }],
+      enabledOperators: ['+'],
+      mathRangeMax: 25,
+      discardPile: [makeCard('number', 7)],
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    // Must be a confirmEquation action
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe('confirmEquation');
+
+    const action = result as {
+      kind: 'confirmEquation';
+      target: number;
+      equationDisplay: string;
+      equationCommits: { cardId: string; position: number; jokerAs: null | string }[];
+      equationOps: string[];
+      stagedCardIds: ReadonlyArray<string>;
+    };
+
+    // Target must match the valid target result
+    expect(action.target).toBe(7);
+    expect(action.equationDisplay).toBe('3+4');
+
+    // stagedCardIds must include card3 and card4 (the winning subset)
+    expect(action.stagedCardIds).toContain(card3.id);
+    expect(action.stagedCardIds).toContain(card4.id);
+    // card2 should NOT be staged (not needed for the equation)
+    expect(action.stagedCardIds).not.toContain(card2.id);
+
+    // equationCommits: one entry for the operation card at position 0
+    expect(action.equationCommits).toHaveLength(1);
+    expect(action.equationCommits[0].cardId).toBe(opCard.id);
+    expect(action.equationCommits[0].position).toBe(0);
+    expect(action.equationCommits[0].jokerAs).toBeNull();
+
+    // equationOps: ['+'] derived from the operation card
+    expect(action.equationOps).toEqual(['+']);
+  });
+
 });
