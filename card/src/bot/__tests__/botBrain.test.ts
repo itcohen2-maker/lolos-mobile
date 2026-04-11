@@ -267,4 +267,17 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'drawCard' });
   });
 
+  test('game-over returns null', () => {
+    const botPlayer = makePlayer(0, 'Bot', []);
+    const state = makeFixtureState({
+      phase: 'game-over',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toBeNull();
+  });
+
 });
