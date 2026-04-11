@@ -1,33 +1,8 @@
 // Tests that index.tsx exports all the values and types that src/bot/ depends on.
 // Run: cd card && npm test -- src/bot/__tests__/exports.test.ts
-
-// Mocks for native/missing modules that index.tsx imports at module level.
-// These are required because jest-expo does not stub all Expo native modules,
-// and some peer dependencies are not installed in the test environment.
-jest.mock('expo-av', () => ({
-  Audio: {
-    Sound: { createAsync: jest.fn().mockResolvedValue({ sound: { playAsync: jest.fn(), unloadAsync: jest.fn() } }) },
-    setAudioModeAsync: jest.fn().mockResolvedValue(undefined),
-  },
-}));
-jest.mock('expo-navigation-bar', () => ({
-  setBackgroundColorAsync: jest.fn().mockResolvedValue(undefined),
-  setButtonStyleAsync: jest.fn().mockResolvedValue(undefined),
-  setBehaviorAsync: jest.fn().mockResolvedValue(undefined),
-}));
-jest.mock('expo-system-ui', () => ({
-  setBackgroundColorAsync: jest.fn().mockResolvedValue(undefined),
-}));
-jest.mock('@expo-google-fonts/fredoka', () => ({
-  useFonts: jest.fn().mockReturnValue([true, null]),
-  Fredoka_700Bold: 'Fredoka_700Bold',
-}));
-jest.mock('@react-native-async-storage/async-storage', () =>
-  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
-);
-jest.mock('react-native-webview', () => ({
-  WebView: 'WebView',
-}));
+//
+// Native module mocks are provided by jest.setup.ts (referenced from jest.config.js
+// via setupFilesAfterEach). Do NOT duplicate them here.
 
 import {
   gameReducer,
