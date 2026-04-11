@@ -66,4 +66,24 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'playFractionAttack', cardId: fractionCard.id });
   });
 
+  test('pre-roll rolls dice as fallback', () => {
+    const discardCard = makeCard('number', 7);
+    // 7 is not divisible by 2, so 1/2 fraction cannot be played
+    const fractionCard = makeCard('fraction', undefined, '1/2');
+    const numberCard = makeCard('number', 2); // value 2 ≠ 7, no identical play
+    const botPlayer = makePlayer(0, 'Bot', [numberCard, fractionCard]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [discardCard],
+      pendingFractionTarget: null,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({ kind: 'rollDice' });
+  });
+
 });
