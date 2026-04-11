@@ -1756,7 +1756,8 @@ function GameProvider({ children }: { children: ReactNode }) {
       override.dispatch(action);
     } else localDispatch(action);
   }, [override, localDispatch]);
-  return <GameContext.Provider value={{ state, dispatch }}>{children}</GameContext.Provider>;
+  const contextValue = useMemo(() => ({ state, dispatch }), [state, dispatch]);
+  return <GameContext.Provider value={contextValue}>{children}</GameContext.Provider>;
 }
 function useGame() { return useContext(GameContext); }
 
@@ -3143,6 +3144,7 @@ export type EquationBuilderRef = { resetAll: () => void } | null;
 // ─── Exports for src/bot/ (single-player vs bot feature) ──────────────────
 // See docs/superpowers/plans/2026-04-11-single-player-vs-bot.md
 export { gameReducer, initialState, validateFractionPlay, validateIdenticalPlay, validateStagedCards, fractionDenominator };
+export { GameProvider, useGame };
 export type { GameState, GameAction, Card, Player, Operation, Fraction, CardType, GamePhase, DiceResult, EquationOption };
 // EquationCommitPayload is exported above, near the GameAction union definition.
 const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data: { onConfirm: () => void } | null) => void; onResultChange?: (data: { result: number | null; ok: boolean; hasError: boolean } | null) => void; timerProgress?: number | null; interactive?: boolean }>(function EquationBuilder({ onConfirmChange, onResultChange, timerProgress = null, interactive = true }, ref) {
