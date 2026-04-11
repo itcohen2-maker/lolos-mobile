@@ -8802,6 +8802,8 @@ function GameScreen() {
         </View>
       )}
 
+      <BotThinkingOverlay />
+
     </View>
   );
 }
@@ -8838,6 +8840,46 @@ function GameOver() {
         </View>
       </ScrollView>
       <LulosButton text="שחק/י שוב" color="green" width={280} height={64} onPress={()=>dispatch({type:'PLAY_AGAIN'})} style={{marginTop:20}} />
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  BOT THINKING OVERLAY — absorbs touches during bot turn (M5.7)
+// ═══════════════════════════════════════════════════════════════
+const botOverlayStyles = StyleSheet.create({
+  botThinkingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+  },
+  botThinkingText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    backgroundColor: 'rgba(17,24,39,0.85)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+});
+
+function BotThinkingOverlay() {
+  const { state } = useGame();
+  const { t } = useLocale();
+  if (!state.botConfig) return null;
+  const current = state.players[state.currentPlayerIndex];
+  if (!current || !state.botConfig.playerIds.includes(current.id)) return null;
+  if (state.phase === 'game-over') return null;
+  return (
+    <View pointerEvents="box-only" style={botOverlayStyles.botThinkingOverlay}>
+      <Text style={botOverlayStyles.botThinkingText}>{t('botOffline.thinking')}</Text>
     </View>
   );
 }
