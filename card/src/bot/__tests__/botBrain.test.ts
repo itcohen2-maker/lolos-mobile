@@ -280,4 +280,60 @@ describe('decideBotAction', () => {
     expect(result).toBeNull();
   });
 
+  test('Profile 3: Easy picks smaller plan than Hard (card-count comparator flip)', () => {
+    resetCardSeq();
+    const card1 = makeCard('number', 1);
+    const card2 = makeCard('number', 2);
+    const card3 = makeCard('number', 3);
+    const card4 = makeCard('number', 4);
+    const opCard = makeCard('operation', undefined, undefined, '+');
+
+    // Both targets are achievable:
+    //   target=3:  staged=[card3]         → score 1 number + 1 op commit = 2
+    //   target=10: staged=[card1,2,3,4]   → score 4 numbers + 1 op commit = 5
+    const botPlayer = makePlayer(0, 'Bot', [opCard, card1, card2, card3, card4]);
+
+    const baseState = makeFixtureState({
+      phase: 'building',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      validTargets: [
+        { equation: '3', result: 3 },
+        { equation: '1+2+3+4', result: 10 },
+      ],
+      enabledOperators: ['+'],
+      mathRangeMax: 25,
+      discardPile: [makeCard('number', 5)],
+    });
+
+    const hardResult = decideBotAction(baseState, 'hard');
+    const easyResult = decideBotAction(baseState, 'easy');
+
+    // Both must produce a plan (not null, not drawCard)
+    expect(hardResult).not.toBeNull();
+    expect(easyResult).not.toBeNull();
+    expect(hardResult!.kind).toBe('confirmEquation');
+    expect(easyResult!.kind).toBe('confirmEquation');
+
+    const hardAction = hardResult as { kind: 'confirmEquation'; stagedCardIds: ReadonlyArray<string> };
+    const easyAction = easyResult as { kind: 'confirmEquation'; stagedCardIds: ReadonlyArray<string> };
+
+    // Hard maximizes card count → 4 cards staged
+    expect(hardAction.stagedCardIds).toHaveLength(4);
+    // Easy minimizes card count → 1 card staged
+    expect(easyAction.stagedCardIds).toHaveLength(1);
+
+    // Core assertion: Easy discards fewer cards per equation than Hard
+    expect(easyAction.stagedCardIds.length).toBeLessThan(hardAction.stagedCardIds.length);
+
+    // Easy staged the single card3 (value=3 satisfies target=3)
+    expect(easyAction.stagedCardIds).toContain(card3.id);
+
+    // Hard staged all four number cards (1+2+3+4=10 satisfies target=10)
+    expect(hardAction.stagedCardIds).toContain(card1.id);
+    expect(hardAction.stagedCardIds).toContain(card2.id);
+    expect(hardAction.stagedCardIds).toContain(card3.id);
+    expect(hardAction.stagedCardIds).toContain(card4.id);
+  });
+
 });
