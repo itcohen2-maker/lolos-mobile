@@ -1,9 +1,234 @@
 # Single-Player vs Bot — Design Spec
 
-**Status:** Draft — pending user review
+**Status:** AMENDED 2026-04-11 — research addendum in §0 supersedes §1, §4 decisions 1–3, §5, §6, §9. See §0 for the authoritative design.
 **Date:** 2026-04-11
 **Author:** Claude (brainstorming session with tom cohen)
-**Scope:** Add a "Play vs Bot" option to the single-player flow by migrating the local game onto the shared server engine and reusing the existing bot brain.
+**Scope:** Add a "Play vs Bot" option to the single-player flow. Original scope (engine unification) descoped after codebase research; see §0.
+
+---
+
+## 0. Research Addendum (2026-04-11, AUTHORITATIVE)
+
+This section was added after a codebase research pass revealed that the original problem statement in §1 was built on a wrong model of the codebase. Where §0 and later sections conflict, **§0 wins**. The later sections remain in the document as historical context and to preserve the decision log (§4, decisions 4–7), which is still valid.
+
+### 0.1 What I found
+
+**The app's real entry point is `card/index.tsx` (9,600+ lines).** `package.json` has `"main": "index.tsx"`. Everything under `src/components/`, `src/context/`, and `src/hooks/` that I inspected in the original spec research is **dead code** — orphaned older copies that `index.tsx` does not import. The only file under `src/components/` that `index.tsx` imports is `SoundDemoScreen.tsx`. Likewise, `card/App.tsx`, `card/GameScreen.tsx` (the top-level 76KB one), `card/Dice3D.tsx`, and `card/AnimatedDice.tsx` are also not imported by `index.tsx` — older backups.
+
+**`index.tsx` defines everything inline:**
+
+| Symbol | Line in `index.tsx` |
+|---|---|
+| `gameReducer` | 934 |
+| `GameContext` | 1507 |
+| `GameProvider` | 1508 |
+| `useGame` | 1643 |
+| `DrawPile` | 2308 |
+| `DiscardPile` | 2341 |
+| `ActionBar` | 3592 |
+| `PlayerHand` | 4079 |
+| `StartScreen` | 4643 |
+| `TurnTransition` | 6523 |
+| `GameScreen` | 7324 |
+| `GameOver` | 8612 |
+| App render tree (play-mode router) | 9210–9256 |
+
+**The local reducer already speaks the new-engine vocabulary.** `index.tsx`'s `gameReducer` uses the same phase names as the server engine (`turn-transition`, `pre-roll`, `building`, `solved`, `game-over`) and the same action verbs (`START_GAME`, `BEGIN_TURN`, `ROLL_DICE`, `CONFIRM_EQUATION`, `STAGE_CARD`, `CONFIRM_STAGED`, `PLAY_IDENTICAL`, `PLAY_FRACTION`, `DEFEND_FRACTION_SOLVE`, `DEFEND_FRACTION_PENALTY`, `DRAW_CARD`, `END_TURN`). The stage/commit flow already exists in the local game. Fraction defense already exists in the local game. `validTargets` already exists.
+
+**`GameProvider` already unifies local + online state.** Lines 1508–1642 implement a state provider that reads either from the local reducer (offline) or from a multiplayer `override` (online `PlayerView`), with client-only overlays for notifications, sound prefs, and the joker modal. `dispatch` routes actions to the local reducer offline and to `override.dispatch` (socket) online. This was the UI-layer architectural goal of the original B2 scope — it's already done.
+
+**But the local reducer and the server engine are NOT the same engine.** They have parallel, drifted implementations of the same rules:
+
+- `PLAY_FRACTION` attack math differs: server computes `newTarget = topOfDiscard / denom` (attacks the pile-top value); local computes `newTarget = denom` (standalone target).
+- `index.tsx`'s state shape has extra fields not in `ServerGameState`: `moveHistory`, `equationOpsUsed`, `challengeSource`, `activeFraction`, `lastDiscardCount`, `selectedCards`, `equationHandSlots`, `equationHandPick`, `notifications`, guidance/sound prefs, plus several more.
+- The two files use parallel i18n namespaces: local uses `local.*` keys, server uses `toast.*` / `msg.*`.
+- `shared/i18n/he.ts:353` has a comment *"Legacy src/context/GameContext (simplified ruleset)"* confirming that the `src/context/GameContext.tsx` file is intentionally legacy dead code, predating the inline `gameReducer` in `index.tsx`.
+
+**`index.tsx` has zero bot logic.** Confirmed by exhaustive grep — no `isBot`, `botBrain`, `runBot`, `makeBot`, or variants. All bot code lives in `server/src/socketHandlers.ts` and never crosses into the client.
+
+### 0.2 Revised goal
+
+Add a "Play vs Bot" entry point to the single-player flow inside `index.tsx`, with Easy/Hard bot difficulty. Minimal footprint: port the server bot's *decision logic* into a new client-side brain targeting the local reducer's action vocabulary. Do not touch the server. Do not attempt to unify the local and server reducers — that divergence is a pre-existing code smell unrelated to this feature and deserves its own project.
+
+Decision made during research (R1 of R1/R2/R3): proceed with minimal bot add-on. Engine unification is explicitly **deferred** and should be captured as a separate design spec if pursued.
+
+### 0.3 Revised architecture
+
+```
+card/
+├── index.tsx                                 ← live app (9600+ lines)
+│   ├── gameReducer (line 934)                ← untouched except for bot cases
+│   ├── GameProvider (line 1508)              ← add bot clock useEffect
+│   ├── StartScreen (line 4643)               ← add mode toggle, bot diff toggle,
+│   │                                            advanced disclosure, vs-bot start path
+│   └── (all other inline screens)            ← untouched
+│
+├── src/bot/                                  ← NEW directory
+│   ├── botBrain.ts                           ← decideBotAction(state, difficulty): BotAction | null
+│   ├── executor.ts                           ← executeBotAction(state, action, dispatch): void
+│   │                                            dispatches against local reducer's action vocab
+│   └── types.ts                              ← BotDifficulty, BotAction union
+│
+├── server/                                   ← UNTOUCHED
+│   └── src/gameEngine.ts, socketHandlers.ts  ← unchanged; existing server bot keeps working
+│
+├── shared/                                   ← UNTOUCHED
+│   └── types.ts, i18n/, gameConstants.ts     ← unchanged
+│
+└── src/context/GameContext.tsx               ← DEAD; leave on disk, flag as dead in a comment
+    src/hooks/useGame.ts                      ← DEAD
+    src/components/screens/*                  ← DEAD (except SoundDemoScreen)
+    src/components/board/*                    ← DEAD
+    src/components/ui/*                       ← DEAD (except anything index.tsx actually imports; verify)
+    src/components/cards/*                    ← DEAD
+    App.tsx, GameScreen.tsx (root),           ← DEAD
+    Dice3D.tsx, AnimatedDice.tsx
+```
+
+Cleanup of dead code is **explicitly out of scope** for this feature. It's a separate mechanical task with zero functional impact and should not be bundled with a feature PR.
+
+### 0.4 Revised state additions
+
+Added to the local `GameState` type inside `index.tsx` (existing interface, new fields):
+
+```typescript
+// Added fields — at the end of the existing GameState interface:
+botDifficulty: BotDifficulty | null;   // null = no bots in this game
+botPlayerIds: readonly string[];        // player IDs for bot players; empty = pass-and-play
+```
+
+Added to the existing `Player` type inside `index.tsx`:
+
+```typescript
+isBot: boolean;   // defaults false; set true for bot players in START_GAME
+```
+
+(If `Player` already has an `isBot` field inside `index.tsx`, we reuse it as-is. To be verified during Task 1 of the plan.)
+
+Added to the `GameAction` union inside `index.tsx`:
+
+```typescript
+| { type: 'START_GAME';                    // EXISTING — amended signature
+    players: Array<{ name: string; isBot: boolean }>;
+    difficulty: 'easy' | 'full';
+    mode: 'pass-and-play' | 'vs-bot';
+    botDifficulty?: BotDifficulty;
+    hostGameSettings?: Partial<HostGameSettings>;
+  }
+| { type: 'BOT_STEP' }                     // NEW — fired by bot clock
+```
+
+The existing `START_GAME` handler is amended minimally to:
+1. Pass `isBot: player.isBot` through when constructing the initial `players` array.
+2. Store `botDifficulty ?? null` and derive `botPlayerIds` from `players.filter(p => p.isBot).map(p => p.id)`.
+3. Leave all existing behavior (deck generation, card dealing, discard seeding, guidance turns, etc.) untouched.
+
+### 0.5 Revised bot clock
+
+Identical to the bot clock from the original §5.4, with one adjustment: it dispatches `BOT_STEP` into `index.tsx`'s reducer, and the reducer handles `BOT_STEP` by calling `decideBotAction(state, state.botDifficulty)` and then executing the resulting action via **a direct reducer-level transformation** rather than through another dispatch. This avoids a double-dispatch cycle within a single React render pass.
+
+```typescript
+// Inside index.tsx's gameReducer:
+case 'BOT_STEP': {
+  if (st.phase === 'game-over') return st;
+  const current = st.players[st.currentPlayerIndex];
+  if (!current || !st.botPlayerIds.includes(current.id)) return st;
+  const action = decideBotAction(st, st.botDifficulty ?? 'hard');
+  if (!action) return st;
+  // Translate BotAction into the existing reducer action and recursively reduce:
+  const translated = translateBotAction(action);
+  if (!translated) return st;
+  return gameReducer(st, translated, tf);
+}
+```
+
+`translateBotAction(action: BotAction): GameAction | null` is a small pure function in `src/bot/executor.ts` that maps the bot's `BotAction` union onto the existing local reducer's action vocabulary. It's the shim between the new bot types and the old reducer verbs.
+
+### 0.6 Revised bot action translation
+
+The bot brain is platform-agnostic: it returns a `BotAction` (§5.5 of the original spec, unchanged). The `translateBotAction` shim maps each `BotAction` kind to an existing `GameAction`:
+
+| BotAction | Translated to local GameAction |
+|---|---|
+| `{ kind: 'beginTurn' }` | `{ type: 'BEGIN_TURN' }` |
+| `{ kind: 'rollDice' }` | `{ type: 'ROLL_DICE' }` |
+| `{ kind: 'playIdentical', cardId }` | `{ type: 'PLAY_IDENTICAL', card: findCard(cardId) }` |
+| `{ kind: 'playFractionAttack', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` |
+| `{ kind: 'playFractionBlock', cardId }` | `{ type: 'PLAY_FRACTION', card: findCard(cardId) }` |
+| `{ kind: 'confirmEquation', target, equationDisplay, equationCommits }` | `{ type: 'CONFIRM_EQUATION', equationResult: target, equationDisplay, equationCommits }` (exact field names TBD during Task 2; reducer's existing signature is the source of truth) |
+| `{ kind: 'stageCard', cardId }` | `{ type: 'STAGE_CARD', cardId }` |
+| `{ kind: 'unstageCard', cardId }` | `{ type: 'UNSTAGE_CARD', cardId }` (verify name exists in reducer) |
+| `{ kind: 'confirmStaged' }` | `{ type: 'CONFIRM_STAGED' }` |
+| `{ kind: 'drawCard' }` | `{ type: 'DRAW_CARD' }` |
+| `{ kind: 'endTurn' }` | `{ type: 'END_TURN' }` |
+| `{ kind: 'defendFractionSolve', cardId, wildResolve? }` | `{ type: 'DEFEND_FRACTION_SOLVE', card: findCard(cardId), wildResolve }` |
+| `{ kind: 'defendFractionPenalty' }` | `{ type: 'DEFEND_FRACTION_PENALTY' }` |
+
+The exact field names in each translated action must match the existing `GameAction` union in `index.tsx`. Task 1 of the implementation plan is to read and document that union so Task 2 (writing the translator) has a ground-truth reference.
+
+**`PLAY_FRACTION` note:** because `index.tsx`'s `PLAY_FRACTION` attack rule differs from the server engine's (newTarget = denom vs. newTarget = topOfDiscard / denom), the bot's attack-fraction heuristic must be retargeted to the local rule. Specifically, `handleBotPreRoll`'s "play an attack fraction if `validateFractionPlay(card, topDiscard)` returns true" check uses a shared validator. If that validator also lives in `index.tsx` inline (not imported from `shared/`), the bot must use the local validator, not the one imported from `server/` or `shared/`. This is verified in Task 1.
+
+### 0.7 Revised i18n
+
+Same new keys as the original §6.5, but they go into `shared/i18n/en.ts` and `shared/i18n/he.ts` under a **new `botOffline.*` namespace** to avoid colliding with either `local.*` (existing inline-reducer keys) or `toast.*`/`msg.*` (server-bot keys). Namespacing them separately also makes it obvious to future readers which keys belong to this feature.
+
+| Key | English | Hebrew |
+|---|---|---|
+| `botOffline.mode` | Mode | מצב |
+| `botOffline.modePassAndPlay` | Pass and play | משחק מקומי |
+| `botOffline.modeVsBot` | Play vs Bot | שחק מול בוט |
+| `botOffline.botDifficulty` | Bot difficulty | רמת בוט |
+| `botOffline.botEasy` | Easy | קל |
+| `botOffline.botHard` | Hard | קשה |
+| `botOffline.advancedSettings` | Advanced game settings | הגדרות מתקדמות |
+| `botOffline.botName` | Bot | בוט |
+
+### 0.8 Revised rollout
+
+Seven milestones, each a mergeable commit.
+
+| # | Milestone | Files touched | Gate |
+|---|---|---|---|
+| M1 | Survey `index.tsx` — document the existing `GameAction` union, `GameState`, `Player`, `Card`, `HostGameSettings`, and the inline `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` helpers. Write findings into `docs/superpowers/specs/2026-04-11-index-tsx-survey.md`. | None (read-only) | Survey doc exists and is accurate |
+| M2 | Create `src/bot/types.ts` and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Uses the *local* `GameState` type imported from `index.tsx` (or a new `src/bot/state-types.ts` that re-exports what's needed). Profile 3 Easy = minimizer comparator in the planner. | `src/bot/types.ts`, `src/bot/botBrain.ts` | Unit tests pass (M3 gate) |
+| M3 | Bot brain unit tests: `src/bot/__tests__/botBrain.test.ts`. Cover every phase transition from the decision table, plus the Profile 3 Easy vs Hard comparison. | `src/bot/__tests__/botBrain.test.ts`, plus whatever test runner config the project needs (Vitest/Jest; verify in M1) | All bot brain tests pass |
+| M4 | Create `src/bot/executor.ts` — `translateBotAction(action): GameAction \| null` + `findCardInHand(state, cardId)`. Unit tests in `src/bot/__tests__/executor.test.ts`. | `src/bot/executor.ts`, `src/bot/__tests__/executor.test.ts` | Translator tests pass |
+| M5 | Wire the bot into `index.tsx`: extend `GameState` with `botDifficulty` and `botPlayerIds`; extend `Player` with `isBot` (or confirm it exists); amend `START_GAME` handler; add `BOT_STEP` case; add bot clock `useEffect` in `GameProvider`. | `index.tsx` (targeted edits; no architectural changes) | App compiles; bot-mode game plays end-to-end manually; pass-and-play still works |
+| M6 | `StartScreen` vs-bot entry point: mode toggle, bot difficulty toggle, advanced settings disclosure, vs-bot `START_GAME` dispatch. Add new `botOffline.*` i18n keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
+| M7 | Verification pass: full manual checklist; inspect any bot-game edge cases discovered during M5–M6; confirm no regressions in pass-and-play or online. | None (verification only) | Checklist clean |
+
+**Zero server changes. Zero online-multiplayer risk.** Milestones M1–M4 are pure additions to `src/bot/` and cannot break anything. M5–M6 edit `index.tsx` but only append new reducer cases, new state fields, and a new `StartScreen` section — no refactor of existing code.
+
+### 0.9 Revised testing
+
+Unchanged from §7.2 for bot brain unit tests. **§7.1 engine unit tests are dropped** — we are not touching the engine, so there is nothing new to test at the engine layer. The existing engine behavior is validated by the existing game working.
+
+Manual playthrough checklist (before merging to main):
+
+1. Offline single-player pass-and-play, 2 players: completes end-to-end. (Regresses M5 reducer edits.)
+2. Offline single-player pass-and-play, 4 players: completes end-to-end.
+3. Offline single-player vs bot, Easy: completes; bot visibly plays timidly; human wins most games.
+4. Offline single-player vs bot, Hard: completes; bot plays aggressively; human loses some games.
+5. Online-vs-bot game on Render: completes end-to-end. (Regression check — we didn't touch the server, but verify nothing downstream broke.)
+6. Online multi-human (no bot): completes end-to-end.
+7. Advanced settings panel: changing `enabledOperators`, `mathRangeMax`, and `timerSetting` each produces the expected in-game effect in single-player vs bot.
+
+### 0.10 Decisions carried forward from the original spec
+
+The following decisions from §4 remain valid and apply unchanged to the revised design:
+
+- **Decision 4 (Easy + Hard):** Two bot difficulty levels.
+- **Decision 5 (Profile 3):** Easy = minimizer comparator in `buildBotStagedPlan`. One-line difference from Hard.
+- **Decision 6 (Option C — advanced disclosure):** StartScreen has defaults for casual players plus an "Advanced" disclosure for power users.
+- **Decision 7 (useEffect bot clock):** Bot scheduling lives in `GameProvider` via a `useEffect` with a narrow dependency array.
+
+The following decisions from §4 are **superseded by §0**:
+
+- ~~**Decision 1 (Option B — offline bot in `GameContext`):**~~ The target is now `index.tsx`'s inline reducer, not `src/context/GameContext.tsx`.
+- ~~**Decision 2 (Option A — move to `shared/`):**~~ No engine move. Bot lives in `src/bot/` and targets the local reducer directly.
+- ~~**Decision 3 (A-full — delete old reducer):**~~ No reducer deletion. `index.tsx`'s reducer is the live reducer and stays intact.
+- ~~**Decision 4a (rebuild GameScreen in place):**~~ No GameScreen rebuild. `index.tsx`'s inline `GameScreen` already speaks the new-engine vocabulary.
+- ~~**Decision 4b (pass-and-play stays prominent):**~~ Still true, but for a simpler reason: we're not removing anything.
 
 ---
 
