@@ -363,7 +363,7 @@ interface MoveHistoryEntry {
 export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
+  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
@@ -993,6 +993,17 @@ function gameReducer(
         }
       }
       if (!firstDiscard) { firstDiscard = drawPile[0]; drawPile = drawPile.slice(1); }
+      const botConfig: GameState['botConfig'] =
+        action.type === 'PLAY_AGAIN'
+          ? st.botConfig
+          : action.mode === 'vs-bot'
+            ? {
+                difficulty: action.botDifficulty ?? 'easy',
+                playerIds: playersSeed
+                  .map((p, i) => ((p as { isBot?: boolean }).isBot ? i : -1))
+                  .filter((id) => id >= 0),
+              }
+            : null;
       return {
         ...initialState,
         // אל תאפס דגלי הדרכה חד־פעמיים כאשר מתחילים משחק חדש
@@ -1024,6 +1035,8 @@ function gameReducer(
                 wins: 0,
                 losses: 0,
               })),
+        botConfig,
+        botTickSeq: 0,
       };
     }
     case 'NEXT_TURN': {
@@ -4855,6 +4868,9 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
       allowNegativeTargets,
       mathRangeMax: numberRange === 'easy' ? 12 : 25,
       abVariant,
+      // M5.3: mode is required on START_GAME. M6 will replace this hardcoded
+      // 'pass-and-play' with a user-controlled mode toggle.
+      mode: 'pass-and-play',
     });
   };
 
