@@ -93,8 +93,27 @@ Added to the local `GameState` type inside `index.tsx` (existing interface, new 
 
 ```typescript
 // Added fields — at the end of the existing GameState interface:
-botDifficulty: BotDifficulty | null;   // null = no bots in this game
-botPlayerIds: readonly string[];        // player IDs for bot players; empty = pass-and-play
+
+/**
+ * Bot configuration for this game. null = pass-and-play (no bots).
+ * When non-null, botConfig.playerIds lists the player IDs that the bot
+ * clock should take turns for, and botConfig.difficulty controls the
+ * Profile 3 comparator flip in buildBotStagedPlan.
+ *
+ * Consolidated into one discriminated field so we cannot end up in the
+ * invalid state "difficulty set but playerIds empty" or vice versa.
+ */
+botConfig: { difficulty: BotDifficulty; playerIds: ReadonlyArray<string> } | null;
+
+/**
+ * Monotonically increasing counter incremented on every BOT_STEP dispatch,
+ * regardless of whether the action succeeded, failed, or was a no-op.
+ * Used only by the bot clock's useEffect dependency array to guarantee
+ * the clock re-schedules after every tick even when the rest of state
+ * is unchanged — prevents "frozen bot" bugs where a no-op BOT_STEP
+ * leaves no tracked field changed and the effect never re-runs.
+ */
+botTickSeq: number;
 ```
 
 Added to the existing `Player` type inside `index.tsx`:
@@ -120,41 +139,293 @@ Added to the `GameAction` union inside `index.tsx`:
 
 The existing `START_GAME` handler is amended minimally to:
 1. Pass `isBot: player.isBot` through when constructing the initial `players` array.
-2. Store `botDifficulty ?? null` and derive `botPlayerIds` from `players.filter(p => p.isBot).map(p => p.id)`.
-3. Leave all existing behavior (deck generation, card dealing, discard seeding, guidance turns, etc.) untouched.
+2. If `mode === 'vs-bot'` and at least one `player.isBot` is true, set `botConfig = { difficulty: action.botDifficulty ?? 'easy', playerIds: players.filter(p => p.isBot).map(p => p.id) }`. Otherwise set `botConfig = null`.
+3. Initialize `botTickSeq: 0`.
+4. Leave all existing behavior (deck generation, card dealing, discard seeding, guidance turns, etc.) untouched.
 
-### 0.5 Revised bot clock
+`RESET_GAME` must reset `botConfig: null` and `botTickSeq: 0` (same as other game-scoped state). If `RESET_GAME` already exists and uses a spread of `initialState`, adding these fields to `initialState` handles it automatically — verify in M1.
 
-Identical to the bot clock from the original §5.4, with one adjustment: it dispatches `BOT_STEP` into `index.tsx`'s reducer, and the reducer handles `BOT_STEP` by calling `decideBotAction(state, state.botDifficulty)` and then executing the resulting action via **a direct reducer-level transformation** rather than through another dispatch. This avoids a double-dispatch cycle within a single React render pass.
+### 0.5 Revised bot clock (reducer + useEffect + useRef)
+
+The bot clock has **three** coordinated pieces: the `BOT_STEP` reducer case, the `useEffect` scheduling hook inside `GameProvider`, and a `useRef` for timer-deadline stability. Missing any piece produces a real bug class identified during architectural review.
+
+#### 0.5.1 Reducer case: drain the entire plan in one tick
+
+**Critical correction from review:** the earlier draft said the bot re-derives the plan every tick during `solved` and picks the next unstaged card. This is wrong — the server bot (`handleBotBuilding` in `socketHandlers.ts:429-459`) drains `confirmEquation → stageCard × N → confirmStaged` as a tight synchronous burst inside one `runBotStep` call. Re-planning between stages would produce mid-equation plan switches with illegal stages. The local bot must do the same: on `BOT_STEP`, if the decided action is `confirmEquation`, the reducer must recursively apply `confirmEquation`, then each `stageCard`, then `confirmStaged`, all in one reducer return. This preserves atomicity and matches server semantics.
 
 ```typescript
-// Inside index.tsx's gameReducer (which already takes tf as a parameter
-// via the useCallback wrapper at line ~1512 — the recursive call below
-// reuses the same tf that's already in scope because gameReducer itself
-// is a function declaration that accepts tf as its third argument):
+// Inside index.tsx's gameReducer. gameReducer is a top-level function
+// declaration with signature (st, action, tf) — see line ~934.
+// The recursive call below passes tf through explicitly.
 case 'BOT_STEP': {
-  if (st.phase === 'game-over') return st;
-  const current = st.players[st.currentPlayerIndex];
-  if (!current || !st.botPlayerIds.includes(current.id)) return st;
-  // botDifficulty should never be null when botPlayerIds is non-empty,
-  // but we default defensively. If it is null here, the game has a bug
-  // elsewhere that START_GAME didn't set botDifficulty alongside bot players.
-  const difficulty = st.botDifficulty ?? 'hard';
-  const action = decideBotAction(st, difficulty);
-  if (!action) return st;
-  const translated = translateBotAction(st, action);
-  if (!translated) return st;
-  return gameReducer(st, translated, tf);
+  // Always increment the tick nonce, even for no-op paths. This is the
+  // single field the bot clock's useEffect depends on to guarantee
+  // re-scheduling after a no-op BOT_STEP. Without this, a no-op
+  // BOT_STEP leaves no tracked field changed, the effect doesn't re-run,
+  // and the clock stops firing — "frozen bot" bug.
+  const stWithTick = { ...st, botTickSeq: st.botTickSeq + 1 };
+
+  if (stWithTick.phase === 'game-over') return stWithTick;
+  const current = stWithTick.players[stWithTick.currentPlayerIndex];
+  if (!current || !stWithTick.botConfig) return stWithTick;
+  if (!stWithTick.botConfig.playerIds.includes(current.id)) return stWithTick;
+
+  const action = decideBotAction(stWithTick, stWithTick.botConfig.difficulty);
+  if (!action) {
+    // Planner produced nothing — fall back to drawCard to guarantee
+    // forward progress on the turn. Guard against infinite recursion by
+    // not falling back if the planner itself returned drawCard.
+    return applyBotActionAtomically(stWithTick, { kind: 'drawCard' }, tf);
+  }
+  return applyBotActionAtomically(stWithTick, action, tf);
 }
 ```
 
-`translateBotAction(state: GameState, action: BotAction): GameAction | null` is a small pure function in `src/bot/executor.ts` that maps the bot's `BotAction` union onto the existing local reducer's action vocabulary. It takes `state` so it can resolve `cardId` → `Card` objects from the current player's hand (the local reducer's actions carry `Card` objects, not IDs; this resolution happens in the translator, not the brain). It's the shim between the new bot types and the old reducer verbs.
+Where `applyBotActionAtomically` is a helper defined **inside** `gameReducer` (not exported) that handles the multi-step drain:
 
-**Scoping note for `tf`:** `gameReducer` in `index.tsx` is a top-level `function` declaration (not a closure), signature `gameReducer(state, action, tf)`. The recursive call passes `tf` through explicitly, so no scope problem arises. Verify this signature in M1 before writing the `BOT_STEP` case.
+```typescript
+function applyBotActionAtomically(
+  st: GameState,
+  action: BotAction,
+  tf: TFunction,
+): GameState {
+  // For single-step actions, translate and recurse once.
+  if (action.kind !== 'confirmEquation') {
+    const translated = translateBotAction(st, action);
+    if (!translated) {
+      // Translator failed (e.g., cardId not in hand). Last-resort fallback:
+      // draw a card. If draw also fails to translate, return st unchanged.
+      if (action.kind === 'drawCard') return st;
+      const drawTranslated = translateBotAction(st, { kind: 'drawCard' });
+      if (!drawTranslated) return st;
+      return gameReducer(st, drawTranslated, tf);
+    }
+    return gameReducer(st, translated, tf);
+  }
+
+  // confirmEquation — drain the entire plan in one atomic burst:
+  // confirmEquation → stageCard × N → confirmStaged.
+  const confirmTranslated = translateBotAction(st, action);
+  if (!confirmTranslated) {
+    const drawTranslated = translateBotAction(st, { kind: 'drawCard' });
+    if (!drawTranslated) return st;
+    return gameReducer(st, drawTranslated, tf);
+  }
+  let next = gameReducer(st, confirmTranslated, tf);
+
+  // After confirmEquation, stage every card in action.stagedCardIds.
+  // The plan is captured at decision time (in the action itself); we do
+  // NOT re-run the planner here, which would risk target drift.
+  for (const cardId of action.stagedCardIds) {
+    const stageTranslated = translateBotAction(next, {
+      kind: 'stageCard',
+      cardId,
+    });
+    if (!stageTranslated) {
+      // A planned card is no longer stageable — the local reducer
+      // rejected it. Roll back by returning drawCard instead.
+      const drawTranslated = translateBotAction(st, { kind: 'drawCard' });
+      if (!drawTranslated) return st;
+      return gameReducer(st, drawTranslated, tf);
+    }
+    next = gameReducer(next, stageTranslated, tf);
+  }
+
+  // Finally, confirmStaged.
+  const confirmStagedTranslated = translateBotAction(next, {
+    kind: 'confirmStaged',
+  });
+  if (!confirmStagedTranslated) return next;
+  return gameReducer(next, confirmStagedTranslated, tf);
+}
+```
+
+**Note on `BotAction.confirmEquation`:** this action must carry `stagedCardIds: ReadonlyArray<string>` as a field so the plan is captured at decision time and does not need to be re-derived. Update §5.5 `BotAction` type accordingly in M2:
+
+```typescript
+| { kind: 'confirmEquation';
+    target: number;
+    equationDisplay: string;
+    equationCommits: EquationCommitPayload[];
+    stagedCardIds: ReadonlyArray<string>;  // cards to stage after confirmEquation
+  }
+```
+
+The single `stageCard` / `unstageCard` `BotAction` kinds are retained only for defensive recovery paths — they are never produced by the planner's happy path.
+
+**Recursion depth:** finite. For a 10-card hand, the worst case is `confirmEquation` + 10 `stageCard` + `confirmStaged` = 12 recursive `gameReducer` calls. Bounded, no stack risk. Do not allow nested `BOT_STEP` within `BOT_STEP` — if any future translated action is `{ type: 'BOT_STEP' }`, reject it in the translator.
+
+#### 0.5.2 useEffect scheduling hook
+
+The effect lives inside `GameProvider` (line ~1508 of `index.tsx`). Two critical constraints from frontend review:
+
+1. **Depend on `localState`, not the merged `state`.** The merged `state` is rebuilt via object spread every render when `override` is non-null (lines 1597–1613), so any field read from `state` will appear to change identity every render and thrash the timer.
+2. **Gate the entire effect on `!override`.** The bot clock must never fire during online mode. Relying on `botConfig.playerIds.includes(current.id)` as the only gate is a latent bug — online mode could have stale offline `botConfig` in `localState`.
+
+Implementation:
+
+```typescript
+const botTimerDeadlineRef = useRef<{
+  dueAt: number;
+  turnSignature: string;
+} | null>(null);
+
+useEffect(() => {
+  // Hard gate: online mode never runs the local bot clock.
+  if (override) {
+    botTimerDeadlineRef.current = null;
+    return;
+  }
+
+  if (localState.phase === 'game-over') return;
+  if (!localState.botConfig) return;
+  const current = localState.players[localState.currentPlayerIndex];
+  if (!current || !localState.botConfig.playerIds.includes(current.id)) {
+    botTimerDeadlineRef.current = null;
+    return;
+  }
+
+  // Only schedule in phases the bot can act in.
+  if (
+    localState.phase !== 'turn-transition' &&
+    localState.phase !== 'pre-roll' &&
+    localState.phase !== 'building' &&
+    localState.phase !== 'solved'
+  ) {
+    return;
+  }
+
+  // Signature of the current turn context. When this changes, we want a
+  // NEW timer. When it stays the same across unrelated re-renders, we
+  // want to KEEP the existing timer rather than rescheduling — otherwise
+  // unrelated re-renders (notifications, sound toggle, etc.) would cancel
+  // the pending timer before it fires.
+  const turnSignature = [
+    localState.phase,
+    localState.currentPlayerIndex,
+    localState.hasPlayedCards ? '1' : '0',
+    localState.stagedCards.length,
+    localState.equationResult ?? 'null',
+    localState.pendingFractionTarget ?? 'null',
+    localState.botTickSeq,
+  ].join('|');
+
+  const now = Date.now();
+  const existing = botTimerDeadlineRef.current;
+  if (existing && existing.turnSignature === turnSignature && existing.dueAt > now) {
+    // Same turn context, existing timer still pending — do nothing.
+    return;
+  }
+
+  // New turn context (or stale deadline): schedule a fresh timer.
+  const delay = 900 + Math.floor(Math.random() * 700);
+  const dueAt = now + delay;
+  botTimerDeadlineRef.current = { dueAt, turnSignature };
+
+  const timer = setTimeout(() => {
+    // Sanity guard: if the phase changed between scheduling and firing,
+    // don't dispatch. The next render's effect will schedule again if
+    // needed.
+    botTimerDeadlineRef.current = null;
+    localDispatch({ type: 'BOT_STEP' });
+  }, delay);
+
+  return () => {
+    clearTimeout(timer);
+  };
+}, [
+  override,
+  localState.phase,
+  localState.currentPlayerIndex,
+  localState.hasPlayedCards,
+  localState.stagedCards.length,
+  localState.equationResult,
+  localState.pendingFractionTarget,
+  localState.botConfig,
+  localState.botTickSeq,
+  localState.players,
+]);
+```
+
+The `turnSignature` ref is the key innovation: unrelated re-renders (notifications, sound toggle, guidance) recompute the same signature and skip rescheduling. Only an actual turn-state change produces a new signature and a new timer. This prevents the "timer never fires because every unrelated render clears it" bug identified in frontend C4.
+
+**Strict Mode compatibility:** React 19 Strict Mode double-invokes effects in dev. First run schedules a timer and stores deadline in ref; cleanup clears timer but leaves ref (ref persists across cleanup). Second run sees the same signature and the ref's stale deadline (but `existing.dueAt > now` is still true because nanoseconds have passed), so it reuses — wait, this is wrong: the first run's timer was cleared, so we do need to re-schedule on the second run. Fix: clear the ref in cleanup.
+
+```typescript
+  return () => {
+    clearTimeout(timer);
+    botTimerDeadlineRef.current = null;  // allow fresh schedule on next effect run
+  };
+```
+
+#### 0.5.3 Context value must be memoized before the bot clock ships
+
+**Frontend C1:** `index.tsx:1641` currently returns `<GameContext.Provider value={{ state, dispatch }}>` — a fresh object literal every render. Without `useMemo`, every `useGame()` consumer re-renders on every `BOT_STEP` dispatch. With 15+ consumers × ~12 bot turns × ~1 dispatch/sec, this is ~180 useless whole-screen reconciles per game on mid-range Android.
+
+**This is a prerequisite fix.** It must land in M5 alongside the bot clock, not as a follow-up, because shipping the bot without it makes the app visibly laggy in dev testing and masks other perf issues.
+
+```typescript
+// Replace line 1641:
+//   return <GameContext.Provider value={{ state, dispatch }}>{children}</GameContext.Provider>;
+// With:
+const contextValue = useMemo(() => ({ state, dispatch }), [state, dispatch]);
+return <GameContext.Provider value={contextValue}>{children}</GameContext.Provider>;
+```
+
+Verify in M1 that `state` and `dispatch` are themselves stable across unrelated renders (they should be — `state` comes from the reducer, `dispatch` from `useCallback`).
+
+#### 0.5.4 Input lock overlay during bot turns
+
+**Frontend input-race fix:** during the 900–1600 ms bot "think" window, `currentPlayerIndex` already points at the bot and human taps on `PlayerHand` / `ActionBar` / `DrawPile` / `DiscardPile` may be accepted by existing "is my turn" checks that don't know about bots. The least-invasive mitigation is a single overlay component that renders on top of the game area when the current player is a bot and absorbs all touches.
+
+Add an inline component inside `index.tsx` (matching the codebase convention of inline components):
+
+```typescript
+function BotThinkingOverlay() {
+  const { state } = useGame();
+  const { t } = useLocale();
+  if (!state.botConfig) return null;
+  const current = state.players[state.currentPlayerIndex];
+  if (!current || !state.botConfig.playerIds.includes(current.id)) return null;
+  if (state.phase === 'game-over') return null;
+  return (
+    <View
+      pointerEvents="box-only"  // absorbs touches but lets children render
+      style={styles.botThinkingOverlay}
+    >
+      <Text style={styles.botThinkingText}>{t('botOffline.thinking')}</Text>
+    </View>
+  );
+}
+```
+
+Render this overlay as the last child of `GameScreen` inside `index.tsx` (line ~7324, after every other game-area child) so it sits on top in the z-order. It intentionally does not block the `StartScreen` or `GameOver` screens.
+
+Add `botOffline.thinking` to i18n (§0.7).
 
 ### 0.6 Revised bot action translation
 
-The bot brain is platform-agnostic: it returns a `BotAction` (§5.5 of the original spec, unchanged). The `translateBotAction` shim maps each `BotAction` kind to an existing `GameAction`:
+The bot brain is platform-agnostic: it returns a `BotAction` (§5.5 of the original spec, amended in §0.5.1 to add `stagedCardIds` to the `confirmEquation` variant). The `translateBotAction` shim maps each `BotAction` kind to an existing `GameAction`.
+
+**Type import requirement (architect N2):** `src/bot/executor.ts` must `import type { GameAction, GameState, Card } from '../../index'` (or whatever export path works — M1 verifies that `index.tsx` can export these types). Do NOT duplicate `GameAction` inside `src/bot/`. The translator's return type must be `GameAction | null`, so TypeScript catches any drift between the bot's expectations and the live reducer vocabulary at compile time.
+
+**Recursion guard:** the translator must reject any translated action with `type === 'BOT_STEP'`. This is a belt-and-suspenders defense against someone adding a future `BotAction` kind that accidentally maps back to itself. Concretely:
+
+```typescript
+export function translateBotAction(
+  state: GameState,
+  action: BotAction,
+): GameAction | null {
+  const translated = translateInner(state, action);
+  if (translated && translated.type === 'BOT_STEP') {
+    // Prevent infinite recursion in gameReducer.
+    return null;
+  }
+  return translated;
+}
+```
+
+Translation table:
 
 | BotAction | Translated to local GameAction |
 |---|---|
@@ -176,50 +447,97 @@ The exact field names in each translated action must match the existing `GameAct
 
 **`PLAY_FRACTION` note:** because `index.tsx`'s `PLAY_FRACTION` attack rule differs from the server engine's (newTarget = denom vs. newTarget = topOfDiscard / denom), the bot's attack-fraction heuristic must be retargeted to the local rule. Specifically, `handleBotPreRoll`'s "play an attack fraction if `validateFractionPlay(card, topDiscard)` returns true" check uses a shared validator. If that validator also lives in `index.tsx` inline (not imported from `shared/`), the bot must use the local validator, not the one imported from `server/` or `shared/`. This is verified in Task 1.
 
-### 0.7 Revised i18n
+### 0.7 Revised i18n (split by scope)
 
-Same new keys as the original §6.5, but they go into `shared/i18n/en.ts` and `shared/i18n/he.ts` under a **new `botOffline.*` namespace** to avoid colliding with either `local.*` (existing inline-reducer keys) or `toast.*`/`msg.*` (server-bot keys). Namespacing them separately also makes it obvious to future readers which keys belong to this feature.
+Keys are split across two namespaces by where they're used. This matches the mental model of a dev debugging StartScreen (who will grep `start.*`) vs a dev debugging bot runtime behavior (who will grep `botOffline.*`).
+
+**StartScreen labels → `start.*`** (alongside existing StartScreen keys):
 
 | Key | English | Hebrew |
 |---|---|---|
-| `botOffline.mode` | Mode | מצב |
-| `botOffline.modePassAndPlay` | Pass and play | משחק מקומי |
-| `botOffline.modeVsBot` | Play vs Bot | שחק מול בוט |
-| `botOffline.botDifficulty` | Bot difficulty | רמת בוט |
-| `botOffline.botEasy` | Easy | קל |
-| `botOffline.botHard` | Hard | קשה |
-| `botOffline.advancedSettings` | Advanced game settings | הגדרות מתקדמות |
+| `start.mode` | Mode | מצב |
+| `start.modePassAndPlay` | Pass and play | משחק מקומי |
+| `start.modeVsBot` | Play vs Bot | שחק מול בוט |
+| `start.botDifficulty` | Bot difficulty | רמת בוט |
+| `start.botEasy` | Easy | קל |
+| `start.botHard` | Hard | קשה |
+| `start.advancedSettings` | Advanced game settings | הגדרות מתקדמות |
+
+**Bot runtime strings → `botOffline.*`** (new namespace, for strings that appear *during* a bot game):
+
+| Key | English | Hebrew |
+|---|---|---|
 | `botOffline.botName` | Bot | בוט |
+| `botOffline.thinking` | Bot is thinking… | הבוט חושב… |
+
+The `botOffline.*` namespace is deliberately separate from `local.*` (existing inline-reducer status messages) and `toast.*` / `msg.*` (server-bot status messages) to avoid collisions and make the feature's runtime strings greppable as a group.
 
 ### 0.8 Revised rollout
 
-Seven milestones, each a mergeable commit.
+Eight milestones, each a mergeable commit. M4.5 (integration test against the live reducer) was added after architectural review identified that unit-testing the bot brain in isolation is not sufficient to catch local-vs-server rule drift.
 
 | # | Milestone | Files touched | Gate |
 |---|---|---|---|
-| M1 | Survey `index.tsx` — document the existing `GameAction` union, `GameState`, `Player`, `Card`, `HostGameSettings`, and the inline `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` helpers. Write findings into `docs/superpowers/specs/2026-04-11-index-tsx-survey.md`. | None (read-only) | Survey doc exists and is accurate |
-| M2 | Create `src/bot/types.ts` and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Uses the *local* `GameState` type imported from `index.tsx` (or a new `src/bot/state-types.ts` that re-exports what's needed). Profile 3 Easy = minimizer comparator in the planner. | `src/bot/types.ts`, `src/bot/botBrain.ts` | Unit tests pass (M3 gate) |
-| M3 | Bot brain unit tests: `src/bot/__tests__/botBrain.test.ts`. Cover every phase transition from the decision table, plus the Profile 3 Easy vs Hard comparison. | `src/bot/__tests__/botBrain.test.ts`, plus whatever test runner config the project needs (Vitest/Jest; verify in M1) | All bot brain tests pass |
-| M4 | Create `src/bot/executor.ts` — `translateBotAction(action): GameAction \| null` + `findCardInHand(state, cardId)`. Unit tests in `src/bot/__tests__/executor.test.ts`. | `src/bot/executor.ts`, `src/bot/__tests__/executor.test.ts` | Translator tests pass |
-| M5 | Wire the bot into `index.tsx`: extend `GameState` with `botDifficulty` and `botPlayerIds`; extend `Player` with `isBot` (or confirm it exists); amend `START_GAME` handler; add `BOT_STEP` case; add bot clock `useEffect` in `GameProvider`. | `index.tsx` (targeted edits; no architectural changes) | App compiles; bot-mode game plays end-to-end manually; pass-and-play still works |
-| M6 | `StartScreen` vs-bot entry point: mode toggle, bot difficulty toggle, advanced settings disclosure, vs-bot `START_GAME` dispatch. Add new `botOffline.*` i18n keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
-| M7 | Verification pass: full manual checklist; inspect any bot-game edge cases discovered during M5–M6; confirm no regressions in pass-and-play or online. | None (verification only) | Checklist clean |
+| M1 | Survey `index.tsx` — document the exact signature of `gameReducer` (including `tf`), every field of `GameState`, every variant of `GameAction` (exact field names), the `Player` / `Card` / `HostGameSettings` / `BotDifficulty` / `EquationCommitPayload` types, the inline `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` helpers, the exact phase transitions, whether `index.tsx` can `export type GameAction` (or requires a tsconfig tweak), and the project's test runner (Vitest / Jest / none). Write findings into `docs/superpowers/specs/2026-04-11-index-tsx-survey.md`. | None (read-only) | Survey doc exists; the doc answers every question in this cell |
+| M2 | Create `src/bot/types.ts` (BotDifficulty, BotAction union — note that `confirmEquation` carries `stagedCardIds: ReadonlyArray<string>`) and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Imports `GameState` and local `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` from `index.tsx` so the brain uses the **local** reducer's rules, not the server's. Profile 3 Easy = minimizer comparator in the planner. | `src/bot/types.ts`, `src/bot/botBrain.ts` | File compiles against real `index.tsx` types |
+| M3 | Bot brain unit tests: `src/bot/__tests__/botBrain.test.ts`. Cover every phase transition from the decision table, plus the Profile 3 Easy vs Hard comparison. Fixture states must include at least two distinct valid plans so Easy/Hard produce different scores (otherwise the Profile 3 test is vacuous). | `src/bot/__tests__/botBrain.test.ts`, plus whatever test runner config M1 says the project needs | All bot brain unit tests pass |
+| M4 | Create `src/bot/executor.ts` — `translateBotAction(state, action): GameAction \| null` + `findCardInHand(state, cardId)`. Imports `GameAction` type from `index.tsx`. Includes the recursion guard rejecting any `BOT_STEP` translation. Unit tests in `src/bot/__tests__/executor.test.ts` covering every BotAction kind, cardId-not-found, and the recursion guard. | `src/bot/executor.ts`, `src/bot/__tests__/executor.test.ts` | Translator unit tests pass |
+| M4.5 | Integration test against the live local reducer: `src/bot/__tests__/integration.test.ts`. Add `export { gameReducer, initialState }; export type { GameState, GameAction };` to `index.tsx` so the test can import them. Runs full bot turns from fixture states: pre-roll normal, pre-roll under fraction defense, building with plan, building without plan, solved phase draining. Asserts state advances to the next player without errors and without the bot getting stuck. This is the "drift detector" for local-vs-server rule differences — the single test that catches the `PLAY_FRACTION` attack math divergence and similar. | `src/bot/__tests__/integration.test.ts`, `index.tsx` (one export statement only) | All integration tests pass; each scenario completes a full bot turn; pass-and-play sanity check still works |
+| M5 | Wire the bot into `index.tsx`: (a) `useMemo` the context value at line 1641 — prerequisite fix; (b) add `botConfig` and `botTickSeq` to `GameState` and `initialState`; (c) add `isBot` to `Player` (or confirm it exists); (d) amend `START_GAME` handler; (e) amend `RESET_GAME` handler; (f) add `BOT_STEP` case with `applyBotActionAtomically` helper; (g) add bot clock `useEffect` + `useRef` deadline in `GameProvider` reading from `localState`; (h) add inline `BotThinkingOverlay` component; (i) render overlay as last child of `GameScreen`. | `index.tsx` (targeted edits; no refactor of existing code) | App compiles; pass-and-play 2-player still works; bot game Hard plays end-to-end manually; bot game Easy plays end-to-end manually; input lock works (human cannot tap during bot think-time) |
+| M6 | `StartScreen` vs-bot entry point: mode toggle using existing `HorizontalWheelOption` pattern (line ~4687), bot difficulty toggle (visible only when mode === 'vs-bot'), advanced settings disclosure reusing the existing `advancedSetupOpen` precedent (line ~4643), vs-bot `START_GAME` dispatch path. Add new `start.*` labels and `botOffline.*` runtime keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. Verify RTL behavior on Hebrew locale. `Keyboard.dismiss()` on mode change. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
+| M7 | Verification pass: full manual checklist (§0.9); inspect any bot-game edge cases discovered during M5–M6; confirm no regressions in pass-and-play or online. | None (verification only) | Checklist clean |
 
-**Zero server changes. Zero online-multiplayer risk.** Milestones M1–M4 are pure additions to `src/bot/` and cannot break anything. M5–M6 edit `index.tsx` but only append new reducer cases, new state fields, and a new `StartScreen` section — no refactor of existing code.
+**Zero server changes. Zero online-multiplayer risk.** Milestones M1–M4 are pure additions to `src/bot/` and cannot break existing runtime behavior. M4.5 adds one line to `index.tsx` — an `export` statement exposing `gameReducer`, `initialState`, `GameState`, and `GameAction` so the integration test can import them. An export-only edit cannot change runtime behavior but does touch `index.tsx`; the M4.5 gate must include "pass-and-play still works" as a sanity check. M5–M6 edit `index.tsx` but only: memoize an existing context value, add new reducer cases, add new state fields, add a new inline overlay component, and append a new `StartScreen` section. No refactor of existing code.
 
 ### 0.9 Revised testing
 
-Unchanged from §7.2 for bot brain unit tests. **§7.1 engine unit tests are dropped** — we are not touching the engine, so there is nothing new to test at the engine layer. The existing engine behavior is validated by the existing game working.
+Three test layers:
 
-Manual playthrough checklist (before merging to main):
+**1. Bot brain unit tests (M3).** Fixture-driven tests of `decideBotAction`. Cover every row of the decision table (§5.5), plus the Profile 3 Easy/Hard comparison with a fixture state that has at least two distinct plans with different scores.
 
-1. Offline single-player pass-and-play, 2 players: completes end-to-end. (Regresses M5 reducer edits.)
-2. Offline single-player pass-and-play, 4 players: completes end-to-end.
-3. Offline single-player vs bot, Easy: completes; bot visibly plays timidly; human wins most games.
-4. Offline single-player vs bot, Hard: completes; bot plays aggressively; human loses some games.
-5. Online-vs-bot game on Render: completes end-to-end. (Regression check — we didn't touch the server, but verify nothing downstream broke.)
-6. Online multi-human (no bot): completes end-to-end.
-7. Advanced settings panel: changing `enabledOperators`, `mathRangeMax`, and `timerSetting` each produces the expected in-game effect in single-player vs bot.
+**2. Translator unit tests (M4).** Fixture-driven tests of `translateBotAction`. Cover every `BotAction` kind, cardId-not-found-in-hand, and the recursion-guard rejecting `BOT_STEP` translations.
+
+**3. Integration tests against the live reducer (M4.5).** The critical drift detector. Imports the actual `gameReducer` from `index.tsx` and runs full bot turns from fixture starting states. Must cover:
+- Pre-roll normal (bot rolls, gets a plan, confirms, stages, confirm-staged, end-turn).
+- Pre-roll under fraction defense (bot defends with divisible / wild / counter / penalty).
+- Building with plan (bot builds and drains in one tick, verify final state is next player's turn).
+- Building without plan (bot draws a card, verify end of turn).
+- Profile 3 Easy vs Hard on identical starting state: Easy discards fewer cards over a full game than Hard. Exact count threshold is TBD by M4.5 tuning — pick a threshold that's reliable without being trivially met.
+
+Each integration test asserts:
+- No reducer errors.
+- Bot is not stuck (`botTickSeq` increments, `currentPlayerIndex` advances within ≤ 20 BOT_STEP dispatches).
+- Final state is legal (hand counts match expected, discard pile grew by the right amount, phase is sensible for the next turn).
+
+**Engine unit tests are explicitly out of scope** — the engine is the existing `index.tsx` reducer and is validated by existing gameplay working.
+
+**Manual playthrough checklist (before merging to main):**
+
+1. Offline pass-and-play, 2 players: completes end-to-end. (Regresses M5 reducer edits.)
+2. Offline pass-and-play, 4 players: completes end-to-end.
+3. Offline vs bot, Easy: completes; bot visibly plays timidly (discards 1–2 cards per equation); human wins most games over 3 playthroughs.
+4. Offline vs bot, Hard: completes; bot plays aggressively (discards 3–4 cards per equation); human loses some games over 3 playthroughs.
+5. **Input lock test:** during the bot's 900–1600ms think-time, tap `PlayerHand`, `DrawPile`, and `DiscardPile` repeatedly. No dispatches should fire; the "Bot is thinking…" overlay should absorb all touches. (Regresses §0.5.4.)
+6. **Frozen bot test:** start a vs-bot game where the bot's first hand is all fractions and jokers (no valid equations). The bot should fall back to `drawCard` on every turn and the game should make forward progress. (Regresses the `botTickSeq` no-op path and the `drawCard` fallback.)
+7. **Transition test:** start an offline vs-bot game, play 2 turns, then navigate to the online lobby, then back out. Confirm the bot clock does not fire while online (check console for unexpected `BOT_STEP` logs) and resumes cleanly when returning offline.
+8. **Unrelated-re-render test:** during a bot think-time, trigger a notification or sound toggle that causes `GameProvider` to re-render. The bot should still fire its move at the original scheduled deadline, not reset its timer. (Regresses §0.5.2 `useRef` deadline stability.)
+9. Online-vs-bot game on Render: completes end-to-end. (Regression check — we didn't touch the server, but verify nothing downstream broke. Ritualistic — this milestone shouldn't break this, but confirming it's cheap.)
+10. Online multi-human (no bot): completes end-to-end.
+11. Advanced settings panel: changing `enabledOperators`, `mathRangeMax`, and `timerSetting` each produces the expected in-game effect in single-player vs bot.
+12. RTL check: set locale to Hebrew; verify mode toggle, bot difficulty toggle, and advanced disclosure all render correctly; verify the "Bot is thinking…" overlay text is right-aligned.
+
+### 0.10a Known user-visible trade-off: local vs online bot behavior diverges
+
+Because this feature uses `index.tsx`'s local reducer and does NOT unify it with `server/src/gameEngine.ts`, the offline vs-bot experience will differ from the online vs-bot experience in observable ways. The most visible difference is `PLAY_FRACTION` attack math:
+
+- **Online vs bot** (server reducer): playing a 1/2 fraction card on a discard pile with top value 12 sets the defender's target to `12 / 2 = 6`.
+- **Offline vs bot** (local reducer): playing the same card sets the defender's target to `2` (denominator only, not pile-top divided).
+
+This is the same pre-existing divergence that affects pass-and-play locally vs online multiplayer today — it is NOT introduced by this feature. But once offline vs bot ships, a user who plays both modes will notice the bot seems to "play by different rules" depending on whether they're connected.
+
+**Accepted trade-off.** Unifying the two reducers is a separate, much larger project (see §0.1 for the full divergence list — it's not just fraction math). Deferring that project is the central R1 decision.
+
+**Do not attempt to patch around this** in the bot brain (e.g., by having the bot avoid fraction attacks to paper over the difference). The bot should play the local rules as they exist; if the local fraction rules are wrong, fixing them is the engine-unification project's job.
 
 ### 0.10 Decisions carried forward from the original spec
 
