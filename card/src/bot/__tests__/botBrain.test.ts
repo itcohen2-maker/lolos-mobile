@@ -135,4 +135,23 @@ describe('decideBotAction', () => {
     });
   });
 
+  test('pre-roll defense uses counter-fraction (playFractionBlock)', () => {
+    const counterFraction = makeCard('fraction', undefined, '1/2');
+    const opCard = makeCard('operation', undefined, undefined, '+');
+    const botPlayer = makePlayer(0, 'Bot', [opCard, counterFraction]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [makeCard('number', 4)],
+      pendingFractionTarget: 2,
+      fractionPenalty: 2,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({ kind: 'playFractionBlock', cardId: counterFraction.id });
+  });
+
 });
