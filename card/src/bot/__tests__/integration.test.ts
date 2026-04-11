@@ -1,20 +1,12 @@
 // card/src/bot/__tests__/integration.test.ts
 //
 // Integration tests against the live gameReducer from index.tsx.
-// ALL TESTS SKIPPED until M5.4 wires the BOT_STEP reducer case.
-// M4.5.6 unskips them.
-//
-// TODO(M4.5.6): Unskip these tests after M5.4 wires BOT_STEP.
-// Change `test.skip` → `test` on each test block.
+// Unskipped in M5.4 — BOT_STEP reducer case is now wired.
 //
 // These tests import the LIVE gameReducer from index.tsx and run full bot turns
 // from fixture states. They detect local-vs-server rule drift, invalid action
 // shape mismatches, and stuck-bot scenarios that unit tests of the brain/
 // translator in isolation cannot catch.
-//
-// ALL TESTS ARE SKIPPED until M5.4 wires the BOT_STEP reducer case.
-// After M5.4 lands, return here and remove `.skip` from every test.
-// See Task M4.5.6 for the unskip checklist.
 
 import { gameReducer, initialState } from '../../../index';
 import type { GameState } from '../../../index';
@@ -106,7 +98,7 @@ function runBotTurns(
 // ---------------------------------------------------------------------------
 
 // SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test.skip('M4.5.1 — pre-roll normal: bot turn completes; currentPlayerIndex advances to human', () => {
+test('M4.5.1 — pre-roll normal: bot turn completes; currentPlayerIndex advances to human', () => {
   // NOTE: This test is SKIPPED until M5.4 wires the BOT_STEP reducer case.
   // Expected to fail with "unknown action type 'BOT_STEP'" or similar until then.
 
@@ -131,7 +123,7 @@ test.skip('M4.5.1 — pre-roll normal: bot turn completes; currentPlayerIndex ad
 // ---------------------------------------------------------------------------
 
 // SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test.skip('M4.5.2 — pre-roll defense: bot defends fraction attack; turn eventually advances', () => {
+test('M4.5.2 — pre-roll defense: bot defends fraction attack; turn eventually advances', () => {
   // NOTE: Skipped until M5.4.
 
   // Fixture: bot is under a fraction attack (pendingFractionTarget set).
@@ -179,7 +171,7 @@ test.skip('M4.5.2 — pre-roll defense: bot defends fraction attack; turn eventu
 // ---------------------------------------------------------------------------
 
 // SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test.skip('M4.5.3 — building phase: plan drains atomically in a single BOT_STEP (applyBotActionAtomically)', () => {
+test('M4.5.3 — building phase: plan drains atomically in a single BOT_STEP (applyBotActionAtomically)', () => {
   // NOTE: Skipped until M5.4.
   //
   // This is the test that verifies the "drain in one tick" requirement from
@@ -253,7 +245,7 @@ test.skip('M4.5.3 — building phase: plan drains atomically in a single BOT_STE
 // ---------------------------------------------------------------------------
 
 // SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test.skip('M4.5.4 — frozen bot: no valid plan causes drawCard fallback; botTickSeq always increases', () => {
+test('M4.5.4 — frozen bot: no valid plan causes drawCard fallback; botTickSeq always increases', () => {
   // NOTE: Skipped until M5.4.
   //
   // A bot whose entire hand is joker cards cannot stage any equation (jokers
@@ -325,32 +317,30 @@ test.skip('M4.5.4 — frozen bot: no valid plan causes drawCard fallback; botTic
 // M4.5.5 — Profile 3: Easy discards fewer cards than Hard over 5 bot turns
 // ---------------------------------------------------------------------------
 
-// SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test.skip('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard over 5 turns', () => {
-  // NOTE: Skipped until M5.4.
+test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard over 5 turns', () => {
+  // Fixture: two bots start from 'building' phase with an explicit validTargets
+  // list that offers TWO subsets solving target 12 via pure addition:
+  //   [5, 7]      → score 2  (minimizer / Easy prefers this)
+  //   [3, 4, 5]   → score 3  (maximizer / Hard prefers this)
   //
-  // Fixture: two bots start from the same state. One runs with 'easy'
-  // difficulty (minimizer comparator), one with 'hard' (maximizer comparator).
-  // After 5 complete bot turns each, Easy must have discarded fewer total cards.
+  // Starting in 'building' (not 'pre-roll') bypasses ROLL_DICE, which would
+  // regenerate validTargets from random dice and make the fixture non-deterministic.
+  // With explicit validTargets, buildBotStagedPlan picks deterministically:
+  //   Easy (minimizer): score 2 → [5,7]   → cardsDiscarded = 2
+  //   Hard (maximizer): score 3 → [3,4,5] → cardsDiscarded = 3
   //
-  // Hand must contain MULTIPLE subsets that solve the same target so the
-  // minimizer and maximizer comparators actually diverge:
-  //   Target 12 can be solved by:
-  //     [5, 7]        → score 2 (fewer cards)
-  //     [3, 4, 5]     → score 3 (more cards, if validTargets includes this)
-  //   The bot's enabledOperators = ['+'] so the equation is pure addition.
-  //
-  // Because the game deals new hands each turn (from the draw pile), we cannot
-  // fully control the hand after the first turn. We therefore run 5 turn cycles
-  // and assert on cumulative discard pile growth as a proxy for cards discarded.
-  // The delta between Easy and Hard discard counts should be positive (Easy < Hard).
+  // We run 5 BOT_STEP cycles (one per controlled building-phase turn), each time
+  // resetting the phase back to 'building' with the same hand and validTargets so
+  // the comparator choice is stable across all turns. The cardsDiscarded sum over
+  // those 5 entries must satisfy easyDiscards < hardDiscards.
 
-  const makeProfileState = (difficulty: 'easy' | 'hard'): GameState => ({
+  const makeBuildingState = (difficulty: 'easy' | 'hard'): GameState => ({
     ...initialState,
-    phase: 'pre-roll' as const,
+    // Start directly in building phase so the bot never calls ROLL_DICE.
+    // This keeps validTargets under test control for all 5 turns.
+    phase: 'building' as const,
     currentPlayerIndex: 1,
     discardPile: [{ id: 'dt', type: 'number' as const, value: 12 }],
-    // Provide a large draw pile so the bot always has cards to draw.
     drawPile: Array.from({ length: 30 }, (_, i) => ({
       id: `dp${i}`,
       type: 'number' as const,
@@ -380,6 +370,7 @@ test.skip('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Har
     botConfig: { difficulty, playerIds: [1] },
     botTickSeq: 0,
     enabledOperators: ['+'],
+    // Two subsets both sum to 12, giving minimizer and maximizer different picks.
     validTargets: [
       { result: 12, equation: '5 + 7',     operations: ['+'] },
       { result: 12, equation: '3 + 4 + 5', operations: ['+', '+'] },
@@ -387,63 +378,55 @@ test.skip('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Har
   } as unknown as GameState);
 
   /**
-   * Run the bot for up to `turnsToComplete` full turns (i.e., until
-   * currentPlayerIndex changes `turnsToComplete` times from the bot's index
-   * back to itself via the human's instant "pass" equivalent).
-   *
-   * Because the human player is not being driven by a bot here, we manually
-   * fast-forward through their turn with END_TURN after each bot turn.
+   * Run exactly `turns` controlled bot turns. Each turn:
+   *   1. Dispatch BOT_STEP (bot is in building phase — picks plan atomically).
+   *   2. Reset the resulting state back to building phase with the SAME hand
+   *      and validTargets so subsequent turns are equally deterministic.
+   * Returns the accumulated moveHistory entries added during the run.
    */
-  function runNBotTurns(startState: GameState, turnsToComplete: number): GameState {
+  function runNControlledBotTurns(
+    startState: GameState,
+    turns: number,
+  ): GameState['moveHistory'] {
+    // Template: same hand and targets for every turn.
+    const template = startState;
     let state = startState;
-    let completedTurns = 0;
-    let ticks = 0;
-    const maxTotalTicks = turnsToComplete * 25;  // safety ceiling
+    const collectedEntries: GameState['moveHistory'] = [];
 
-    while (completedTurns < turnsToComplete && ticks < maxTotalTicks) {
-      if (state.currentPlayerIndex === 1) {
-        // Bot's turn — dispatch BOT_STEP
-        const prev = (state as unknown as { botTickSeq: number }).botTickSeq;
-        state = gameReducer(state, { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1], tf);
-        expect((state as unknown as { botTickSeq: number }).botTickSeq).toBeGreaterThan(prev);
-        ticks++;
+    for (let t = 0; t < turns; t++) {
+      const histBefore = state.moveHistory.length;
+      const prev = (state as unknown as { botTickSeq: number }).botTickSeq;
 
-        if (
-          state.currentPlayerIndex !== 1 ||
-          state.phase === 'game-over'
-        ) {
-          completedTurns++;
-        }
-      } else {
-        // Human's turn — fast-forward with BEGIN_TURN + END_TURN to hand back
-        // control to the bot. In a real game the human would play normally;
-        // for this test we only care about the bot's cumulative card discards.
-        if (state.phase === 'turn-transition') {
-          state = gameReducer(state, { type: 'BEGIN_TURN' }, tf);
-        } else if (state.phase === 'pre-roll') {
-          state = gameReducer(state, { type: 'END_TURN' }, tf);
-        } else {
-          // Unexpected phase for human; break to avoid infinite loop.
-          break;
-        }
-        ticks++;
-      }
+      state = gameReducer(
+        state,
+        { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
+        tf,
+      );
+      expect((state as unknown as { botTickSeq: number }).botTickSeq).toBeGreaterThan(prev);
+
+      const added = state.moveHistory.slice(histBefore);
+      collectedEntries.push(...added);
+
+      // Reset to a fresh building-phase turn using the template hand and targets
+      // so the comparator choice is identical on every turn.
+      state = {
+        ...template,
+        botTickSeq: state.botTickSeq,
+        moveHistory: state.moveHistory,
+      };
     }
 
-    return state;
+    return collectedEntries;
   }
 
-  const easyStart = makeProfileState('easy');
-  const hardStart = makeProfileState('hard');
+  const easyEntries = runNControlledBotTurns(makeBuildingState('easy'), 5);
+  const hardEntries = runNControlledBotTurns(makeBuildingState('hard'), 5);
 
-  const easyFinal = runNBotTurns(easyStart, 5);
-  const hardFinal = runNBotTurns(hardStart, 5);
+  // Proxy metric: sum of moveHistory[].cardsDiscarded — the reducer's canonical
+  // per-move count (index.tsx:1178 `cardsDiscarded: stIds.size`).
+  const easyDiscards = easyEntries.reduce((sum, e) => sum + (e.cardsDiscarded ?? 0), 0);
+  const hardDiscards = hardEntries.reduce((sum, e) => sum + (e.cardsDiscarded ?? 0), 0);
 
-  // Proxy metric: discard pile growth = total cards committed by the bot.
-  // Easy bot should have discarded fewer cards than Hard bot over 5 turns.
-  const easyDiscards = easyFinal.discardPile.length - easyStart.discardPile.length;
-  const hardDiscards = hardFinal.discardPile.length - hardStart.discardPile.length;
-
-  // The key Profile 3 assertion.
+  // The key Profile 3 assertion: Easy (minimizer) < Hard (maximizer).
   expect(easyDiscards).toBeLessThan(hardDiscards);
 });

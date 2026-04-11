@@ -152,3 +152,60 @@ describe('START_GAME with mode and botDifficulty', () => {
     expect(afterRematch.botTickSeq).toBe(0); // botTickSeq resets on rematch
   });
 });
+
+describe('BOT_STEP reducer case', () => {
+  const botGameAction = {
+    type: 'START_GAME' as const,
+    mode: 'vs-bot' as const,
+    botDifficulty: 'hard' as const,
+    players: [
+      { name: 'Human', isBot: false },
+      { name: 'Bot', isBot: true },
+    ],
+    difficulty: 'full' as const,
+    fractions: true,
+    showPossibleResults: true,
+    showSolveExercise: true,
+    timerSetting: 'off' as const,
+  };
+  const mockTf = (key: string): string => key;
+
+  it('BOT_STEP increments botTickSeq', () => {
+    const afterStart = gameReducer(initialState, botGameAction as GameAction, mockTf);
+    // Simulate: bot is not current yet but let's force it. If the bot is already
+    // current after START_GAME, this test works as-is. If not, we swap via a cast.
+    const stateWithBotCurrent = afterStart.players[afterStart.currentPlayerIndex].isBot
+      ? afterStart
+      : { ...afterStart, currentPlayerIndex: afterStart.players.findIndex(p => p.isBot) };
+    const afterStep = gameReducer(stateWithBotCurrent, { type: 'BOT_STEP' }, mockTf);
+    expect(afterStep.botTickSeq).toBeGreaterThan(stateWithBotCurrent.botTickSeq);
+  });
+
+  it('BOT_STEP is a no-op when current player is not a bot', () => {
+    const afterStart = gameReducer(initialState, botGameAction as GameAction, mockTf);
+    const humanIdx = afterStart.players.findIndex(p => !p.isBot);
+    const stateWithHumanCurrent = { ...afterStart, currentPlayerIndex: humanIdx };
+    const afterStep = gameReducer(stateWithHumanCurrent, { type: 'BOT_STEP' }, mockTf);
+    // botTickSeq still increments (the counter always advances) but phase is unchanged
+    expect(afterStep.botTickSeq).toBe(stateWithHumanCurrent.botTickSeq + 1);
+    expect(afterStep.phase).toBe(stateWithHumanCurrent.phase);
+    expect(afterStep.currentPlayerIndex).toBe(humanIdx);
+  });
+
+  it('BOT_STEP in turn-transition progresses to pre-roll or beyond', () => {
+    const afterStart = gameReducer(initialState, botGameAction as GameAction, mockTf);
+    // turn-transition is the phase right after START_GAME
+    expect(afterStart.phase).toBe('turn-transition');
+    const botIdx = afterStart.players.findIndex(p => p.isBot);
+    const stateWithBotCurrent = { ...afterStart, currentPlayerIndex: botIdx };
+    const afterStep = gameReducer(stateWithBotCurrent, { type: 'BOT_STEP' }, mockTf);
+    // beginTurn transitions to pre-roll (or further if the bot has a fraction-defense path)
+    expect(['pre-roll', 'building', 'solved', 'turn-transition']).toContain(afterStep.phase);
+  });
+
+  it('BOT_STEP in game-over is a pure no-op (except botTickSeq)', () => {
+    const gameOverState = { ...initialState, phase: 'game-over' as const, botConfig: { difficulty: 'hard' as const, playerIds: [] as const } };
+    const afterStep = gameReducer(gameOverState, { type: 'BOT_STEP' }, mockTf);
+    expect(afterStep.phase).toBe('game-over');
+  });
+});

@@ -6,6 +6,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, useReducer, forwardRef, useImperativeHandle } from 'react';
 import type { ReactNode } from 'react';
 import type { BotDifficulty } from './src/bot/types';
+import { decideBotAction } from './src/bot/botBrain';
+import { translateBotAction } from './src/bot/executor';
+import type { BotAction } from './src/bot/types';
 import {
   I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground,
   StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert,
@@ -405,6 +408,7 @@ type GameAction =
   | { type: 'UPDATE_PLAYER_NAME'; playerIndex: number; name: string }
   | { type: 'DISMISS_INTRO_HINT' }
   | { type: 'USE_POSSIBLE_RESULTS_INFO' }
+  | { type: 'BOT_STEP' }
   | { type: 'RESET_GAME' };
 
 // Global mutable intercept for fraction card taps (tutorial + hint)
@@ -1514,6 +1518,96 @@ function gameReducer(
         possibleResultsInfoCountedThisTurn: true,
         message: tf('local.possibleResultsPaidDraw', { name: cp.name }),
       };
+    }
+    case 'BOT_STEP': {
+      // Always increment the tick counter, even for no-op paths. The bot clock
+      // useEffect dep array depends on botTickSeq to guarantee re-scheduling
+      // on every BOT_STEP regardless of outcome, preventing "frozen bot" bugs.
+      const stWithTick = { ...st, botTickSeq: st.botTickSeq + 1 };
+
+      if (stWithTick.phase === 'game-over') return stWithTick;
+      if (!stWithTick.botConfig) return stWithTick;
+      const current = stWithTick.players[stWithTick.currentPlayerIndex];
+      if (!current) return stWithTick;
+      if (!stWithTick.botConfig.playerIds.includes(current.id)) return stWithTick;
+
+      // Nested helper: recursively drains a bot action. For confirmEquation,
+      // drains the entire plan (confirmEquation + stageCards + confirmStaged)
+      // in one atomic burst so React sees one state transition, not N.
+      // NEVER passes BOT_STEP through — the translator's recursion guard
+      // already returns null in that case, but this is a defensive note.
+      function applyBotActionAtomically(s: GameState, a: BotAction): GameState {
+        // Single-step actions: translate and recurse once.
+        if (a.kind !== 'confirmEquation') {
+          const translated = translateBotAction(s, a);
+          if (!translated) {
+            // Translator failed (cardId not in hand). Fall back to drawCard
+            // UNLESS we're already trying drawCard — in which case return s.
+            if (a.kind === 'drawCard') return s;
+            const drawTranslated = translateBotAction(s, { kind: 'drawCard' });
+            if (!drawTranslated) return s;
+            return gameReducer(s, drawTranslated, tf);
+          }
+          const result = gameReducer(s, translated, tf);
+          // Safety: if the bot has drawn (hasDrawnCard) but is still the current
+          // player in the same phase (e.g., empty draw pile prevented endTurnLogic
+          // from firing inside DRAW_CARD), issue END_TURN to guarantee turn
+          // advancement. This covers the corner case where reshuffleDiscard cannot
+          // produce cards (discard pile has ≤1 card) and DRAW_CARD returns with
+          // hasDrawnCard:true but without calling endTurnLogic.
+          if (
+            result.hasDrawnCard &&
+            result.currentPlayerIndex === s.currentPlayerIndex &&
+            result.phase !== 'game-over'
+          ) {
+            return gameReducer(result, { type: 'END_TURN' }, tf);
+          }
+          return result;
+        }
+
+        // confirmEquation: drain the plan in one burst.
+        const confirmTranslated = translateBotAction(s, a);
+        if (!confirmTranslated) {
+          const drawTranslated = translateBotAction(s, { kind: 'drawCard' });
+          if (!drawTranslated) return s;
+          return gameReducer(s, drawTranslated, tf);
+        }
+        let next = gameReducer(s, confirmTranslated, tf);
+
+        // Stage each planned card one at a time.
+        const successfullyStaged: string[] = [];
+        for (const cardId of a.stagedCardIds) {
+          const stageTranslated = translateBotAction(next, { kind: 'stageCard', cardId });
+          if (!stageTranslated) {
+            // A planned card is no longer stageable. Unstage what we already
+            // staged (orphan cleanup — this fixes the server bot's known bug),
+            // then fall back to drawCard.
+            for (const stagedId of successfullyStaged.reverse()) {
+              const unstageTranslated = translateBotAction(next, { kind: 'unstageCard', cardId: stagedId });
+              if (unstageTranslated) {
+                next = gameReducer(next, unstageTranslated, tf);
+              }
+            }
+            const drawTranslated = translateBotAction(next, { kind: 'drawCard' });
+            if (!drawTranslated) return next;
+            return gameReducer(next, drawTranslated, tf);
+          }
+          next = gameReducer(next, stageTranslated, tf);
+          successfullyStaged.push(cardId);
+        }
+
+        // Finally, confirmStaged.
+        const confirmStagedTranslated = translateBotAction(next, { kind: 'confirmStaged' });
+        if (!confirmStagedTranslated) return next;
+        return gameReducer(next, confirmStagedTranslated, tf);
+      }
+
+      const action_ = decideBotAction(stWithTick, stWithTick.botConfig.difficulty);
+      if (!action_) {
+        // Planner produced nothing — try drawCard as last resort.
+        return applyBotActionAtomically(stWithTick, { kind: 'drawCard' });
+      }
+      return applyBotActionAtomically(stWithTick, action_);
     }
     case 'RESET_GAME':
       AsyncStorage.removeItem('lulos_guidance_notifications');
