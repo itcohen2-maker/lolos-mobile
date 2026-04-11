@@ -154,4 +154,23 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'playFractionBlock', cardId: counterFraction.id });
   });
 
+  test('pre-roll defense takes penalty when no defense available', () => {
+    const opCard1 = makeCard('operation', undefined, undefined, '+');
+    const opCard2 = makeCard('operation', undefined, undefined, '-');
+    const botPlayer = makePlayer(0, 'Bot', [opCard1, opCard2]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [makeCard('number', 4)],
+      pendingFractionTarget: 2,
+      fractionPenalty: 2,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({ kind: 'defendFractionPenalty' });
+  });
+
 });
