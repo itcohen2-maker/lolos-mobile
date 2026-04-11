@@ -4897,8 +4897,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     { key: '60', label: t('lobby.timerMin'), accessibilityLabel: t('start.timerA11y.min1') },
     { key: 'custom', label: t('lobby.timerCustom'), accessibilityLabel: t('start.timerA11y.custom') },
   ], [t]);
-  const guidanceWheelIndex = timer === 'custom' ? 7 : 6;
-  const advancedWheelIndex = timer === 'custom' ? 8 : 7;
+  const guidanceWheelIndex = (timer === 'custom' ? 9 : 8) + (gameMode === 'vs-bot' ? 1 : 0);
+  const advancedWheelIndex = (timer === 'custom' ? 10 : 9) + (gameMode === 'vs-bot' ? 1 : 0);
 
   useEffect(() => {
     const cfg = DIFFICULTY_STAGE_CONFIG[difficultyStage];
@@ -5939,7 +5939,43 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
+          {/* M6.3: Mode toggle — pass-and-play vs vs-bot */}
           <WheelRow index={1}>
+          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+          <View style={[hsS.row, hsS.rowRange]}>
+            <Text style={hsS.rowLabel}>{t('start.mode')}</Text>
+            <View style={hsS.toggleGroup}>
+              {([['pass-and-play', t('start.modePassAndPlay')], ['vs-bot', t('start.modeVsBot')]] as const).map(([key, label]) => (
+                <TouchableOpacity key={key} onPress={() => { setGameMode(key); Keyboard.dismiss(); }} activeOpacity={0.7}
+                  style={[hsS.toggleBtn, gameMode === key ? hsS.toggleOn : hsS.toggleOff]}>
+                  <Text style={gameMode === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          </LinearGradient>
+          </WheelRow>
+
+          {/* M6.3: Bot difficulty toggle — only when vs-bot selected */}
+          {gameMode === 'vs-bot' && (
+          <WheelRow index={2}>
+          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+          <View style={[hsS.row, hsS.rowRange]}>
+            <Text style={hsS.rowLabel}>{t('start.botDifficulty')}</Text>
+            <View style={hsS.toggleGroup}>
+              {([['easy', t('start.botEasy')], ['hard', t('start.botHard')]] as const).map(([key, label]) => (
+                <TouchableOpacity key={key} onPress={() => setBotDifficulty(key)} activeOpacity={0.7}
+                  style={[hsS.toggleBtn, botDifficulty === key ? hsS.toggleOn : hsS.toggleOff]}>
+                  <Text style={botDifficulty === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          </LinearGradient>
+          </WheelRow>
+          )}
+
+          <WheelRow index={3}>
           <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowRange]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.numberRange')}</Text>
@@ -5955,7 +5991,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          <WheelRow index={2}>
+          <WheelRow index={4}>
           <LinearGradient colors={['#4285F4', '#8ab4f8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowFractions]}>
             <Text style={hsS.rowLabel}>{t('lobby.fractions')}</Text>
@@ -5974,7 +6010,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          <WheelRow index={3}>
+          <WheelRow index={5}>
           <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowPossibleResults]}>
             <Text style={hsS.rowLabel}>{t('lobby.possibleResults')}</Text>
@@ -5997,7 +6033,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          <WheelRow index={4}>
+          <WheelRow index={6}>
           <LinearGradient colors={['#34A853', '#81c995']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowSolveExercise]}>
             <Text style={hsS.rowLabel}>{t('lobby.solveExercise')}</Text>
@@ -6023,7 +6059,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          <WheelRow index={5}>
+          <WheelRow index={7}>
           <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowTimer]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.timerRow')}</Text>
@@ -6043,7 +6079,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
           {timer === 'custom' && (
-            <WheelRow index={6}>
+            <WheelRow index={8}>
             <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
             <View style={[hsS.row, hsS.rowTimer, { marginTop: -4 }]}>
               <Text style={[hsS.rowLabel, { fontSize: 12, color: 'rgba(255,255,255,0.85)' }]}>
