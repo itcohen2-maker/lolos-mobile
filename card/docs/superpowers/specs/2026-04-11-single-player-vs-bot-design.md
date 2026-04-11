@@ -128,21 +128,29 @@ The existing `START_GAME` handler is amended minimally to:
 Identical to the bot clock from the original §5.4, with one adjustment: it dispatches `BOT_STEP` into `index.tsx`'s reducer, and the reducer handles `BOT_STEP` by calling `decideBotAction(state, state.botDifficulty)` and then executing the resulting action via **a direct reducer-level transformation** rather than through another dispatch. This avoids a double-dispatch cycle within a single React render pass.
 
 ```typescript
-// Inside index.tsx's gameReducer:
+// Inside index.tsx's gameReducer (which already takes tf as a parameter
+// via the useCallback wrapper at line ~1512 — the recursive call below
+// reuses the same tf that's already in scope because gameReducer itself
+// is a function declaration that accepts tf as its third argument):
 case 'BOT_STEP': {
   if (st.phase === 'game-over') return st;
   const current = st.players[st.currentPlayerIndex];
   if (!current || !st.botPlayerIds.includes(current.id)) return st;
-  const action = decideBotAction(st, st.botDifficulty ?? 'hard');
+  // botDifficulty should never be null when botPlayerIds is non-empty,
+  // but we default defensively. If it is null here, the game has a bug
+  // elsewhere that START_GAME didn't set botDifficulty alongside bot players.
+  const difficulty = st.botDifficulty ?? 'hard';
+  const action = decideBotAction(st, difficulty);
   if (!action) return st;
-  // Translate BotAction into the existing reducer action and recursively reduce:
-  const translated = translateBotAction(action);
+  const translated = translateBotAction(st, action);
   if (!translated) return st;
   return gameReducer(st, translated, tf);
 }
 ```
 
-`translateBotAction(action: BotAction): GameAction | null` is a small pure function in `src/bot/executor.ts` that maps the bot's `BotAction` union onto the existing local reducer's action vocabulary. It's the shim between the new bot types and the old reducer verbs.
+`translateBotAction(state: GameState, action: BotAction): GameAction | null` is a small pure function in `src/bot/executor.ts` that maps the bot's `BotAction` union onto the existing local reducer's action vocabulary. It takes `state` so it can resolve `cardId` → `Card` objects from the current player's hand (the local reducer's actions carry `Card` objects, not IDs; this resolution happens in the translator, not the brain). It's the shim between the new bot types and the old reducer verbs.
+
+**Scoping note for `tf`:** `gameReducer` in `index.tsx` is a top-level `function` declaration (not a closure), signature `gameReducer(state, action, tf)`. The recursive call passes `tf` through explicitly, so no scope problem arises. Verify this signature in M1 before writing the `BOT_STEP` case.
 
 ### 0.6 Revised bot action translation
 
