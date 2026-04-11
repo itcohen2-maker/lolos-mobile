@@ -173,4 +173,24 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'defendFractionPenalty' });
   });
 
+  test('roll-dice phase handled identically to pre-roll', () => {
+    const discardCard = makeCard('number', 5);
+    const identicalCard = makeCard('number', 5);
+    const otherCard = makeCard('number', 3);
+    const botPlayer = makePlayer(0, 'Bot', [otherCard, identicalCard]);
+
+    const state = makeFixtureState({
+      phase: 'roll-dice',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [discardCard],
+      pendingFractionTarget: null,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    // The brain must treat 'roll-dice' the same as 'pre-roll'
+    expect(result).toEqual({ kind: 'playIdentical', cardId: identicalCard.id });
+  });
+
 });
