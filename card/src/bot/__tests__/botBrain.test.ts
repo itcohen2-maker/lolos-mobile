@@ -247,4 +247,24 @@ describe('decideBotAction', () => {
     expect(action.equationOps).toEqual(['+']);
   });
 
+  test('building falls back to drawCard when no plan', () => {
+    const card1 = makeCard('number', 1);
+    const card2 = makeCard('number', 2);
+    const botPlayer = makePlayer(0, 'Bot', [card1, card2]);
+
+    const state = makeFixtureState({
+      phase: 'building',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      validTargets: [{ equation: '9', result: 9 }],
+      enabledOperators: ['+'],
+      mathRangeMax: 25,
+      discardPile: [makeCard('number', 9)],
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({ kind: 'drawCard' });
+  });
+
 });
