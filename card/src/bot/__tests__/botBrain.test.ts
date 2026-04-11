@@ -46,4 +46,24 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'playIdentical', cardId: identicalCard.id });
   });
 
+  test('pre-roll plays attack fraction when available', () => {
+    const discardCard = makeCard('number', 6);
+    // 1/2 fraction: validateFractionPlay passes because 6 is divisible by 2
+    const fractionCard = makeCard('fraction', undefined, '1/2');
+    const numberCard = makeCard('number', 3); // value 3 ≠ 6, no identical play
+    const botPlayer = makePlayer(0, 'Bot', [numberCard, fractionCard]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [discardCard],
+      pendingFractionTarget: null,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({ kind: 'playFractionAttack', cardId: fractionCard.id });
+  });
+
 });
