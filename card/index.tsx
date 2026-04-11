@@ -4897,8 +4897,9 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     { key: '60', label: t('lobby.timerMin'), accessibilityLabel: t('start.timerA11y.min1') },
     { key: 'custom', label: t('lobby.timerCustom'), accessibilityLabel: t('start.timerA11y.custom') },
   ], [t]);
-  const guidanceWheelIndex = (timer === 'custom' ? 9 : 8) + (gameMode === 'vs-bot' ? 1 : 0);
-  const advancedWheelIndex = (timer === 'custom' ? 10 : 9) + (gameMode === 'vs-bot' ? 1 : 0);
+  // M6.5: player-count row hidden in vs-bot, bot-difficulty row hidden in pass-and-play — net row count identical.
+  const guidanceWheelIndex = (timer === 'custom' ? 9 : 8);
+  const advancedWheelIndex = (timer === 'custom' ? 10 : 9);
 
   useEffect(() => {
     const cfg = DIFFICULTY_STAGE_CONFIG[difficultyStage];
@@ -5913,7 +5914,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           <View style={{ alignItems: isRTL ? 'flex-end' : 'flex-start', width: '100%', marginBottom: 8 }}>
             <LanguageToggle />
           </View>
-          {/* מספר שחקנים — צליל לכל שינוי (2–6) */}
+          {/* מספר שחקנים — צליל לכל שינוי (2–6); M6.5: hidden in vs-bot (always 2 players) */}
+          {gameMode === 'pass-and-play' && (
           <WheelRow index={0}>
           <LinearGradient colors={['#188038','#34A853']} start={{x:0,y:0}} end={{x:1,y:1}} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowPlayers]}>
@@ -5952,6 +5954,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </View>
           </LinearGradient>
           </WheelRow>
+          )}
 
           {/* M6.3: Mode toggle — pass-and-play vs vs-bot */}
           <WheelRow index={1}>
