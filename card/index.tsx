@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, useReducer, forwardRef, useImperativeHandle } from 'react';
 import type { ReactNode } from 'react';
+import type { BotDifficulty } from './src/bot/types';
 import {
   I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground,
   StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert,
@@ -265,6 +266,11 @@ interface GameState {
   possibleResultsInfoCountedThisTurn: boolean;
   /** מקוון: המשתמש סגר את בועת קלף זהה לפני ש-callback השני מהשרת הסיר את identicalCelebration */
   suppressIdenticalOverlayOnline: boolean;
+  /** Bot configuration for offline vs-bot mode. null = pass-and-play (no bots). See spec §0.4. */
+  botConfig: { difficulty: BotDifficulty; playerIds: ReadonlyArray<number> } | null;
+  /** Monotonic counter incremented on every BOT_STEP dispatch. Used by bot clock useEffect dep array
+   *  to guarantee re-scheduling on no-op ticks. Prevents "frozen bot" bugs. See spec §0.5.2. */
+  botTickSeq: number;
 }
 
 interface Notification {
@@ -843,6 +849,8 @@ const initialState: GameState = {
   possibleResultsInfoUses: 0,
   possibleResultsInfoCountedThisTurn: false,
   suppressIdenticalOverlayOnline: false,
+  botConfig: null,
+  botTickSeq: 0,
 };
 
 function reshuffleDiscard(st: GameState): GameState {
