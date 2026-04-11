@@ -155,6 +155,7 @@ interface Player {
   name: string;
   hand: Card[];
   calledLolos: boolean;
+  isBot: boolean;
 }
 
 interface DiceResult { die1: number; die2: number; die3: number; }
@@ -362,7 +363,7 @@ interface MoveHistoryEntry {
 export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
+  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
@@ -952,7 +953,7 @@ function gameReducer(
       AsyncStorage.removeItem('lulos_guidance_notifications');
       const playersSeed =
         action.type === 'PLAY_AGAIN'
-          ? st.players.map((p) => ({ name: p.name }))
+          ? st.players.map((p) => ({ name: p.name, isBot: p.isBot }))
           : action.players;
       const difficulty = action.type === 'PLAY_AGAIN' ? st.difficulty : action.difficulty;
       const stage = action.type === 'PLAY_AGAIN'
@@ -1012,7 +1013,7 @@ function gameReducer(
         totalEquationResponseMs: 0,
         showFractions: fractions, showPossibleResults, showSolveExercise,
         timerSetting, timerCustomSeconds,
-        players: playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false })),
+        players: playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false, isBot: (p as { isBot?: boolean }).isBot ?? false })),
         drawPile, discardPile: firstDiscard ? [firstDiscard] : [],
         tournamentTable:
           action.type === 'PLAY_AGAIN'
