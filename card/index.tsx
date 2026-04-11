@@ -353,13 +353,15 @@ interface MoveHistoryEntry {
   description: string;
 }
 
+export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
+
 type GameAction =
   | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
   | { type: 'ROLL_DICE'; values?: DiceResult }
-  | { type: 'CONFIRM_EQUATION'; result: number; equationDisplay: string; equationOps: Operation[]; equationCommits?: { cardId: string; position: 0 | 1; jokerAs: Operation | null }[] }
+  | { type: 'CONFIRM_EQUATION'; result: number; equationDisplay: string; equationOps: Operation[]; equationCommits?: EquationCommitPayload[] }
   | { type: 'RECORD_EQUATION_ATTEMPT' }
   | { type: 'RESET_ONLINE_EQ_UI' }
   | { type: 'REVERT_TO_BUILDING' }
@@ -3022,6 +3024,11 @@ function timerProgressColor(progress: number): string {
 
 
 export type EquationBuilderRef = { resetAll: () => void } | null;
+// ─── Exports for src/bot/ (single-player vs bot feature) ──────────────────
+// See docs/superpowers/plans/2026-04-11-single-player-vs-bot.md
+export { gameReducer, initialState, validateFractionPlay, validateIdenticalPlay, validateStagedCards, fractionDenominator };
+export type { GameState, GameAction, Card, Player, Operation, Fraction, CardType, GamePhase, DiceResult, EquationOption };
+// EquationCommitPayload is exported above, near the GameAction union definition.
 const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data: { onConfirm: () => void } | null) => void; onResultChange?: (data: { result: number | null; ok: boolean; hasError: boolean } | null) => void; timerProgress?: number | null; interactive?: boolean }>(function EquationBuilder({ onConfirmChange, onResultChange, timerProgress = null, interactive = true }, ref) {
   const { state, dispatch } = useGame();
   const { t } = useLocale();
