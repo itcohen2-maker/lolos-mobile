@@ -103,7 +103,7 @@ Added to the local `GameState` type inside `index.tsx` (existing interface, new 
  * Consolidated into one discriminated field so we cannot end up in the
  * invalid state "difficulty set but playerIds empty" or vice versa.
  */
-botConfig: { difficulty: BotDifficulty; playerIds: ReadonlyArray<string> } | null;
+botConfig: { difficulty: BotDifficulty; playerIds: ReadonlyArray<number> } | null;
 
 /**
  * Monotonically increasing counter incremented on every BOT_STEP dispatch,
@@ -137,13 +137,22 @@ Added to the `GameAction` union inside `index.tsx`:
 | { type: 'BOT_STEP' }                     // NEW — fired by bot clock
 ```
 
-The existing `START_GAME` handler is amended minimally to:
-1. Pass `isBot: player.isBot` through when constructing the initial `players` array.
-2. If `mode === 'vs-bot'` and at least one `player.isBot` is true, set `botConfig = { difficulty: action.botDifficulty ?? 'easy', playerIds: players.filter(p => p.isBot).map(p => p.id) }`. Otherwise set `botConfig = null`.
-3. Initialize `botTickSeq: 0`.
-4. Leave all existing behavior (deck generation, card dealing, discard seeding, guidance turns, etc.) untouched.
+The existing `gameReducer` in `index.tsx:934` handles `START_GAME` and `PLAY_AGAIN` as a **fused case** (line 940–1017). Both action types share the same body, branching via `action.type === 'PLAY_AGAIN' ? preservedValue : newValue` for every field. `PLAY_AGAIN` preserves difficulty, operators, math range, timer settings, etc. from the previous game.
 
-`RESET_GAME` must reset `botConfig: null` and `botTickSeq: 0` (same as other game-scoped state). If `RESET_GAME` already exists and uses a spread of `initialState`, adding these fields to `initialState` handles it automatically — verify in M1.
+The fused handler must be amended as follows:
+
+1. The `playersSeed` construction (line 943–946) currently produces `{ name: string }[]`. Amend the `START_GAME` branch to produce `{ name: string; isBot: boolean }[]` by reading `action.players` which now carries `isBot` per player. The `PLAY_AGAIN` branch continues to read from `st.players.map((p) => ({ name: p.name, isBot: p.isBot }))` — preserving the bot flag from the previous game so "play again" against a bot stays a bot game.
+2. The `players` array construction at line 1005 currently is `playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false }))`. Amend to include `isBot: p.isBot`.
+3. For `START_GAME`: if `action.mode === 'vs-bot'`, set `botConfig = { difficulty: action.botDifficulty ?? 'easy', playerIds: playersSeed.map((p, i) => p.isBot ? i : -1).filter(id => id >= 0) }`. Otherwise set `botConfig = null`.
+4. For `PLAY_AGAIN`: preserve the previous game's `botConfig` via `botConfig: st.botConfig` (following the same `PLAY_AGAIN ? preserved : new` pattern as every other field).
+5. Initialize `botTickSeq: 0` for both branches.
+6. Leave all existing behavior (deck generation, card dealing, discard seeding, guidance turns, AB variant, difficulty stage, tournament table, etc.) untouched.
+
+`RESET_GAME` already exists at line 1494 (per M1 survey). It spreads `initialState` plus explicitly preserved fields (`hasSeenIntroHint`, `hasSeenSolvedHint`, `soundsEnabled`, `guidanceEnabled`). Adding `botConfig: null` and `botTickSeq: 0` to `initialState` means they reset to null/0 on RESET_GAME automatically, which is correct — leaving a game resets the bot.
+
+**Important: `HostGameSettings` is not a nested object in the local reducer.** The server engine defines `HostGameSettings` as an interface and nests it on `ServerGameState.hostGameSettings`. The local reducer in `index.tsx` **flattens** these fields directly onto `GameState` — `enabledOperators`, `allowNegativeTargets`, `mathRangeMax`, `showFractions`, `showPossibleResults`, `showSolveExercise`, `timerSetting`, `timerCustomSeconds`, `abVariant`, `difficultyStage` are all top-level `GameState` fields, read/written individually by the reducer. The bot brain and the StartScreen advanced panel must speak this flat vocabulary, not the nested `HostGameSettings` object shape. Wherever earlier spec sections said "update `hostGameSettings.enabledOperators`," they mean "update the top-level `enabledOperators` field on `GameState`."
+
+This is not a code change for M5 — the reducer already works this way. It's a correction to M2 (bot brain reading these fields) and M6 (StartScreen writing to them via `START_GAME` action fields).
 
 ### 0.5 Revised bot clock (reducer + useEffect + useRef)
 
@@ -474,10 +483,11 @@ The `botOffline.*` namespace is deliberately separate from `local.*` (existing i
 
 ### 0.8 Revised rollout
 
-Eight milestones, each a mergeable commit. M4.5 (integration test against the live reducer) was added after architectural review identified that unit-testing the bot brain in isolation is not sufficient to catch local-vs-server rule drift.
+Nine milestones, each a mergeable commit. M0 was added because the project has no test runner and no existing tests — `card/package.json` has no `jest`/`vitest` dep, and there are no `jest.config.*` / `vitest.config.*` files. Adding a test runner is a prerequisite to M3/M4/M4.5. The decision is Jest + `jest-expo` (see §0.8.1). M4.5 (integration test against the live reducer) was added after architectural review identified that unit-testing the bot brain in isolation is not sufficient to catch local-vs-server rule drift.
 
 | # | Milestone | Files touched | Gate |
 |---|---|---|---|
+| M0 | Install and configure Jest + `jest-expo` preset for the `card/` package. Add `jest` devDependency, `jest-expo` devDependency, `@types/jest`, `@testing-library/react-native` (for future tests), and appropriate transform-ignore / module-name-mapper settings for React Native + Expo. Add `jest.config.js` (or `jest` block in `package.json`). Add `"test": "jest"` script to `card/package.json`. Write one trivial smoke test at `src/__tests__/smoke.test.ts` that asserts `1 + 1 === 2` to verify the runner actually runs. Verify `npm test` passes. | `card/package.json`, `card/jest.config.js` (new), `card/src/__tests__/smoke.test.ts` (new) | `npm test` reports 1 passing smoke test; no warnings about unresolved Expo/RN modules |
 | M1 | Survey `index.tsx` — document the exact signature of `gameReducer` (including `tf`), every field of `GameState`, every variant of `GameAction` (exact field names), the `Player` / `Card` / `HostGameSettings` / `BotDifficulty` / `EquationCommitPayload` types, the inline `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` helpers, the exact phase transitions, whether `index.tsx` can `export type GameAction` (or requires a tsconfig tweak), and the project's test runner (Vitest / Jest / none). Write findings into `docs/superpowers/specs/2026-04-11-index-tsx-survey.md`. | None (read-only) | Survey doc exists; the doc answers every question in this cell |
 | M2 | Create `src/bot/types.ts` (BotDifficulty, BotAction union — note that `confirmEquation` carries `stagedCardIds: ReadonlyArray<string>`) and `src/bot/botBrain.ts` — pure `decideBotAction(state, difficulty): BotAction \| null`. Imports `GameState` and local `validateFractionPlay` / `validateIdenticalPlay` / `validateStagedCards` from `index.tsx` so the brain uses the **local** reducer's rules, not the server's. Profile 3 Easy = minimizer comparator in the planner. | `src/bot/types.ts`, `src/bot/botBrain.ts` | File compiles against real `index.tsx` types |
 | M3 | Bot brain unit tests: `src/bot/__tests__/botBrain.test.ts`. Cover every phase transition from the decision table, plus the Profile 3 Easy vs Hard comparison. Fixture states must include at least two distinct valid plans so Easy/Hard produce different scores (otherwise the Profile 3 test is vacuous). | `src/bot/__tests__/botBrain.test.ts`, plus whatever test runner config M1 says the project needs | All bot brain unit tests pass |
@@ -487,7 +497,18 @@ Eight milestones, each a mergeable commit. M4.5 (integration test against the li
 | M6 | `StartScreen` vs-bot entry point: mode toggle using existing `HorizontalWheelOption` pattern (line ~4687), bot difficulty toggle (visible only when mode === 'vs-bot'), advanced settings disclosure reusing the existing `advancedSetupOpen` precedent (line ~4643), vs-bot `START_GAME` dispatch path. Add new `start.*` labels and `botOffline.*` runtime keys to `shared/i18n/en.ts` and `shared/i18n/he.ts`. Verify RTL behavior on Hebrew locale. `Keyboard.dismiss()` on mode change. | `index.tsx` (StartScreen region, line 4643 onward), `shared/i18n/en.ts`, `shared/i18n/he.ts` | Manual playthrough checklist passes |
 | M7 | Verification pass: full manual checklist (§0.9); inspect any bot-game edge cases discovered during M5–M6; confirm no regressions in pass-and-play or online. | None (verification only) | Checklist clean |
 
-**Zero server changes. Zero online-multiplayer risk.** Milestones M1–M4 are pure additions to `src/bot/` and cannot break existing runtime behavior. M4.5 adds one line to `index.tsx` — an `export` statement exposing `gameReducer`, `initialState`, `GameState`, and `GameAction` so the integration test can import them. An export-only edit cannot change runtime behavior but does touch `index.tsx`; the M4.5 gate must include "pass-and-play still works" as a sanity check. M5–M6 edit `index.tsx` but only: memoize an existing context value, add new reducer cases, add new state fields, add a new inline overlay component, and append a new `StartScreen` section. No refactor of existing code.
+#### 0.8.1 Why Jest + jest-expo (not Vitest)
+
+The project is Expo + React Native + TypeScript with React 19. Four test-runner options were evaluated:
+
+- **Vitest:** Fast, modern, pure TS. Breaks on React Native module resolution (`react-native`, `expo`, `@react-native-async-storage/async-storage`, `expo-av`, etc.) and M4.5 requires importing from `index.tsx` which transitively pulls in all of those. Workable for pure-function unit tests of the bot brain (M3/M4) but not for integration tests (M4.5).
+- **Jest + jest-expo preset:** React Native ecosystem canonical. `jest-expo` handles the entire RN/Expo module resolution out of the box — transforms for `.ts/.tsx/.js`, stubs for native modules, sensible defaults for React 19. Heavier setup than Vitest (~30 min first-time) but unblocks M4.5 completely. **Chosen.**
+- **No test runner:** Drops M3/M4/M4.5, relies on manual checklist only. Loses the drift detector that architectural review elevated to critical. Rejected.
+- **ts-node scripts:** Works for pure-function tests with no imports from `index.tsx`. Fails for M4.5. Rejected because a partial answer doesn't unblock the critical milestone.
+
+M0's gate is deliberately conservative: "one trivial smoke test passes." That's enough to prove the runner is wired up without investing in a rich fixture before we know the runner config is correct. M3/M4/M4.5 build on top of a known-good M0.
+
+**Zero server changes. Zero online-multiplayer risk.** Milestones M0, M1, M2, M3, M4 are pure additions to `card/` dev tooling and `src/bot/` and cannot break existing runtime behavior. M4.5 adds one line to `index.tsx` — an `export` statement exposing `gameReducer`, `initialState`, `GameState`, and `GameAction` so the integration test can import them. An export-only edit cannot change runtime behavior but does touch `index.tsx`; the M4.5 gate must include "pass-and-play still works" as a sanity check. M5–M6 edit `index.tsx` but only: memoize an existing context value, add new reducer cases, add new state fields, add a new inline overlay component, and append a new `StartScreen` section. No refactor of existing code.
 
 ### 0.9 Revised testing
 
