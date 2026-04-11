@@ -86,4 +86,29 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'rollDice' });
   });
 
+  test('pre-roll defense uses divisible number card', () => {
+    const divisibleCard = makeCard('number', 6); // 6 % 2 === 0 ✓
+    const opCard = makeCard('operation', undefined, undefined, '+');
+    const botPlayer = makePlayer(0, 'Bot', [opCard, divisibleCard]);
+
+    const state = makeFixtureState({
+      phase: 'pre-roll',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      discardPile: [makeCard('number', 6)],
+      pendingFractionTarget: 3,
+      fractionPenalty: 2,
+    });
+
+    const result = decideBotAction(state, 'hard');
+
+    expect(result).toEqual({
+      kind: 'defendFractionSolve',
+      cardId: divisibleCard.id,
+      // wildResolve should NOT be present when defending with a plain number card
+    });
+    // Confirm wildResolve is absent (undefined or not set)
+    expect((result as { wildResolve?: number }).wildResolve).toBeUndefined();
+  });
+
 });
