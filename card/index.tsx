@@ -1711,6 +1711,86 @@ function GameProvider({ children }: { children: ReactNode }) {
     localDispatch({ type: 'CLEAR_ONLINE_IDENTICAL_SUPPRESS' });
   }, [override, override?.state.identicalAlert, localState.suppressIdenticalOverlayOnline]);
 
+  // ────────────────────────────────────────────────────────────────
+  // Bot clock (M5.6) — schedules BOT_STEP dispatches when a bot is
+  // the current player. Reads from localState (not merged state) so
+  // online-mode renders don't churn the timer. useRef-backed deadline
+  // prevents unrelated re-renders from thrashing the schedule.
+  // See spec §0.5.2.
+  // ────────────────────────────────────────────────────────────────
+  const botTimerDeadlineRef = useRef<{ dueAt: number; turnSignature: string } | null>(null);
+
+  useEffect(() => {
+    // Hard gate: never run the bot clock during online mode.
+    if (override) {
+      botTimerDeadlineRef.current = null;
+      return;
+    }
+    if (localState.phase === 'game-over') return;
+    if (!localState.botConfig) return;
+    const current = localState.players[localState.currentPlayerIndex];
+    if (!current || !localState.botConfig.playerIds.includes(current.id)) {
+      botTimerDeadlineRef.current = null;
+      return;
+    }
+    // Only schedule in phases the bot can act in.
+    if (
+      localState.phase !== 'turn-transition' &&
+      localState.phase !== 'pre-roll' &&
+      localState.phase !== 'roll-dice' &&
+      localState.phase !== 'building' &&
+      localState.phase !== 'solved'
+    ) {
+      return;
+    }
+
+    // Signature of the current turn context. When this changes, we want a
+    // new timer. When it stays the same across unrelated re-renders, we
+    // want to keep the existing pending timer.
+    const turnSignature = [
+      localState.phase,
+      localState.currentPlayerIndex,
+      localState.hasPlayedCards ? '1' : '0',
+      localState.stagedCards.length,
+      localState.equationResult ?? 'null',
+      localState.pendingFractionTarget ?? 'null',
+      localState.botTickSeq,
+    ].join('|');
+
+    const now = Date.now();
+    const existing = botTimerDeadlineRef.current;
+    if (existing && existing.turnSignature === turnSignature && existing.dueAt > now) {
+      // Same turn context, existing timer still pending — no reschedule.
+      return;
+    }
+
+    const delay = 900 + Math.floor(Math.random() * 700);
+    const dueAt = now + delay;
+    botTimerDeadlineRef.current = { dueAt, turnSignature };
+
+    const timer = setTimeout(() => {
+      botTimerDeadlineRef.current = null;
+      localDispatch({ type: 'BOT_STEP' });
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      botTimerDeadlineRef.current = null;
+    };
+  }, [
+    override,
+    localState.phase,
+    localState.currentPlayerIndex,
+    localState.hasPlayedCards,
+    localState.stagedCards.length,
+    localState.equationResult,
+    localState.pendingFractionTarget,
+    localState.botConfig,
+    localState.botTickSeq,
+    localState.players,
+  ]);
+  // ────────────────────────────────────────────────────────────────
+
   // במצב מולטיפלייר ה־override מגיע עם notifications: [] ו־guidanceEnabled חסר — שומרים מקומית ומוצגים תמיד
   const state = override
     ? {
