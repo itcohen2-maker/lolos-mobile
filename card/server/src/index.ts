@@ -43,6 +43,7 @@ setInterval(() => {
   cleanupStaleRooms();
 }, 5 * 60 * 1000);
 
-server.listen(PORT, () => {
-  console.log(`🎴 Lolos server running on port ${PORT}`);
+// 0.0.0.0 — טלפון/אמולטור ברשת המקומית מתחברים ל־http://<IP-המחשב>:PORT
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🎴 Lolos server listening on 0.0.0.0:${PORT} (LAN: use this PC's IP)`);
 });

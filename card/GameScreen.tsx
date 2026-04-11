@@ -22,6 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { DiceWebView, DiceWebViewRef } from './components/DiceWebView';
 import { LulosButton } from './components/LulosButton';
 import { GoldDieFace } from './AnimatedDice';
+import { displayFontFamily } from './src/theme/fonts';
 import Svg, {
   Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon,
 } from 'react-native-svg';
@@ -199,6 +200,7 @@ function OutlinedText({ text, fontSize, color, outlineColor = '#000', outlineWid
     }),
     [outlineWidth]
   );
+  const fontFamily = displayFontFamily(text);
 
   return (
     <View style={[{ alignItems: 'center', justifyContent: 'center' }, style]}>
@@ -209,7 +211,7 @@ function OutlinedText({ text, fontSize, color, outlineColor = '#000', outlineWid
           left: off.x,
           top: off.y,
           fontSize,
-          fontFamily: 'Fredoka_700Bold',
+          fontFamily,
           fontWeight: '900',
           color: outlineColor,
           includeFontPadding: false,
@@ -218,7 +220,7 @@ function OutlinedText({ text, fontSize, color, outlineColor = '#000', outlineWid
       {/* Foreground face */}
       <Text style={{
         fontSize,
-        fontFamily: 'Fredoka_700Bold',
+        fontFamily,
         fontWeight: '900',
         color,
         includeFontPadding: false,
@@ -333,7 +335,7 @@ const socketStyles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: 'rgba(255,255,255,0.12)',
-    fontFamily: 'Fredoka_700Bold',
+    fontFamily: displayFontFamily('?'),
   },
 });
 

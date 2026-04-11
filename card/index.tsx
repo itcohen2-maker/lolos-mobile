@@ -65,8 +65,9 @@ const gameBgImg = require('./assets/bg.jpg');
 const playerScreensGradientColors = ['#070f1a', '#0f2840', '#153252'] as const;
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMultiplayer';
-import { LobbyEntry, LobbyScreen, LanguageToggle } from './src/screens/LobbyScreens';
+import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/LobbyScreens';
 import { CARDS_PER_PLAYER } from './shared/gameConstants';
+import { displayFontFamily } from './src/theme/fonts';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -93,6 +94,17 @@ const HAND_BOTTOM_OFFSET = 195;
 const HAND_ZONE_TOP = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT;
 /** שורת מיני־תוצאות — עדיין X פיקסלים מתחת לטיימר־פתיל */
 const HAND_MINI_RESULTS_BOTTOM = HAND_ZONE_TOP - 10;
+
+/**
+ * מוקאפ שולחן + משוואה (SLOT 3) — כוונון במקום אחד:
+ * - EQUATION_TABLE_TOP / SHIFT_X: מזיזים את כל בלוק השולחן הירוק על המסך.
+ * - EQUATION_BUILDER_FINE_OFFSET_Y / _X: מזיזים רק את תוכן המשוואה בתוך השולחן (לא את תמונת השולחן).
+ */
+const EQUATION_TABLE_TOP = 205;
+const EQUATION_TABLE_SHIFT_X = 10;
+const EQUATION_BUILDER_FINE_OFFSET_Y = -2;
+/** היסט אופקי של המשוואה בלבד; שלילי = שמאלה (LTR), חיובי = ימינה */
+const EQUATION_BUILDER_FINE_OFFSET_X = -10;
 
 function devCheckHandLayout() {
   if (!__DEV__) return;
@@ -125,10 +137,16 @@ interface Card {
   value?: number;
   fraction?: Fraction;
   operation?: Operation;
-  /** When type === 'wild' and card was placed on discard pile — the value it represents (0–25). */
+  /** When type === 'wild' and card was placed on discard pile — the value it represents (active range). */
   resolvedValue?: number;
   /** When type === 'fraction' and card was placed on discard pile — attack: denominator (divide by X); block: new target after fraction. */
   resolvedTarget?: number;
+}
+
+/** קלף פעולה/ג'וקר משובץ במשבצת 0 או 1 במבנה הקוביות; jokerAs רלוונטי רק לג'וקר */
+interface EquationHandSlot {
+  card: Card;
+  jokerAs: Operation | null;
 }
 
 interface Player {
@@ -142,6 +160,37 @@ interface DiceResult { die1: number; die2: number; die3: number; }
 interface EquationOption { equation: string; result: number; }
 
 type GamePhase = 'setup' | 'turn-transition' | 'pre-roll' | 'building' | 'solved' | 'roll-dice' | 'game-over';
+
+const EMPTY_ID_SET = new Set<string>();
+type DifficultyStageId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
+type AbVariant = 'control_0_12_plus' | 'variant_0_15_plus';
+
+interface DifficultyStageConfig {
+  id: DifficultyStageId;
+  rangeMax: 12 | 25;
+  enabledOperators: Operation[];
+  allowNegativeTargets: boolean;
+}
+
+const DIFFICULTY_STAGE_CONFIG: Record<DifficultyStageId, DifficultyStageConfig> = {
+  A: { id: 'A', rangeMax: 12, enabledOperators: ['+'], allowNegativeTargets: false },
+  B: { id: 'B', rangeMax: 12, enabledOperators: ['-'], allowNegativeTargets: false },
+  C: { id: 'C', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: false },
+  D: { id: 'D', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: true },
+  E: { id: 'E', rangeMax: 25, enabledOperators: ['+'], allowNegativeTargets: false },
+  F: { id: 'F', rangeMax: 25, enabledOperators: ['-'], allowNegativeTargets: false },
+  G: { id: 'G', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: false },
+  H: { id: 'H', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: true },
+};
+
+const STAGE_SEQUENCE: DifficultyStageId[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+/** צבעי תצוגה מקדימה בשורת «מתקדמים» בכניסה */
+const ADVANCED_ENTRY_STAGE_COLORS = ['#0ea5e9', '#2563eb', '#6366f1', '#8b5cf6', '#db2777', '#ea580c', '#ca8a04', '#16a34a'] as const;
+
+/** `EXPO_PUBLIC_LOCK_ADVANCED_STAGES=1` — נעילת בחירת A–H (חיבור לרכישה בעתיד). */
+const ADVANCED_STAGE_PICKER_LOCKED =
+  typeof process !== 'undefined' && process.env.EXPO_PUBLIC_LOCK_ADVANCED_STAGES === '1';
 
 interface GameState {
   phase: GamePhase;
@@ -167,9 +216,10 @@ interface GameState {
   consecutiveIdenticalPlays: number;
   identicalAlert: { playerName: string; cardDisplay: string; consecutive: number } | null;
   jokerModalOpen: boolean;
-  equationOpCard: Card | null;
-  equationOpPosition: number | null;
-  equationOpJokerOp: Operation | null;
+  /** משבצות 0/1 — קלפים מהיד בתרגיל הקוביות */
+  equationHandSlots: [EquationHandSlot | null, EquationHandSlot | null];
+  /** נבחר מהיד וממתין ללחיצה על משבצת אופרטור */
+  equationHandPick: EquationHandSlot | null;
   lastMoveMessage: string | null;
   lastDiscardCount: number;
   lastEquationDisplay: string | null;
@@ -178,6 +228,16 @@ interface GameState {
   showFractions: boolean;
   showPossibleResults: boolean;
   showSolveExercise: boolean;
+  difficultyStage: DifficultyStageId;
+  stageTransitions: number;
+  mathRangeMax: 12 | 25;
+  enabledOperators: Operation[];
+  allowNegativeTargets: boolean;
+  abVariant: AbVariant;
+  equationAttempts: number;
+  equationSuccesses: number;
+  turnStartedAt: number | null;
+  totalEquationResponseMs: number;
   timerSetting: '30' | '60' | 'off' | 'custom';
   timerCustomSeconds: number;
   winner: Player | null;
@@ -294,12 +354,13 @@ interface MoveHistoryEntry {
 }
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number }
+  | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
   | { type: 'ROLL_DICE'; values?: DiceResult }
-  | { type: 'CONFIRM_EQUATION'; result: number; equationDisplay: string; equationOps: Operation[]; equationCommit?: { cardId: string; position: 0 | 1; jokerAs: Operation | null } | null }
+  | { type: 'CONFIRM_EQUATION'; result: number; equationDisplay: string; equationOps: Operation[]; equationCommits?: { cardId: string; position: 0 | 1; jokerAs: Operation | null }[] }
+  | { type: 'RECORD_EQUATION_ATTEMPT' }
   | { type: 'RESET_ONLINE_EQ_UI' }
   | { type: 'REVERT_TO_BUILDING' }
   | { type: 'STAGE_CARD'; card: Card }
@@ -309,7 +370,9 @@ type GameAction =
   | { type: 'PLAY_IDENTICAL'; card: Card }
   | { type: 'SELECT_EQ_OP'; card: Card }
   | { type: 'PLACE_EQ_OP'; position: number }
-  | { type: 'REMOVE_EQ_OP' }
+  | { type: 'REMOVE_EQ_HAND_SLOT'; position: 0 | 1 }
+  | { type: 'CLEAR_EQ_HAND' }
+  | { type: 'CLEAR_EQ_HAND_PICK' }
   | { type: 'SELECT_EQ_JOKER'; card: Card; chosenOperation: Operation }
   | { type: 'PLAY_FRACTION'; card: Card }
   | { type: 'DEFEND_FRACTION_SOLVE'; card: Card; wildResolve?: number }
@@ -339,7 +402,7 @@ type GameAction =
 const fracTapIntercept = { fn: null as ((card: Card) => boolean) | null };
 
 // ═══════════════════════════════════════════════════════════════
-//  ARITHMETIC — strict Left-to-Right
+//  ARITHMETIC — שתי קוביות: L→R. שלוש קוביות: סדר פעולות רגיל (כמו server/equations)
 // ═══════════════════════════════════════════════════════════════
 
 function applyOperation(a: number, op: Operation | string, b: number): number | null {
@@ -399,11 +462,18 @@ function validateFractionPlay(card: Card, topDiscard: Card | undefined): boolean
   return isDivisibleByFraction(effective, card.fraction as Fraction);
 }
 
-function getEqOpCardOperation(state: GameState): Operation | null {
-  if (!state.equationOpCard) return null;
-  return state.equationOpCard.type === 'joker'
-    ? state.equationOpJokerOp
-    : state.equationOpCard.operation ?? null;
+function getHandSlotOperation(slot: EquationHandSlot | null): Operation | null {
+  if (!slot) return null;
+  return slot.card.type === 'joker' ? slot.jokerAs : slot.card.operation ?? null;
+}
+
+function countEquationHandPlaced(state: GameState): number {
+  return (state.equationHandSlots[0] ? 1 : 0) + (state.equationHandSlots[1] ? 1 : 0);
+}
+
+function isCardInEquationHand(state: GameState, cardId: string): boolean {
+  if (state.equationHandPick?.card.id === cardId) return true;
+  return state.equationHandSlots.some((s) => s?.card.id === cardId);
 }
 
 const EQ_OPS_STR = ['+', '-', '*', '/'];
@@ -442,10 +512,15 @@ function getCurrentResult(
 let cardIdCounter = 0;
 function makeId(): string { return `card-${++cardIdCounter}`; }
 
-function generateDeck(difficulty: 'easy' | 'full', includeFractions: boolean = true): Card[] {
+function generateDeck(
+  difficulty: 'easy' | 'full',
+  includeFractions: boolean = true,
+  enabledOperators?: Operation[],
+  rangeMaxOverride?: 12 | 25,
+): Card[] {
   cardIdCounter = 0;
   const cards: Card[] = [];
-  const maxNumber = difficulty === 'easy' ? 12 : 25;
+  const maxNumber = rangeMaxOverride ?? (difficulty === 'easy' ? 12 : 25);
   for (let set = 0; set < 4; set++)
     for (let v = 0; v <= maxNumber; v++)
       cards.push({ id: makeId(), type: 'number', value: v });
@@ -458,7 +533,7 @@ function generateDeck(difficulty: 'easy' | 'full', includeFractions: boolean = t
       for (let i = 0; i < count; i++)
         cards.push({ id: makeId(), type: 'fraction', fraction: frac });
   }
-  const operations: Operation[] = ['+', '-', 'x', '÷'];
+  const operations: Operation[] = enabledOperators && enabledOperators.length > 0 ? enabledOperators : ['+', '-', 'x', '÷'];
   for (const op of operations)
     for (let i = 0; i < (op === '÷' ? 3 : 4); i++)
       cards.push({ id: makeId(), type: 'operation', operation: op });
@@ -515,23 +590,25 @@ function permutations(arr: number[]): number[][] {
   return result;
 }
 
-function generateValidTargets(dice: DiceResult): EquationOption[] {
+function generateValidTargets(
+  dice: DiceResult,
+  enabledOperators?: Operation[],
+  allowNegativeTargets: boolean = false,
+  maxTarget: number = 25,
+): EquationOption[] {
+  const allowedOps = enabledOperators && enabledOperators.length > 0 ? enabledOperators : ALL_OPS;
   const values = [dice.die1, dice.die2, dice.die3];
   const perms = permutations(values);
   const seen = new Set<string>();
   const results: EquationOption[] = [];
 
   for (const [a, b, c] of perms) {
-    for (const op1 of ALL_OPS) {
-      for (const op2 of ALL_OPS) {
-        // Left-to-right כמו במשוואה: ( a op1 b ) op2 c — סוגריים בתחילת התרגיל
-        const lr1 = applyOperation(a, op1, b);
-        if (lr1 !== null) {
-          const lr = applyOperation(lr1, op2, c);
-          if (lr !== null && lr >= 0 && Number.isInteger(lr)) {
-            const eq2 = `(${a} ${op1} ${b}) ${op2} ${c} = ${lr}`;
-            if (!seen.has(`${lr}:${eq2}`)) { seen.add(`${lr}:${eq2}`); results.push({ equation: eq2, result: lr }); }
-          }
+    for (const op1 of allowedOps) {
+      for (const op2 of allowedOps) {
+        const lr = evalThreeTerms(a, op1, b, op2, c);
+        if (lr !== null && (allowNegativeTargets || lr >= 0) && Number.isInteger(lr)) {
+          const eq2 = `${a} ${op1} ${b} ${op2} ${c} = ${lr}`;
+          if (!seen.has(`${lr}:${eq2}`)) { seen.add(`${lr}:${eq2}`); results.push({ equation: eq2, result: lr }); }
         }
       }
     }
@@ -541,14 +618,14 @@ function generateValidTargets(dice: DiceResult): EquationOption[] {
     [values[0], values[1]], [values[0], values[2]], [values[1], values[2]],
   ];
   for (const [a, b] of pairs) {
-    for (const op of ALL_OPS) {
+    for (const op of allowedOps) {
       const r1 = applyOperation(a, op, b);
-      if (r1 !== null && r1 >= 0 && Number.isInteger(r1)) {
+      if (r1 !== null && (allowNegativeTargets || r1 >= 0) && Number.isInteger(r1)) {
         const eq1 = `${a} ${op} ${b} = ${r1}`;
         if (!seen.has(`${r1}:${eq1}`)) { seen.add(`${r1}:${eq1}`); results.push({ equation: eq1, result: r1 }); }
       }
       const r2 = applyOperation(b, op, a);
-      if (r2 !== null && r2 >= 0 && Number.isInteger(r2)) {
+      if (r2 !== null && (allowNegativeTargets || r2 >= 0) && Number.isInteger(r2)) {
         const eq2 = `${b} ${op} ${a} = ${r2}`;
         if (!seen.has(`${r2}:${eq2}`)) { seen.add(`${r2}:${eq2}`); results.push({ equation: eq2, result: r2 }); }
       }
@@ -557,7 +634,9 @@ function generateValidTargets(dice: DiceResult): EquationOption[] {
 
   const byResult = new Map<number, EquationOption>();
   for (const opt of results)
-    if (opt.result >= 0 && opt.result <= 25 && !byResult.has(opt.result)) byResult.set(opt.result, opt);
+    if ((allowNegativeTargets || opt.result >= 0) && opt.result <= maxTarget && !byResult.has(opt.result)) {
+      byResult.set(opt.result, opt);
+    }
   return Array.from(byResult.values()).sort((a, b) => a.result - b.result);
 }
 
@@ -597,7 +676,13 @@ function getStagedPermutations(arr: number[]): number[][] {
   return result;
 }
 
-function validateStagedCards(numberCards: Card[], opCard: Card | null, target: number): boolean {
+function validateStagedCards(
+  numberCards: Card[],
+  opCard: Card | null,
+  target: number,
+  maxWild: number = 25,
+): boolean {
+  const cap = Math.max(0, Math.min(25, maxWild));
   const wildCount = numberCards.filter(c => c.type === 'wild').length;
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
@@ -606,10 +691,11 @@ function validateStagedCards(numberCards: Card[], opCard: Card | null, target: n
     if (!opCard) {
       const sum = values.reduce((s, v) => s + v, 0);
       const wildVal = target - sum;
-      return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal);
+      return wildVal >= 0 && wildVal <= cap && Number.isInteger(wildVal);
     }
     const op = opCard.operation!;
-    for (let wildVal = 0; wildVal <= 25; wildVal++) {
+    // חייבים 0..cap — לא עד target בלבד: למשל 4 − פרא = 0 דורש פרא=4 כש-target הוא 0
+    for (let wildVal = 0; wildVal <= cap; wildVal++) {
       const allVals = [...values, wildVal];
       const perms = getStagedPermutations(allVals);
       for (const perm of perms) {
@@ -644,17 +730,23 @@ function validateStagedCards(numberCards: Card[], opCard: Card | null, target: n
   return false;
 }
 
-function computeWildValueInStaged(numberCards: Card[], opCard: Card | null, target: number): number | null {
+function computeWildValueInStaged(
+  numberCards: Card[],
+  opCard: Card | null,
+  target: number,
+  maxWild: number = 25,
+): number | null {
+  const cap = Math.max(0, Math.min(25, maxWild));
   const wildCount = numberCards.filter(c => c.type === 'wild').length;
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
   if (wildCount !== 1) return null;
   if (!opCard) {
     const wildVal = target - values.reduce((s, v) => s + v, 0);
-    return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal) ? wildVal : null;
+    return wildVal >= 0 && wildVal <= cap && Number.isInteger(wildVal) ? wildVal : null;
   }
   const op = opCard.operation!;
-  for (let wildVal = 0; wildVal <= 25; wildVal++) {
+  for (let wildVal = 0; wildVal <= cap; wildVal++) {
     const allVals = [...values, wildVal];
     const perms = getStagedPermutations(allVals);
     for (const perm of perms) {
@@ -732,9 +824,12 @@ const initialState: GameState = {
   dice: null, selectedCards: [], stagedCards: [], validTargets: [], equationResult: null,
   equationOpsUsed: [], activeOperation: null, challengeSource: null, activeFraction: null, pendingFractionTarget: null,
   fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
-  consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null,
+  consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationHandSlots: [null, null], equationHandPick: null,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
-  difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, showSolveExercise: true, timerSetting: 'off', timerCustomSeconds: 60, winner: null, message: '',
+  difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, showSolveExercise: true,
+  difficultyStage: 'E', stageTransitions: 0, mathRangeMax: 25, enabledOperators: ['+'], allowNegativeTargets: false, abVariant: 'control_0_12_plus',
+  equationAttempts: 0, equationSuccesses: 0, turnStartedAt: null, totalEquationResponseMs: 0,
+  timerSetting: 'off', timerCustomSeconds: 60, winner: null, message: '',
   roundsPlayed: 0,
   notifications: [],
   moveHistory: [],
@@ -765,11 +860,15 @@ function drawFromPile(st: GameState, count: number, pi: number): GameState {
   return s;
 }
 
-function resolveDiscardNumberCardFromStaged(stagedCards: Card[], equationResult: number): Card {
+function resolveDiscardNumberCardFromStaged(
+  stagedCards: Card[],
+  equationResult: number,
+  maxWild: number = 25,
+): Card {
   const stagedNumbers = stagedCards.filter(c => c.type === 'number' || c.type === 'wild');
   const stagedOpCard = stagedCards.find(c => c.type === 'operation') ?? null;
   const wildVal = stagedNumbers.some(c => c.type === 'wild')
-    ? computeWildValueInStaged(stagedNumbers, stagedOpCard, equationResult)
+    ? computeWildValueInStaged(stagedNumbers, stagedOpCard, equationResult, maxWild)
     : null;
 
   for (let i = stagedCards.length - 1; i >= 0; i--) {
@@ -824,7 +923,7 @@ function endTurnLogic(st: GameState, tf: (key: string, params?: MsgParams) => st
     equationOpsUsed: [],
     activeFraction: null, identicalAlert: null, suppressIdenticalOverlayOnline: false, hasPlayedCards: false,
     hasDrawnCard: false, lastCardValue: null, pendingFractionTarget: null,
-    fractionPenalty: 0, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null,
+    fractionPenalty: 0, equationHandSlots: [null, null], equationHandPick: null,
     lastDiscardCount: s.lastDiscardCount,
     lastEquationDisplay: s.lastEquationDisplay,
     roundsPlayed: s.roundsPlayed + 1,
@@ -846,6 +945,22 @@ function gameReducer(
           ? st.players.map((p) => ({ name: p.name }))
           : action.players;
       const difficulty = action.type === 'PLAY_AGAIN' ? st.difficulty : action.difficulty;
+      const stage = action.type === 'PLAY_AGAIN'
+        ? st.difficultyStage
+        : (action.difficultyStage ?? 'A');
+      const stageCfg = DIFFICULTY_STAGE_CONFIG[stage];
+      const enabledOperators = action.type === 'PLAY_AGAIN'
+        ? st.enabledOperators
+        : (action.enabledOperators && action.enabledOperators.length > 0 ? action.enabledOperators : stageCfg.enabledOperators);
+      const allowNegativeTargets = action.type === 'PLAY_AGAIN'
+        ? st.allowNegativeTargets
+        : (action.allowNegativeTargets ?? stageCfg.allowNegativeTargets);
+      const mathRangeMax = action.type === 'PLAY_AGAIN'
+        ? st.mathRangeMax
+        : (action.mathRangeMax ?? stageCfg.rangeMax);
+      const abVariant = action.type === 'PLAY_AGAIN'
+        ? st.abVariant
+        : (action.abVariant ?? 'control_0_12_plus');
       const diceMode: GameState['diceMode'] = '3';
       const fractions = action.type === 'PLAY_AGAIN' ? st.showFractions : action.fractions;
       const showPossibleResults =
@@ -855,7 +970,7 @@ function gameReducer(
       const timerSetting = action.type === 'PLAY_AGAIN' ? st.timerSetting : action.timerSetting;
       const timerCustomSeconds =
         action.type === 'PLAY_AGAIN' ? st.timerCustomSeconds : action.timerCustomSeconds ?? 60;
-      const deck = shuffle(generateDeck(difficulty, fractions));
+      const deck = shuffle(generateDeck(difficulty, fractions, enabledOperators, mathRangeMax));
       const { hands, remaining } = dealCards(deck, playersSeed.length, CARDS_PER_PLAYER);
       let drawPile = remaining;
       let firstDiscard: Card | undefined;
@@ -875,6 +990,16 @@ function gameReducer(
         soundsEnabled: st.soundsEnabled,
         guidanceEnabled: st.guidanceEnabled,
         phase: 'turn-transition', difficulty, diceMode,
+        difficultyStage: stage,
+        stageTransitions: action.type === 'PLAY_AGAIN' ? st.stageTransitions : STAGE_SEQUENCE.indexOf(stage),
+        mathRangeMax,
+        enabledOperators,
+        allowNegativeTargets,
+        abVariant,
+        equationAttempts: 0,
+        equationSuccesses: 0,
+        turnStartedAt: Date.now(),
+        totalEquationResponseMs: 0,
         showFractions: fractions, showPossibleResults, showSolveExercise,
         timerSetting, timerCustomSeconds,
         players: playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false })),
@@ -916,9 +1041,8 @@ function gameReducer(
         pendingFractionTarget: null,
         fractionPenalty: 0,
         fractionAttackResolved: false,
-        equationOpCard: null,
-        equationOpPosition: null,
-        equationOpJokerOp: null,
+        equationHandSlots: [null, null],
+        equationHandPick: null,
         possibleResultsInfoCountedThisTurn: false,
       };
     }
@@ -927,7 +1051,7 @@ function gameReducer(
       // activeOperation is purely informational — challenge card stays on pile, player plays normally
       // Fraction attack: explicit pending attack (from PLAY_FRACTION)
       if (st.pendingFractionTarget !== null && !st.fractionAttackResolved) {
-        return { ...st, phase: 'pre-roll', message: '', lastDiscardCount: 0, lastEquationDisplay: null };
+        return { ...st, phase: 'pre-roll', message: '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now() };
       }
       // Fraction attack: auto-detect fraction card on top of discard pile
       // Skip if the fraction was already resolved (penalty taken or defense played)
@@ -935,11 +1059,11 @@ function gameReducer(
       if (topDiscard && topDiscard.type === 'fraction' && !st.fractionAttackResolved) {
         const denom = fractionDenominator(topDiscard.fraction!);
 
-        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null };
+        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now() };
       }
       // Normal turn — reset; clear last-move display (הודעת עדכון רק במסך השחקן); notify if fraction chain just ended
       const fracChainEnded = st.fractionAttackResolved && topDiscard?.type === 'fraction';
-      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null };
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now() };
     }
     case 'ROLL_DICE': {
       if (st.phase !== 'pre-roll') return st;
@@ -951,7 +1075,7 @@ function gameReducer(
         s.message = tf('toast.tripleDice', { n: String(dice.die1) });
         ns = s;
       }
-      const vt = generateValidTargets(dice);
+      const vt = generateValidTargets(dice, st.enabledOperators, st.allowNegativeTargets, st.mathRangeMax);
       return { ...ns, validTargets: vt, phase: 'building', consecutiveIdenticalPlays: 0, message: ns.message || '' };
     }
     case 'CONFIRM_EQUATION': {
@@ -967,7 +1091,12 @@ function gameReducer(
         stagedCards: [],
         message: firstSolvedHint ? tf('local.solvedEquationPickCards') : '',
         hasSeenSolvedHint: st.hasSeenSolvedHint || firstSolvedHint,
+        equationSuccesses: st.equationSuccesses + 1,
+        totalEquationResponseMs: st.turnStartedAt ? st.totalEquationResponseMs + Math.max(0, Date.now() - st.turnStartedAt) : st.totalEquationResponseMs,
       };
+    }
+    case 'RECORD_EQUATION_ATTEMPT': {
+      return { ...st, equationAttempts: st.equationAttempts + 1 };
     }
     case 'REVERT_TO_BUILDING': {
       if (st.phase !== 'solved' || st.hasPlayedCards) return st;
@@ -979,7 +1108,7 @@ function gameReducer(
       if (action.card.type !== 'number' && action.card.type !== 'operation' && action.card.type !== 'wild') return st;
       if (action.card.type === 'wild' && st.stagedCards.some(c => c.type === 'wild')) return st;
       // Don't allow staging the card that's committed to the equation
-      if (st.equationOpCard && action.card.id === st.equationOpCard.id) return st;
+      if (isCardInEquationHand(st, action.card.id)) return st;
       // Max 1 operator in staging zone
       if (action.card.type === 'operation' && st.stagedCards.some(c => c.type === 'operation')) {
         return { ...st, message: tf('stage.oneOpOnly') };
@@ -997,15 +1126,19 @@ function gameReducer(
       const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
       if (stNumbers.length === 0) return { ...st, message: tf('confirm.needNumberOrWild') };
       if (st.equationResult === null) return st;
-      if (!validateStagedCards(stNumbers, stOpCard, st.equationResult)) {
+      if (!validateStagedCards(stNumbers, stOpCard, st.equationResult, st.mathRangeMax ?? 25)) {
         return { ...st, message: tf('confirm.sumMismatch') };
       }
       // Valid — remove staged cards + equation operator card from hand
       const stIds = new Set(st.stagedCards.map(c => c.id));
-      if (st.equationOpCard && st.equationOpPosition !== null) stIds.add(st.equationOpCard.id);
+      for (const slot of st.equationHandSlots) if (slot) stIds.add(slot.card.id);
       const stCp = st.players[st.currentPlayerIndex];
       const stNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: stCp.hand.filter(c => !stIds.has(c.id)) } : p);
-      const discardDisplayCard = resolveDiscardNumberCardFromStaged(st.stagedCards, st.equationResult!);
+      const discardDisplayCard = resolveDiscardNumberCardFromStaged(
+        st.stagedCards,
+        st.equationResult!,
+        st.mathRangeMax ?? 25,
+      );
       const lastCardVal = getEffectiveNumber(discardDisplayCard);
       const stDiscard = [...st.discardPile, discardDisplayCard];
       const stToast = tf('toast.equationPlayed', {
@@ -1015,7 +1148,7 @@ function gameReducer(
       });
       // TODO: add dedicated sound effect per discard count
       const moveEntry: MoveHistoryEntry = { playerIndex: st.currentPlayerIndex, cardsDiscarded: stIds.size, description: stToast };
-      let stNs: GameState = { ...st, players: stNp, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: null, challengeSource: null, equationOpsUsed: [], equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: st.lastEquationDisplay, message: '', moveHistory: [...st.moveHistory, moveEntry] };
+      let stNs: GameState = { ...st, players: stNp, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: null, challengeSource: null, equationOpsUsed: [], equationHandSlots: [null, null], equationHandPick: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: st.lastEquationDisplay, message: '', moveHistory: [...st.moveHistory, moveEntry] };
       stNs = checkWin(stNs);
       if (stNs.phase === 'game-over') return stNs;
       // Discard celebration is shown on TurnTransition only (not NotificationZone in GameScreen).
@@ -1076,25 +1209,63 @@ function gameReducer(
       return { ...st, suppressIdenticalOverlayOnline: false };
     // ── Equation operator placement (building phase only) ──
     case 'SELECT_EQ_OP': {
-      console.log('[REDUCER] SELECT_EQ_OP', 'phase=', st.phase, 'existing=', st.equationOpCard?.operation, 'card=', action.card.operation);
+      console.log('[REDUCER] SELECT_EQ_OP', 'phase=', st.phase, 'card=', action.card.operation);
       if (st.phase !== 'building') return st;
-      if (st.equationOpCard && st.equationOpPosition !== null) return st;
       if (action.card.type !== 'operation') return st;
-      return { ...st, equationOpCard: action.card, equationOpJokerOp: null, equationOpPosition: null };
+      const placed = countEquationHandPlaced(st);
+      if (placed >= 2 && !st.equationHandPick) {
+        return { ...st, message: tf('equation.handSlotsFull') };
+      }
+      if (st.equationHandSlots[0]?.card.id === action.card.id) {
+        return { ...st, equationHandSlots: [null, st.equationHandSlots[1]], equationHandPick: null, message: '' };
+      }
+      if (st.equationHandSlots[1]?.card.id === action.card.id) {
+        return { ...st, equationHandSlots: [st.equationHandSlots[0], null], equationHandPick: null, message: '' };
+      }
+      return { ...st, equationHandPick: { card: action.card, jokerAs: null }, message: '' };
     }
     case 'SELECT_EQ_JOKER': {
       if (st.phase !== 'building') return st;
-      return { ...st, equationOpCard: action.card, equationOpJokerOp: action.chosenOperation, equationOpPosition: null, jokerModalOpen: false, selectedCards: [] };
+      const placed = countEquationHandPlaced(st);
+      if (placed >= 2 && !st.equationHandPick) {
+        return { ...st, message: tf('equation.handSlotsFull') };
+      }
+      if (st.equationHandSlots[0]?.card.id === action.card.id) {
+        return { ...st, equationHandSlots: [null, st.equationHandSlots[1]], equationHandPick: null, message: '' };
+      }
+      if (st.equationHandSlots[1]?.card.id === action.card.id) {
+        return { ...st, equationHandSlots: [st.equationHandSlots[0], null], equationHandPick: null, message: '' };
+      }
+      return {
+        ...st,
+        equationHandPick: { card: action.card, jokerAs: action.chosenOperation },
+        jokerModalOpen: false,
+        selectedCards: [],
+        message: '',
+      };
     }
     case 'PLACE_EQ_OP': {
-      console.log('[REDUCER] PLACE_EQ_OP', 'pos=', action.position, 'hasCard=', !!st.equationOpCard);
-      if (!st.equationOpCard || action.position < 0 || action.position > 1) return st;
-      return { ...st, equationOpPosition: action.position };
+      const pick = st.equationHandPick;
+      console.log('[REDUCER] PLACE_EQ_OP', 'pos=', action.position, 'hasPick=', !!pick);
+      if (!pick || action.position < 0 || action.position > 1) return st;
+      if (pick.card.type === 'joker' && pick.jokerAs == null) return st;
+      const slots: [EquationHandSlot | null, EquationHandSlot | null] = [...st.equationHandSlots];
+      if (slots[0]?.card.id === pick.card.id) slots[0] = null;
+      if (slots[1]?.card.id === pick.card.id) slots[1] = null;
+      slots[action.position as 0 | 1] = { card: pick.card, jokerAs: pick.jokerAs };
+      return { ...st, equationHandSlots: slots, equationHandPick: null, message: '' };
     }
-    case 'REMOVE_EQ_OP': {
-      console.log('[REDUCER] REMOVE_EQ_OP');
-      return { ...st, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null };
+    case 'REMOVE_EQ_HAND_SLOT': {
+      const slots: [EquationHandSlot | null, EquationHandSlot | null] = [...st.equationHandSlots];
+      slots[action.position] = null;
+      return { ...st, equationHandSlots: slots, message: '' };
     }
+    case 'CLEAR_EQ_HAND': {
+      console.log('[REDUCER] CLEAR_EQ_HAND');
+      return { ...st, equationHandSlots: [null, null], equationHandPick: null, message: '' };
+    }
+    case 'CLEAR_EQ_HAND_PICK':
+      return { ...st, equationHandPick: null, message: '' };
     case 'PLAY_FRACTION': {
       if (st.hasPlayedCards) return st;
       if (action.card.type !== 'fraction') return st;
@@ -1156,14 +1327,15 @@ function gameReducer(
       if (st.pendingFractionTarget === null) return st;
       const pen = st.fractionPenalty;
       if (pen <= 0) return st;
-      const maxWild = st.difficulty === 'easy' ? 12 : 25;
+      const maxWild = st.mathRangeMax;
       const cp = st.players[st.currentPlayerIndex];
       let cardToDiscard: Card;
       let lastVal: number;
       if (action.card.type === 'number') {
-        if (!action.card.value || action.card.value % pen !== 0) return st;
+        const nv = action.card.value;
+        if (nv == null || nv % pen !== 0) return st;
         cardToDiscard = action.card;
-        lastVal = action.card.value;
+        lastVal = nv;
       } else if (action.card.type === 'wild') {
         const v = action.wildResolve;
         if (v == null || v <= 0 || v > maxWild || v % pen !== 0) return st;
@@ -1323,7 +1495,7 @@ function gameReducer(
       AsyncStorage.removeItem('lulos_guidance_notifications');
       return { ...initialState, hasSeenIntroHint: st.hasSeenIntroHint, hasSeenSolvedHint: st.hasSeenSolvedHint, soundsEnabled: st.soundsEnabled, guidanceEnabled: st.guidanceEnabled };
     case 'RESET_ONLINE_EQ_UI':
-      return { ...st, equationOpCard: null, equationOpPosition: null, equationOpJokerOp: null, jokerModalOpen: false, selectedCards: [] };
+      return { ...st, equationHandSlots: [null, null], equationHandPick: null, jokerModalOpen: false, selectedCards: [] };
     default: return st;
   }
 }
@@ -1408,12 +1580,11 @@ function GameProvider({ children }: { children: ReactNode }) {
     if (override.state.phase !== 'building') onlineDiceSigRef.current = null;
   }, [override, override?.state.phase, override?.state.dice?.die1, override?.state.dice?.die2, override?.state.dice?.die3]);
 
-  const useServerEquationOp =
+  const useServerEquationHand =
     !!override &&
     override.state.phase === 'solved' &&
     override.state.equationResult != null &&
-    override.state.equationOpCard != null &&
-    override.state.equationOpPosition != null;
+    (override.state.equationHandSlots[0] != null || override.state.equationHandSlots[1] != null);
 
   useEffect(() => {
     if (!override) return;
@@ -1426,9 +1597,8 @@ function GameProvider({ children }: { children: ReactNode }) {
   const state = override
     ? {
         ...override.state,
-        equationOpCard: useServerEquationOp ? override.state.equationOpCard : localState.equationOpCard,
-        equationOpPosition: useServerEquationOp ? override.state.equationOpPosition : localState.equationOpPosition,
-        equationOpJokerOp: useServerEquationOp ? override.state.equationOpJokerOp : localState.equationOpJokerOp,
+        equationHandSlots: useServerEquationHand ? override.state.equationHandSlots : localState.equationHandSlots,
+        equationHandPick: useServerEquationHand ? null : localState.equationHandPick,
         jokerModalOpen: localState.jokerModalOpen,
         selectedCards: localState.jokerModalOpen ? localState.selectedCards : override.state.selectedCards,
         notifications: localState.notifications,
@@ -1454,7 +1624,7 @@ function GameProvider({ children }: { children: ReactNode }) {
       action.type === 'SET_SOUNDS_ENABLED' ||
       action.type === 'DISMISS_INTRO_HINT';
     const eqUiActions = new Set<GameAction['type']>([
-      'SELECT_EQ_OP', 'SELECT_EQ_JOKER', 'PLACE_EQ_OP', 'REMOVE_EQ_OP',
+      'SELECT_EQ_OP', 'SELECT_EQ_JOKER', 'PLACE_EQ_OP', 'REMOVE_EQ_HAND_SLOT', 'CLEAR_EQ_HAND', 'CLEAR_EQ_HAND_PICK',
       'OPEN_JOKER_MODAL', 'CLOSE_JOKER_MODAL', 'RESET_ONLINE_EQ_UI',
     ]);
     const myIdx = override?.state?.myPlayerIndex;
@@ -1488,19 +1658,31 @@ function AppModal({
   overlayOpacity = 0.6,
   boxStyle,
   topAligned = false,
+  customHeader,
 }: {
   visible: boolean;
   onClose: () => void;
-  title: string;
+  title?: string;
   children: React.ReactNode;
   overlayOpacity?: number;
   boxStyle?: any;
   topAligned?: boolean;
+  /** כותרת מותאמת (למשך רצף ויזואלי); אם מוגדר — לא משתמשים ב־title+✕ ברירת המחדל */
+  customHeader?: React.ReactNode;
 }) {
   return (
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={[mS.overlay, topAligned && mS.overlayTop, { backgroundColor: `rgba(0,0,0,${overlayOpacity})` }]}><View style={[mS.box, boxStyle]}>
-        <View style={mS.header}><Text style={mS.title}>{title}</Text><TouchableOpacity onPress={onClose}><Text style={mS.close}>✕</Text></TouchableOpacity></View>
+        {customHeader != null ? (
+          customHeader
+        ) : (
+          <View style={mS.header}>
+            <Text style={mS.title}>{title ?? ''}</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={mS.close}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={{ flex: 1, minHeight: 0 }}>{children}</View>
       </View></View>
     </RNModal>
@@ -1542,17 +1724,18 @@ function getTipOfTheTurn(st: GameState, tf: (key: string, params?: MsgParams) =>
   return tf('gameTip.defaultGuide');
 }
 
-function getDeckCounts(numberRange: 'easy' | 'full', fractions: boolean) {
+function getDeckCounts(numberRange: 'easy' | 'full', fractions: boolean, enabledOperators: Operation[] = ['+', '-', 'x', '÷']) {
   const numCount = numberRange === 'easy' ? 52 : 104;
   const fracCount = fractions ? 15 : 0;
-  return { numCount, fracCount, opCount: 15, jokerCount: 4, wildCount: 4 };
+  const opCount = enabledOperators.reduce((sum, op) => sum + (op === '÷' ? 3 : 4), 0);
+  return { numCount, fracCount, opCount, jokerCount: 4, wildCount: 4 };
 }
 
-function CardsCatalogContent({ numberRange, fractions }: { numberRange: 'easy' | 'full'; fractions: boolean }) {
+function CardsCatalogContent({ numberRange, fractions, enabledOperators }: { numberRange: 'easy' | 'full'; fractions: boolean; enabledOperators?: Operation[] }) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const rangeLabel = numberRange === 'easy' ? '0–12' : '0–25';
-  const counts = getDeckCounts(numberRange, fractions);
+  const counts = getDeckCounts(numberRange, fractions, enabledOperators ?? ['+', '-']);
   const items: { title: string; body: string; count: number }[] = [
     { title: t('catalog.numberTitle', { range: rangeLabel }), body: t('catalog.numberBody', { range: rangeLabel }), count: counts.numCount },
     { title: t('catalog.opTitle'), body: t('catalog.opBody'), count: counts.opCount },
@@ -1584,7 +1767,7 @@ function RulesContent({ state, numberRange, fractions }: { state: GameState | nu
   const tip = state ? getTipOfTheTurn(state, t) : t('gameTip.start');
   const range = numberRange ?? state?.difficulty ?? 'full';
   const frac = fractions ?? state?.showFractions ?? true;
-  const counts = getDeckCounts(range, frac);
+  const counts = getDeckCounts(range, frac, state?.enabledOperators ?? ['+', '-']);
   const cardTypeLines: { text: string; count: number; detail?: string }[] = [
     { text: t('rulesLine.numCard'), count: counts.numCount },
     { text: t('rulesLine.fracCard'), count: counts.fracCount, detail: '½×6, ⅓×4, ¼×3, ⅕×2' },
@@ -1672,15 +1855,16 @@ function Text3D({ text, fontSize, faceColor, darkColor, lightColor, maxOffset = 
   text: string; fontSize: number; faceColor: string; darkColor: string; lightColor: string; maxOffset?: number;
 }) {
   const colors = interpolateColor(darkColor, lightColor, maxOffset);
+  const fontFamily = displayFontFamily(text);
   return (
     <View>
       {colors.map((color, i) => (
         <Text key={i} style={{
           position: 'absolute', top: maxOffset - i, left: maxOffset - i,
-          color, fontSize, fontFamily: 'Fredoka_700Bold',
+          color, fontSize, fontFamily,
         }}>{text}</Text>
       ))}
-      <Text style={{ color: faceColor, fontSize, fontFamily: 'Fredoka_700Bold' }}>{text}</Text>
+      <Text style={{ color: faceColor, fontSize, fontFamily }}>{text}</Text>
     </View>
   );
 }
@@ -2048,6 +2232,7 @@ function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selecte
 }
 
 function WildCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+  const { state } = useGame();
   const w = small ? 100 : 110;
   const h = small ? 140 : 158;
   const fs = small ? 22 : 26;
@@ -2087,7 +2272,7 @@ function WildCard({ card, selected, onPress, small }: { card: Card; selected?: b
                 ) : (
                   <>
                     <Text style={{ fontSize: fs, fontWeight: '900', color: '#5B21B6', textAlign: 'center' }}>★</Text>
-                    <Text style={{ fontSize: small ? 10 : 11, fontWeight: '700', color: '#6D28D9', marginTop: 2 }}>0–25</Text>
+                    <Text style={{ fontSize: small ? 10 : 11, fontWeight: '700', color: '#6D28D9', marginTop: 2 }}>{state.mathRangeMax === 12 ? '0–12' : '0–25'}</Text>
                   </>
                 )}
               </View>
@@ -2391,12 +2576,12 @@ function ResultsChip({ onPress, matchCount }: { onPress: () => void; matchCount:
     const ease = Easing.inOut(Easing.sin);
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(heartScale, { toValue: 1.055, duration: 1500, useNativeDriver: true, easing: ease }),
-        Animated.timing(heartScale, { toValue: 1, duration: 850, useNativeDriver: true, easing: ease }),
-        Animated.delay(180),
-        Animated.timing(heartScale, { toValue: 1.028, duration: 1000, useNativeDriver: true, easing: ease }),
-        Animated.timing(heartScale, { toValue: 1, duration: 700, useNativeDriver: true, easing: ease }),
-        Animated.delay(2800),
+        Animated.timing(heartScale, { toValue: 1.055, duration: 1100, useNativeDriver: true, easing: ease }),
+        Animated.timing(heartScale, { toValue: 1, duration: 650, useNativeDriver: true, easing: ease }),
+        Animated.delay(120),
+        Animated.timing(heartScale, { toValue: 1.028, duration: 750, useNativeDriver: true, easing: ease }),
+        Animated.timing(heartScale, { toValue: 1, duration: 550, useNativeDriver: true, easing: ease }),
+        Animated.delay(1700),
       ])
     );
     loop.start();
@@ -2957,45 +3142,46 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   };
 
   // Reset all — נגיש מבחוץ (כפתור איפוס באיזור תוצאות אפשריות)
+  const hasEquationHand =
+    state.equationHandPick != null || state.equationHandSlots[0] != null || state.equationHandSlots[1] != null;
   const resetAll = useCallback(() => {
     if (!interactive) return;
     if (state.phase === 'solved') dispatch({ type: 'REVERT_TO_BUILDING' });
-    if (state.equationOpCard) dispatch({ type: 'REMOVE_EQ_OP' });
+    if (hasEquationHand) dispatch({ type: 'CLEAR_EQ_HAND' });
     setDice1(null); setDice2(null); setDice3(null);
     setOp1(null); setOp2(null);
     resultFade.setValue(0);
-  }, [interactive, state.phase, state.equationOpCard, dispatch]);
+  }, [interactive, state.phase, hasEquationHand, dispatch]);
   useImperativeHandle(ref, () => ({ resetAll }), [resetAll]);
 
-  // ── Computation (L2R) with equation op card override ──
+  // ── Computation: 2 קוביות L→R; 3 קוביות — evalThreeTerms (×÷ לפני +−) כמו validTargets מהשרת
   const d1v = dice1 !== null ? diceValues[dice1] : null;
   const d2v = dice2 !== null ? diceValues[dice2] : null;
   const d3v = dice3 !== null ? diceValues[dice3] : null;
 
-  // Effective operators: hand card overrides local cycle when placed in position 0 or 1
-  const eqOpOperation = getEqOpCardOperation(state);
-  const effectiveOp1 = (state.equationOpCard && state.equationOpPosition === 0 && eqOpOperation) ? eqOpOperation : op1;
-  const effectiveOp2 = (state.equationOpCard && state.equationOpPosition === 1 && eqOpOperation) ? eqOpOperation : op2;
+  // Effective operators: hand cards override local cycle when placed in position 0 or 1
+  const handOp0 = getHandSlotOperation(state.equationHandSlots[0]);
+  const handOp1 = getHandSlotOperation(state.equationHandSlots[1]);
+  const effectiveOp1 = handOp0 ?? op1;
+  const effectiveOp2 = handOp1 ?? op2;
 
-  // Sub-expression: (dice1 effectiveOp1 dice2)
+  // Sub-expression: (dice1 effectiveOp1 dice2) — ל־UI (מתי להציג סלוט שלישי)
   let subResult: number | null = null;
   if (d1v !== null && d2v !== null && effectiveOp1 !== null) {
     subResult = applyOperation(d1v, effectiveOp1, d2v);
   }
 
-  // Final result: (subResult effectiveOp2 dice3), או subResult כשמשתמשים רק בשתי קוביות מהשלוש
   let finalResult: number | null = null;
-  if (subResult !== null) {
+  if (d1v !== null && d2v !== null && effectiveOp1 !== null) {
     if (d3v !== null && effectiveOp2 !== null) {
-      finalResult = applyOperation(subResult, effectiveOp2, d3v);
+      finalResult = evalThreeTerms(d1v, effectiveOp1, d2v, effectiveOp2, d3v);
     } else if (d3v === null && effectiveOp2 === null) {
       finalResult = subResult;
     } else if (
       d3v === null &&
       effectiveOp2 !== null &&
-      state.equationOpCard &&
-      state.equationOpPosition === 1 &&
-      eqOpOperation
+      state.equationHandSlots[1] != null &&
+      handOp1
     ) {
       // קלף פעולה/ג'וקר בסלוט השני אבל בלי קוביה שלישית — same as 2-dice finish; usedOps עדיין כולל את האתגר
       finalResult = subResult;
@@ -3004,8 +3190,14 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   if (finalResult !== null && (typeof finalResult !== 'number' || !Number.isFinite(finalResult))) finalResult = null;
 
   // Error states
-  const hasError = (d1v !== null && d2v !== null && effectiveOp1 !== null && subResult === null) ||
-    (subResult !== null && d3v !== null && effectiveOp2 !== null && finalResult === null);
+  const hasError =
+    (d1v !== null && d2v !== null && effectiveOp1 !== null && subResult === null) ||
+    (d1v !== null &&
+      d2v !== null &&
+      d3v !== null &&
+      effectiveOp1 !== null &&
+      effectiveOp2 !== null &&
+      evalThreeTerms(d1v, effectiveOp1, d2v, effectiveOp2, d3v) === null);
 
   // Animate result appearance
   const prevResult = useRef<number | null>(null);
@@ -3021,9 +3213,11 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   // Validation — חייב להתאים ל־hConfirm: אחרת «בחר קלפים» מוצג אבל לחיצה לא עושה כלום
   const filledCount = [dice1, dice2, dice3].filter(d => d !== null).length;
-  const eqOpReady = !state.equationOpCard || state.equationOpPosition !== null;
+  const eqOpReady = state.equationHandPick === null;
   const jokerCommitReady =
-    !state.equationOpCard || state.equationOpCard.type !== 'joker' || state.equationOpJokerOp != null;
+    (!state.equationHandSlots[0] || state.equationHandSlots[0].card.type !== 'joker' || state.equationHandSlots[0].jokerAs != null) &&
+    (!state.equationHandSlots[1] || state.equationHandSlots[1].card.type !== 'joker' || state.equationHandSlots[1].jokerAs != null) &&
+    (!state.equationHandPick || state.equationHandPick.card.type !== 'joker' || state.equationHandPick.jokerAs != null);
   const ok =
     finalResult !== null &&
     Number.isFinite(finalResult) &&
@@ -3043,26 +3237,33 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const confirmRef = useRef<() => void>(() => {});
   const hConfirm = () => {
     if (!interactive) return;
+    dispatch({ type: 'RECORD_EQUATION_ATTEMPT' });
     if (!ok || finalResult === null || d1v === null || d2v === null || effectiveOp1 === null) return;
-    if (state.equationOpCard && state.equationOpPosition === null) return;
+    if (state.equationHandPick) return;
     let display: string;
     if (d3v !== null && effectiveOp2 !== null) {
-      display = `(${d1v} ${effectiveOp1} ${d2v}) ${effectiveOp2} ${d3v} = ${finalResult}`;
+      display = `${d1v} ${effectiveOp1} ${d2v} ${effectiveOp2} ${d3v} = ${finalResult}`;
     } else {
       display = `${d1v} ${effectiveOp1} ${d2v} = ${finalResult}`;
     }
-    const oc = state.equationOpCard;
-    const pos = state.equationOpPosition;
-    let equationCommit: { cardId: string; position: 0 | 1; jokerAs: Operation | null } | null = null;
-    if (oc && pos !== null) {
-      if (oc.type === 'joker' && !state.equationOpJokerOp) return;
-      equationCommit = {
-        cardId: oc.id,
-        position: pos as 0 | 1,
-        jokerAs: oc.type === 'joker' ? state.equationOpJokerOp : null,
-      };
+    const equationCommits: { cardId: string; position: 0 | 1; jokerAs: Operation | null }[] = [];
+    for (const pos of [0, 1] as const) {
+      const slot = state.equationHandSlots[pos];
+      if (!slot) continue;
+      if (slot.card.type === 'joker' && slot.jokerAs == null) return;
+      equationCommits.push({
+        cardId: slot.card.id,
+        position: pos,
+        jokerAs: slot.card.type === 'joker' ? slot.jokerAs : null,
+      });
     }
-    dispatch({ type: 'CONFIRM_EQUATION', result: finalResult, equationDisplay: display, equationOps: usedOps, equationCommit });
+    dispatch({
+      type: 'CONFIRM_EQUATION',
+      result: finalResult,
+      equationDisplay: display,
+      equationOps: usedOps,
+      equationCommits: equationCommits.length > 0 ? equationCommits : undefined,
+    });
   };
   confirmRef.current = hConfirm;
 
@@ -3114,16 +3315,17 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   const renderOpBtn = (which: 1 | 2, currentOp: string | null, enabled: boolean) => {
     const posIdx = which - 1; // 0 or 1
-    const isHandPlaced = state.equationOpCard !== null && state.equationOpPosition === posIdx;
-    const isWaitingPlacement = state.equationOpCard !== null && state.equationOpPosition === null;
-    const isJoker = state.equationOpCard?.type === 'joker';
-    const handOp = eqOpOperation; // from getEqOpCardOperation
+    const slotBinding = state.equationHandSlots[posIdx as 0 | 1];
+    const isHandPlaced = slotBinding !== null;
+    const isWaitingPlacement = state.equationHandPick !== null;
+    const isJoker = slotBinding?.card.type === 'joker';
+    const handOp = getHandSlotOperation(slotBinding);
     const displayOp = isHandPlaced && handOp ? handOp : currentOp;
 
     const onPress = () => {
       if (isSolved || !enabled) return;
       if (isHandPlaced) {
-        dispatch({ type: 'REMOVE_EQ_OP' });
+        dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: posIdx as 0 | 1 });
         return;
       }
       if (isWaitingPlacement) {
@@ -3217,7 +3419,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const buildTitle = t('equation.buildTitle');
 
   return (
-    <View style={[eqS.wrap, { transform: [{ translateY: 10 }] }, isSolved && { opacity: 0.5 }]}>
+    <View style={[eqS.wrap, { transform: [{ translateX: EQUATION_BUILDER_FINE_OFFSET_X }, { translateY: EQUATION_BUILDER_FINE_OFFSET_Y }] }, isSolved && { opacity: 0.5 }]}>
       <View style={{ alignSelf: 'stretch', alignItems: 'center', marginBottom: 4 }}>
         <Text style={{ color: '#000000', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
           {buildTitle}
@@ -3364,12 +3566,13 @@ function StagingZone() {
   if (state.phase !== 'solved' || state.equationResult === null || state.hasPlayedCards || state.pendingFractionTarget !== null) return null;
 
   const target = state.equationResult!;
+  const maxW = state.mathRangeMax ?? 25;
   const numberAndWild = staged.filter(c => c.type === 'number' || c.type === 'wild');
   const stOpCard = staged.filter(c => c.type === 'operation')[0] ?? null;
   const hasWild = numberAndWild.some(c => c.type === 'wild');
-  const wildVal = hasWild ? computeWildValueInStaged(numberAndWild, stOpCard, target) : null;
+  const wildVal = hasWild ? computeWildValueInStaged(numberAndWild, stOpCard, target, maxW) : null;
   const sum = numberAndWild.reduce((s, c) => s + (c.type === 'number' ? (c.value ?? 0) : (wildVal ?? 0)), 0);
-  const matches = hasCards && validateStagedCards(numberAndWild, stOpCard, target);
+  const matches = hasCards && validateStagedCards(numberAndWild, stOpCard, target, maxW);
 
   const clearAll = () => { staged.forEach(c => dispatch({type:'UNSTAGE_CARD',card:c})); };
 
@@ -3438,11 +3641,11 @@ const FAN_DEFAULT_SPACING = 1.0;
 const PINCH_CARD_THRESHOLD = 8;
 const FAN_DRAG_START_DX = 6;
 
-function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, defenseValidCardIds, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false }: {
+function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandPendingId, defenseValidCardIds, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false }: {
   cards: Card[];
   stagedCardIds: Set<string>;
-  equationOpCardId: string | null;
-  equationOpPlaced: boolean;
+  equationHandPlacedIds: Set<string>;
+  equationHandPendingId: string | null;
   defenseValidCardIds: Set<string> | null;
   forwardCardId: string | null;
   onTap: (card: Card) => void;
@@ -3652,7 +3855,9 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
     <View style={{ width: SCREEN_W, height: fanH, overflow: 'visible' }} {...panResponder.panHandlers}>
       {cards.map((card, i) => {
         const isStaged = stagedCardIds.has(card.id);
-        const isEqOp = equationOpCardId === card.id;
+        const isEqPending = equationHandPendingId === card.id;
+        const isEqPlacedInSlot = equationHandPlacedIds.has(card.id);
+        const isEqOp = isEqPending || isEqPlacedInSlot;
         const isDefenseValid = defenseValidCardIds !== null && defenseValidCardIds.has(card.id);
         const isDefenseInvalid = defenseValidCardIds !== null && !defenseValidCardIds.has(card.id);
         const isForward = false;
@@ -3708,7 +3913,7 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
             style={{
               position: 'absolute',
               left: SCREEN_W / 2 - FAN_CARD_W / 2,
-              top: isEqOp && !equationOpPlaced ? 30 : isStaged ? 35 : 20,
+              top: isEqPending ? 30 : isStaged ? 35 : 20,
               width: FAN_CARD_W,
               height: FAN_CARD_H,
               transform: [
@@ -3744,7 +3949,7 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
               }),
             }} />
             {/* Purple glow behind selected equation op card */}
-            {isEqOp && !equationOpPlaced && (
+            {isEqPending && (
               <View style={{
                 position: 'absolute', top: -8, left: -8, right: -8, bottom: -8,
                 borderRadius: 18, backgroundColor: 'rgba(124,58,237,0.35)',
@@ -3768,7 +3973,7 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
               }} />
             )}
             {/* Bold orange ring — קלפים שנבחרו לשילוח (שלב solved) */}
-            {isStaged && !(isEqOp && !equationOpPlaced) && (
+            {isStaged && !isEqPending && (
               <View
                 pointerEvents="none"
                 style={{
@@ -3811,7 +4016,7 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
             >
               <View style={[
                 isStaged && { borderWidth: 3, borderColor: '#FF6B00', borderRadius: 12 },
-                isEqOp && !equationOpPlaced && { borderWidth: 2, borderColor: '#A78BFA', borderRadius: 12 },
+                isEqPending && { borderWidth: 2, borderColor: '#A78BFA', borderRadius: 12 },
                 isDefenseValid && { borderWidth: 2, borderColor: '#34A853', borderRadius: 12 },
               ]}>
                 <GameCard card={card} selected={isStaged} small onPress={undefined} />
@@ -3825,7 +4030,7 @@ function SimpleHand({ cards, stagedCardIds, equationOpCardId, equationOpPlaced, 
               }} pointerEvents="none" />
             )}
             {/* Dim overlay for placed equation op card */}
-            {isEqOp && equationOpPlaced && (
+            {isEqPlacedInSlot && (
               <View style={{
                 position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                 borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.5)',
@@ -3890,7 +4095,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
   const td = state.discardPile[state.discardPile.length-1];
   const hasFracDefense = state.pendingFractionTarget !== null;
-  const maxWildDefense = state.difficulty === 'easy' ? 12 : 25;
+  const maxWildDefense = state.mathRangeMax;
   const wildDefensePickValues = useMemo(
     () => (hasFracDefense && state.fractionPenalty > 0 ? validWildValuesForFractionDefense(state.fractionPenalty, maxWildDefense) : []),
     [hasFracDefense, state.fractionPenalty, maxWildDefense],
@@ -3958,27 +4163,29 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     if (soundOn) playCardSelectSound();
 
     if (card.type === 'fraction' && !hasFracDefense) onFractionTapForOnb?.();
-    const pushFractionBubble = (message: string) => {
+    const pushFractionBubble = (_legacyMessage: string) => {
+      const body = t('fraction.attackPlayedExplain');
       const now = Date.now();
       const last = lastFractionBubbleRef.current;
-      if (last && last.key === message && now - last.at < 400) return;
-      lastFractionBubbleRef.current = { key: message, at: now };
+      if (last && last.key === body && now - last.at < 400) return;
+      lastFractionBubbleRef.current = { key: body, at: now };
       dispatch({
         type: 'PUSH_NOTIFICATION',
         payload: {
           id: `frac-play-${Date.now()}`,
           title: t('fraction.challengeToastTitle'),
-          message,
+          message: '',
+          body,
           emoji: '⚔️',
           style: 'warning',
-          autoDismissMs: 2200,
+          autoDismissMs: 8500,
         },
       });
     };
 
     // ── Fraction defense: מספר (מתחלק), פרא (בחירת ערך במודאל), או שבר; ג'וקר לא מגן ──
     if (hasFracDefense) {
-      if (card.type === 'number' && card.value && card.value % state.fractionPenalty === 0) {
+      if (card.type === 'number' && card.value != null && card.value % state.fractionPenalty === 0) {
         dispatch({ type: 'DEFEND_FRACTION_SOLVE', card });
       } else if (card.type === 'wild' && wildDefensePickValues.length > 0) {
         setWildFracDefenseCard(card);
@@ -3991,10 +4198,11 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
             payload: {
               id: `frac-defense-hint-${Date.now()}`,
               title: t('fraction.challengeToastTitle'),
-              message: t('fraction.counterHint'),
+              message: '',
+              body: `${t('fraction.counterHint')}\n\n${t('fraction.counterHintDetail')}`,
               emoji: '🛡️',
               style: 'info',
-              autoDismissMs: 2600,
+              autoDismissMs: 10000,
             },
           });
         }
@@ -4010,14 +4218,21 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     }
     if (bl) {
       if (card.type === 'operation') {
-        if (state.equationOpCard?.id === card.id) {
-          dispatch({ type: 'REMOVE_EQ_OP' });
-        } else if (!state.equationOpCard || state.equationOpPosition === null) {
+        if (state.equationHandSlots[0]?.card.id === card.id) {
+          dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: 0 });
+        } else if (state.equationHandSlots[1]?.card.id === card.id) {
+          dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: 1 });
+        } else if (state.equationHandPick?.card.id === card.id) {
+          dispatch({ type: 'CLEAR_EQ_HAND_PICK' });
+        } else {
           dispatch({ type: 'SELECT_EQ_OP', card });
         }
       }
       else if (card.type === 'fraction') { if (fracTapIntercept.fn && fracTapIntercept.fn(card)) return; pushFractionBubble(t('fraction.bubblePlayed')); dispatch({ type: 'PLAY_FRACTION', card }); }
       else if (card.type === 'joker') dispatch({ type: 'OPEN_JOKER_MODAL', card });
+      else if (card.type === 'number' || card.type === 'wild') {
+        dispatch({ type: 'SET_MESSAGE', message: t('hand.buildingNumberWildHint') });
+      }
       return;
     }
     if (so) {
@@ -4039,7 +4254,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     ? new Set<string>(
         sorted.filter(c => {
           const pen = state.fractionPenalty;
-          if (c.type === 'number' && c.value && c.value % pen === 0) return true;
+          if (c.type === 'number' && c.value != null && c.value % pen === 0) return true;
           if (c.type === 'fraction') return true;
           if (c.type === 'wild' && wildDefensePickValues.length > 0) return true;
           return false;
@@ -4048,6 +4263,12 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     : null;
 
   const forwardCardId = null;
+  const equationHandPlacedIds = new Set(
+    [state.equationHandSlots[0]?.card.id, state.equationHandSlots[1]?.card.id].filter(
+      (id): id is string => id != null && id !== '',
+    ),
+  );
+  const equationHandPendingId = state.equationHandPick?.card.id ?? null;
 
   return (
     <>
@@ -4079,7 +4300,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
         </View>
       </AppModal>
       <View style={{ width: '100%', overflow: 'visible' }} pointerEvents="box-none">
-        <SimpleHand cards={sorted} stagedCardIds={stagedIds} equationOpCardId={state.equationOpCard?.id ?? null} equationOpPlaced={state.equationOpPosition !== null} defenseValidCardIds={defenseValidIds} forwardCardId={forwardCardId} onTap={tap} onCenterCard={onCenterCard} waitingMode={isOnlineWaiting} />
+        <SimpleHand cards={sorted} stagedCardIds={stagedIds} equationHandPlacedIds={equationHandPlacedIds} equationHandPendingId={equationHandPendingId} defenseValidCardIds={defenseValidIds} forwardCardId={forwardCardId} onTap={tap} onCenterCard={onCenterCard} waitingMode={isOnlineWaiting} />
       </View>
     </>
   );
@@ -4425,13 +4646,20 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
   const safe = useGameSafeArea();
   const [playerCount, setPlayerCount] = useState(2);
   const [numberRange, setNumberRange] = useState<'easy' | 'full'>('full');
+  const [difficultyStage, setDifficultyStage] = useState<DifficultyStageId>('E');
+  const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+']);
+  const [allowNegativeTargets, setAllowNegativeTargets] = useState(false);
+  const [abVariant, setAbVariant] = useState<AbVariant>('control_0_12_plus');
   const [fractions, setFractions] = useState(true);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timer, setTimer] = useState<'30' | '60' | 'off' | 'custom'>('off');
   const [customTimerSeconds, setCustomTimerSeconds] = useState(60);
   const [timerCustomModalOpen, setTimerCustomModalOpen] = useState(false);
+  const [guidancePromptOpen, setGuidancePromptOpen] = useState(true);
   const [guidanceOn, setGuidanceOn] = useState(true); // הדרכה והסברים — משתמש חוזר יכול לכבות
+  const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
+  const [advancedStageExpanded, setAdvancedStageExpanded] = useState<DifficultyStageId | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const [futureLabOpen, setFutureLabOpen] = useState(false);
@@ -4462,6 +4690,39 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     { key: '60', label: t('lobby.timerMin'), accessibilityLabel: t('start.timerA11y.min1') },
     { key: 'custom', label: t('lobby.timerCustom'), accessibilityLabel: t('start.timerA11y.custom') },
   ], [t]);
+  const guidanceWheelIndex = timer === 'custom' ? 7 : 6;
+  const advancedWheelIndex = timer === 'custom' ? 8 : 7;
+
+  useEffect(() => {
+    const cfg = DIFFICULTY_STAGE_CONFIG[difficultyStage];
+    setNumberRange(cfg.rangeMax === 12 ? 'easy' : 'full');
+    setEnabledOperators(cfg.enabledOperators);
+    setAllowNegativeTargets(cfg.allowNegativeTargets);
+  }, [difficultyStage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const key = 'beginner_ab_variant_v1';
+        let saved = await AsyncStorage.getItem(key);
+        if (!saved) {
+          saved = Math.random() < 0.5 ? 'control_0_12_plus' : 'variant_0_15_plus';
+          await AsyncStorage.setItem(key, saved);
+        }
+        if (cancelled) return;
+        const variant = saved === 'variant_0_15_plus' ? 'variant_0_15_plus' : 'control_0_12_plus';
+        setAbVariant(variant);
+        setDifficultyStage(variant === 'variant_0_15_plus' ? 'E' : 'A');
+      } catch {
+        if (!cancelled) {
+          setAbVariant('control_0_12_plus');
+          setDifficultyStage('A');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!demoSimRunning) setDemoSimMessage(t('demoSim.pickLevel'));
@@ -4475,7 +4736,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
   const bounceAnim = useRef(new Animated.Value(0)).current;
   const scrollY = useRef(new Animated.Value(0)).current;
   // גלגלת תלת־מימד: מרכז שורה i ב־scroll ב־(i+0.5)*ROW_H + PADDING_V; viewport center ≈ 110
-  const WHEEL_ROW_H = 56;
+  const WHEEL_ROW_H = 64;
   const WHEEL_PADDING_V = 100;
   const WHEEL_VIEWPORT_H = 220;
   const wheelCenterForIndex = (i: number) => WHEEL_PADDING_V + (i + 0.5) * WHEEL_ROW_H - WHEEL_VIEWPORT_H / 2;
@@ -4483,18 +4744,14 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     const centerY = wheelCenterForIndex(index);
     const rotateX = scrollY.interpolate({
       inputRange: [centerY - 90, centerY - 35, centerY, centerY + 35, centerY + 90],
-      outputRange: ['-28deg', '-10deg', '0deg', '10deg', '28deg'],
-    });
-    const scale = scrollY.interpolate({
-      inputRange: [centerY - 90, centerY, centerY + 90],
-      outputRange: [0.78, 1, 0.78],
+      outputRange: ['-8deg', '-3deg', '0deg', '3deg', '8deg'],
     });
     const opacity = scrollY.interpolate({
       inputRange: [centerY - 90, centerY - 35, centerY, centerY + 35, centerY + 90],
-      outputRange: [0.45, 0.85, 1, 0.85, 0.45],
+      outputRange: [0.82, 0.94, 1, 0.94, 0.82],
     });
     return (
-      <Animated.View style={{ transform: [{ perspective: 1000 }, { rotateX }, { scale }], opacity }}>{children}</Animated.View>
+      <Animated.View style={{ transform: [{ perspective: 1000 }, { rotateX }], opacity }}>{children}</Animated.View>
     );
   }, [scrollY]);
 
@@ -4522,33 +4779,26 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     let cancelled = false;
     void (async () => {
       try {
-        await clearAllLulosOnboardingKeys();
-        if (__DEV__) console.log('[onboarding] cleared all tip keys');
+        const saved = await AsyncStorage.getItem('lulos_guidance_enabled');
+        if (cancelled || saved == null) return;
+        const enabled = saved !== 'false';
+        setGuidanceOn(enabled);
+        dispatch({ type: 'SET_GUIDANCE_ENABLED', enabled });
       } catch (_) {
         /* ignore */
       }
-      if (cancelled) return;
-      Alert.alert(
-        t('guidance.alertTitle'),
-        t('guidance.alertBody'),
-        [
-          {
-            text: t('guidance.skip'),
-            style: 'cancel',
-            onPress: () => setGuidance(false),
-          },
-          {
-            text: t('guidance.need'),
-            onPress: () => setGuidance(true),
-          },
-        ],
-        { cancelable: false }
-      );
     })();
     return () => {
       cancelled = true;
     };
-  }, [setGuidance, t]);
+  }, [dispatch]);
+  const chooseGuidanceMode = useCallback((on: boolean) => {
+    if (on) {
+      void clearAllLulosOnboardingKeys().catch(() => {});
+    }
+    setGuidance(on);
+    setGuidancePromptOpen(false);
+  }, [setGuidance]);
   useEffect(() => {
     void initializeSfx();
     return () => {
@@ -4575,7 +4825,21 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     if (gameState.soundsEnabled !== false) {
       void playSfx('start', { cooldownMs: 250, volumeOverride: 0.4 });
     }
-    dispatch({ type: 'START_GAME', players, difficulty: numberRange, fractions, showPossibleResults, showSolveExercise, timerSetting: timer, timerCustomSeconds: timer === 'custom' ? customTimerSeconds : 60 });
+    dispatch({
+      type: 'START_GAME',
+      players,
+      difficulty: numberRange,
+      fractions,
+      showPossibleResults,
+      showSolveExercise,
+      timerSetting: timer,
+      timerCustomSeconds: timer === 'custom' ? customTimerSeconds : 60,
+      difficultyStage,
+      enabledOperators,
+      allowNegativeTargets,
+      mathRangeMax: numberRange === 'easy' ? 12 : 25,
+      abVariant,
+    });
   };
 
   // תחתית מסע — תפריט קומפקטי כדי שהג'וקר (פנים/מותג) יופיע במלואו
@@ -5060,6 +5324,331 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
       <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title={t('start.catalogTitle')}>
         <CardsCatalogContent numberRange={numberRange} fractions={fractions} />
       </AppModal>
+      <AppModal
+        visible={advancedSetupOpen}
+        onClose={() => setAdvancedSetupOpen(false)}
+        overlayOpacity={0.82}
+        topAligned
+        customHeader={(
+          <LinearGradient
+            colors={['#fbbf24', '#f472b6', '#a855f7', '#38bdf8']}
+            start={{ x: isRTL ? 1 : 0, y: 0 }}
+            end={{ x: isRTL ? 0 : 1, y: 1 }}
+            style={{
+              marginHorizontal: -12,
+              marginTop: -8,
+              paddingTop: 14,
+              paddingBottom: 14,
+              paddingHorizontal: 14,
+              marginBottom: 10,
+              borderBottomWidth: 1,
+              borderBottomColor: 'rgba(255,255,255,0.14)',
+            }}
+          >
+            {/* כמו שורת הכניסה: תוכן משמאל (flex), כפתור מימין — כיוון קריאה בתוך הבלוק ב־writingDirection */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 24 }}>✨</Text>
+                  <Text
+                    style={{
+                      color: '#FFFFFF',
+                      fontSize: 20,
+                      fontWeight: '900',
+                      textShadowColor: 'rgba(0,0,0,0.35)',
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3,
+                      flex: 1,
+                      textAlign: isRTL ? 'right' : 'left',
+                      writingDirection: isRTL ? 'rtl' : 'ltr',
+                    }}
+                  >
+                    {t('start.advancedSetup.entryTitle')}
+                  </Text>
+                </View>
+                <Text
+                  style={{
+                    color: 'rgba(254,249,195,0.96)',
+                    fontSize: 12,
+                    fontWeight: '700',
+                    lineHeight: 17,
+                    marginTop: 6,
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  }}
+                >
+                  {t('start.advancedSetup.entryRowTeaser')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setAdvancedSetupOpen(false)}
+                accessibilityRole="button"
+                accessibilityLabel={t('ui.cancel')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  backgroundColor: 'rgba(15,23,42,0.5)',
+                  borderWidth: 1.5,
+                  borderColor: 'rgba(255,255,255,0.4)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 20, fontWeight: '700' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          </LinearGradient>
+        )}
+        boxStyle={{
+          width: '100%',
+          maxHeight: SCREEN_H - 56,
+          marginTop: (safe.insets.top || 12) + 8,
+          borderRadius: 0,
+          backgroundColor: 'rgba(15,23,42,0.97)',
+          borderWidth: 1,
+          borderColor: 'rgba(148,163,184,0.45)',
+          paddingHorizontal: 12,
+          paddingTop: 8,
+          paddingBottom: 12,
+          overflow: 'hidden',
+        }}
+      >
+        <ScrollView
+          style={{ flex: 1, direction: isRTL ? 'rtl' : 'ltr' }}
+          contentContainerStyle={{ paddingBottom: 28, direction: isRTL ? 'rtl' : 'ltr' }}
+          showsVerticalScrollIndicator
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+        >
+          <LinearGradient
+            colors={['#0ea5e9', '#38bdf8']}
+            start={{ x: isRTL ? 1 : 0, y: 0 }}
+            end={{ x: isRTL ? 0 : 1, y: 1 }}
+            style={hsS.rowGradientOuter}
+          >
+            <View style={{ paddingVertical: 14, paddingHorizontal: 10 }}>
+              <Text style={[hsS.rowLabel, { marginBottom: 6, textAlign: isRTL ? 'right' : 'left' }]}>
+                {t('start.advancedSetup.stagePicker.sectionTitle')}
+              </Text>
+              <Text
+                style={{
+                  color: 'rgba(255,255,255,0.9)',
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontWeight: '600',
+                  textAlign: isRTL ? 'right' : 'left',
+                  marginBottom: 12,
+                }}
+              >
+                {t('start.advancedSetup.stagePicker.intro')}
+              </Text>
+
+              <View style={{ position: 'relative' }}>
+                <View style={{ opacity: ADVANCED_STAGE_PICKER_LOCKED ? 0.3 : 1 }} pointerEvents={ADVANCED_STAGE_PICKER_LOCKED ? 'none' : 'auto'}>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+                    {STAGE_SEQUENCE.map((letter) => {
+                      const selected = difficultyStage === letter;
+                      return (
+                        <TouchableOpacity
+                          key={letter}
+                          onPress={() => {
+                            if (ADVANCED_STAGE_PICKER_LOCKED) return;
+                            setDifficultyStage(letter);
+                            setAdvancedStageExpanded((prev) => (prev === letter ? null : letter));
+                          }}
+                          activeOpacity={0.75}
+                          style={{
+                            minWidth: 44,
+                            height: 44,
+                            paddingHorizontal: 12,
+                            borderRadius: 12,
+                            borderWidth: 2,
+                            borderColor: selected ? '#FDE68A' : 'rgba(255,255,255,0.28)',
+                            backgroundColor: selected ? 'rgba(253,230,138,0.2)' : 'rgba(15,23,42,0.4)',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>{letter}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <Text
+                    style={{
+                      marginTop: 10,
+                      color: 'rgba(253,230,138,0.95)',
+                      fontSize: 12,
+                      fontWeight: '700',
+                      textAlign: 'center',
+                    }}
+                  >
+                    {t('start.advancedSetup.stagePicker.currentChoice', { stage: difficultyStage })}
+                  </Text>
+                </View>
+
+                {ADVANCED_STAGE_PICKER_LOCKED && (
+                  <View
+                    style={{
+                      ...StyleSheet.absoluteFillObject,
+                      backgroundColor: 'rgba(15,23,42,0.88)',
+                      borderRadius: 12,
+                      padding: 14,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: '#FDE68A', fontSize: 15, fontWeight: '800', textAlign: isRTL ? 'right' : 'left', marginBottom: 8 }}>
+                      {t('start.advancedSetup.paywall.title')}
+                    </Text>
+                    <Text style={{ color: 'rgba(226,232,240,0.95)', fontSize: 12, lineHeight: 18, textAlign: isRTL ? 'right' : 'left', marginBottom: 8 }}>
+                      {t('start.advancedSetup.paywall.body')}
+                    </Text>
+                    <Text style={{ color: 'rgba(148,163,184,0.95)', fontSize: 11, fontStyle: 'italic', textAlign: isRTL ? 'right' : 'left' }}>
+                      {t('start.advancedSetup.paywall.ctaPlaceholder')}
+                    </Text>
+                    <Text style={{ color: '#93C5FD', fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 10 }}>
+                      {t('start.advancedSetup.stagePicker.currentChoice', { stage: difficultyStage })}
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <View
+                style={{
+                  marginTop: 14,
+                  padding: 12,
+                  borderRadius: 12,
+                  backgroundColor: 'rgba(15,23,42,0.55)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  minHeight: 72,
+                }}
+              >
+                <Text
+                  style={{
+                    color: ADVANCED_STAGE_PICKER_LOCKED || advancedStageExpanded ? 'rgba(255,255,255,0.96)' : 'rgba(255,255,255,0.52)',
+                    fontSize: 13,
+                    lineHeight: 20,
+                    textAlign: isRTL ? 'right' : 'left',
+                    fontWeight: ADVANCED_STAGE_PICKER_LOCKED || advancedStageExpanded ? '600' : '500',
+                  }}
+                >
+                  {ADVANCED_STAGE_PICKER_LOCKED
+                    ? t(`start.advancedSetup.stage.${difficultyStage}.detail`)
+                    : advancedStageExpanded
+                      ? t(`start.advancedSetup.stage.${advancedStageExpanded}.detail`)
+                      : t('start.advancedSetup.stagePicker.detailPlaceholder')}
+                </Text>
+              </View>
+            </View>
+          </LinearGradient>
+          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowRange, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.numberRange')}</Text>
+              <View style={hsS.toggleGroup}>
+                {([['full', '0-25'], ['easy', '0-12']] as const).map(([key, label]) => (
+                  <TouchableOpacity key={key} onPress={() => setNumberRange(key)} activeOpacity={0.7}
+                    style={[hsS.toggleBtn, numberRange === key ? hsS.toggleOn : hsS.toggleOff]}>
+                    <Text style={numberRange === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </LinearGradient>
+          <LinearGradient colors={['#4285F4', '#8ab4f8']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowFractions, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.fractions')}</Text>
+              <View style={hsS.toggleGroup}>
+                {([
+                  [true, t('lobby.withFractions')],
+                  [false, t('lobby.noFractions')],
+                ] as const).map(([key, label]) => (
+                  <TouchableOpacity key={String(key)} onPress={() => setFractions(key as boolean)} activeOpacity={0.7}
+                    style={[hsS.toggleBtn, fractions === key ? hsS.toggleOn : hsS.toggleOff]}>
+                    <Text style={fractions === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </LinearGradient>
+          <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowPossibleResults, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.possibleResults')}</Text>
+              <View style={hsS.toggleGroup}>
+                {([
+                  [true, t('lobby.show')],
+                  [false, t('lobby.hide')],
+                ] as const).map(([key, label]) => (
+                  <TouchableOpacity key={String(key)} onPress={() => {
+                    const v = key as boolean;
+                    setShowPossibleResults(v);
+                    if (!v) setShowSolveExercise(false);
+                  }} activeOpacity={0.7}
+                    style={[hsS.toggleBtn, showPossibleResults === key ? hsS.toggleOn : hsS.toggleOff]}>
+                    <Text style={showPossibleResults === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </LinearGradient>
+          <LinearGradient colors={['#34A853', '#81c995']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowSolveExercise, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.solveExercise')}</Text>
+              <View style={hsS.toggleGroup}>
+                {([
+                  [true, t('lobby.on')],
+                  [false, t('lobby.off')],
+                ] as const).map(([key, label]) => (
+                  <TouchableOpacity key={String(key)} onPress={() => {
+                    if (key && !showPossibleResults) return;
+                    setShowSolveExercise(key as boolean);
+                  }} activeOpacity={key && !showPossibleResults ? 1 : 0.7}
+                    style={[
+                      hsS.toggleBtn,
+                      showSolveExercise === key ? hsS.toggleOn : hsS.toggleOff,
+                      key && !showPossibleResults ? { opacity: 0.45 } : null,
+                    ]}>
+                    <Text style={showSolveExercise === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </LinearGradient>
+          <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowTimer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.timerRow')}</Text>
+              <View style={hsS.timerWheelWrap}>
+                <HorizontalOptionWheel
+                  options={timerWheelOptions}
+                  selectedKey={timer}
+                  snapFocus="leading"
+                  scrollAfterSelect={(key) => key !== 'custom'}
+                  onSelect={(key) => {
+                    if (key === 'custom') setTimerCustomModalOpen(true);
+                    else setTimer(key as '30' | '60' | 'off');
+                  }}
+                />
+              </View>
+            </View>
+          </LinearGradient>
+          {timer === 'custom' && (
+            <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+              <View style={[hsS.row, hsS.rowTimer, { marginTop: -4 }]}>
+                <Text style={[hsS.rowLabel, { fontSize: 12, color: 'rgba(255,255,255,0.85)', textAlign: isRTL ? 'right' : 'left', alignSelf: 'stretch', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+                  {customTimerSeconds >= 60
+                    ? t('start.customTimerMinSec', {
+                        min: String(Math.floor(customTimerSeconds / 60)),
+                        sec: String(customTimerSeconds % 60),
+                      })
+                    : t('start.customTimerSecOnly', { sec: String(customTimerSeconds) })}
+                </Text>
+              </View>
+            </LinearGradient>
+          )}
+        </ScrollView>
+      </AppModal>
       {/* קבלת פנים — רק כשההדרכה מופעלת */}
       {guidanceOn && (
         <View style={{ alignItems: 'center', paddingTop: 8, paddingHorizontal: 16 }}>
@@ -5140,9 +5729,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          {/* Number range */}
           <WheelRow index={1}>
-          <LinearGradient colors={['#1a73e8','#4285F4']} start={{x:0,y:0}} end={{x:1,y:1}} style={hsS.rowGradientOuter}>
+          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowRange]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.numberRange')}</Text>
             <View style={hsS.toggleGroup}>
@@ -5157,7 +5745,6 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          {/* Fractions */}
           <WheelRow index={2}>
           <LinearGradient colors={['#4285F4', '#8ab4f8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowFractions]}>
@@ -5177,7 +5764,6 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          {/* Possible results */}
           <WheelRow index={3}>
           <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowPossibleResults]}>
@@ -5187,7 +5773,11 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
                 [true, t('lobby.show')],
                 [false, t('lobby.hide')],
               ] as const).map(([key, label]) => (
-                <TouchableOpacity key={String(key)} onPress={() => setShowPossibleResults(key as boolean)} activeOpacity={0.7}
+                <TouchableOpacity key={String(key)} onPress={() => {
+                  const v = key as boolean;
+                  setShowPossibleResults(v);
+                  if (!v) setShowSolveExercise(false);
+                }} activeOpacity={0.7}
                   style={[hsS.toggleBtn, showPossibleResults === key ? hsS.toggleOn : hsS.toggleOff]}>
                   <Text style={showPossibleResults === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
                 </TouchableOpacity>
@@ -5197,7 +5787,6 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          {/* פתרון התרגיל — הצגת תרגיל בלחיצה על מיני-קלף */}
           <WheelRow index={4}>
           <LinearGradient colors={['#34A853', '#81c995']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowSolveExercise]}>
@@ -5207,8 +5796,15 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
                 [true, t('lobby.on')],
                 [false, t('lobby.off')],
               ] as const).map(([key, label]) => (
-                <TouchableOpacity key={String(key)} onPress={() => setShowSolveExercise(key as boolean)} activeOpacity={0.7}
-                  style={[hsS.toggleBtn, showSolveExercise === key ? hsS.toggleOn : hsS.toggleOff]}>
+                <TouchableOpacity key={String(key)} onPress={() => {
+                  if (key && !showPossibleResults) return;
+                  setShowSolveExercise(key as boolean);
+                }} activeOpacity={key && !showPossibleResults ? 1 : 0.7}
+                  style={[
+                    hsS.toggleBtn,
+                    showSolveExercise === key ? hsS.toggleOn : hsS.toggleOff,
+                    key && !showPossibleResults ? { opacity: 0.45 } : null,
+                  ]}>
                   <Text style={showSolveExercise === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
                 </TouchableOpacity>
               ))}
@@ -5217,7 +5813,6 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           </WheelRow>
 
-          {/* Timer */}
           <WheelRow index={5}>
           <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowTimer]}>
@@ -5226,6 +5821,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               <HorizontalOptionWheel
                 options={timerWheelOptions}
                 selectedKey={timer}
+                snapFocus="leading"
                 scrollAfterSelect={(key) => key !== 'custom'}
                 onSelect={(key) => {
                   if (key === 'custom') setTimerCustomModalOpen(true);
@@ -5252,56 +5848,22 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
             </LinearGradient>
             </WheelRow>
           )}
-          <RNModal visible={timerCustomModalOpen} transparent animationType="fade">
-            <TouchableOpacity activeOpacity={1} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setTimerCustomModalOpen(false)}>
-              <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#1F2937', borderRadius: 16, padding: 20, width: '100%', maxWidth: 320 }}>
-                <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>{t('ui.turnTimerLabel')}</Text>
-                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
-                    <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                      {Array.from({ length: 60 }, (_, i) => i).map((s) => (
-                        <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                          <Text style={{ color: (customTimerSeconds % 60) === s ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
-                    <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                      {Array.from({ length: 6 }, (_, i) => i).map((m) => (
-                        <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                          <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FBBC05' : '#9CA3AF' : m === 0 ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'center' }}>
-                  <TouchableOpacity onPress={() => setTimerCustomModalOpen(false)} style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
-                    <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('ui.cancel')}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => { setTimer('custom'); setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#34A853', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
-                    <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('start.timerModalStart')}</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-            </TouchableOpacity>
-          </RNModal>
 
-          {/* הדרכה והסברים — כבוי למשתמש חוזר שלא רוצה הסברים */}
-          <WheelRow index={timer === 'custom' ? 7 : 6}>
-          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowGuidance]}>
+          <WheelRow index={guidanceWheelIndex}>
+          <LinearGradient colors={['#7C3AED', '#A78BFA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+          <View style={[hsS.row, hsS.rowRange]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.guidanceRow')}</Text>
             <View style={hsS.toggleGroup}>
               {([
                 [true, t('lobby.on')],
                 [false, t('lobby.off')],
               ] as const).map(([key, label]) => (
-                <TouchableOpacity key={String(key)} onPress={() => setGuidance(key)} activeOpacity={0.7}
-                  style={[hsS.toggleBtn, guidanceOn === key ? hsS.toggleOn : hsS.toggleOff]}>
+                <TouchableOpacity
+                  key={String(key)}
+                  onPress={() => setGuidance(key)}
+                  activeOpacity={0.7}
+                  style={[hsS.toggleBtn, guidanceOn === key ? hsS.toggleOn : hsS.toggleOff]}
+                >
                   <Text style={guidanceOn === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
                 </TouchableOpacity>
               ))}
@@ -5309,8 +5871,97 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </View>
           </LinearGradient>
           </WheelRow>
+
+          <WheelRow index={advancedWheelIndex}>
+          <LinearGradient
+            colors={['#fbbf24', '#f472b6', '#a855f7', '#38bdf8']}
+            start={{ x: isRTL ? 1 : 0, y: 0 }}
+            end={{ x: isRTL ? 0 : 1, y: 1 }}
+            style={hsS.rowGradientOuter}
+          >
+          <TouchableOpacity
+            activeOpacity={0.88}
+            onPress={() => setAdvancedSetupOpen(true)}
+            style={hsS.advancedEntryInner}
+          >
+            {/* שורה אחת: תמיד [תוכן | כפתור] בציר LTR הפיזי — אותו סדר כמו כותרת המודל (המשכיות כיוון) */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 26 }}>✨</Text>
+                  <Text style={[hsS.advancedEntryTitle, { textAlign: isRTL ? 'right' : 'left', flex: 1, writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+                    {t('start.advancedSetup.entryTitle')}
+                  </Text>
+                </View>
+                <Text style={[hsS.advancedEntryTeaser, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+                  {t('start.advancedSetup.entryRowTeaser')}
+                </Text>
+                <View style={[hsS.advancedEntryChipRow, { flexDirection: 'row' }]}>
+                  {STAGE_SEQUENCE.map((letter, i) => {
+                    const on = difficultyStage === letter;
+                    return (
+                      <View
+                        key={letter}
+                        style={[
+                          hsS.advancedStageChip,
+                          { backgroundColor: ADVANCED_ENTRY_STAGE_COLORS[i] ?? '#64748b' },
+                          on && hsS.advancedStageChipActive,
+                        ]}
+                      >
+                        <Text style={[hsS.advancedStageChipTxt, on && hsS.advancedStageChipTxtActive]}>{letter}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+              <View style={[hsS.advancedEntryCtaWrap, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                <Text style={hsS.advancedEntryCtaTxt}>{t('start.advancedSetup.entryOpenCta')}</Text>
+                <Text style={hsS.advancedEntryCtaArrow}>{isRTL ? '‹' : '›'}</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+          </LinearGradient>
+          </WheelRow>
         </View>
         </Animated.ScrollView>
+
+        <RNModal visible={timerCustomModalOpen} transparent animationType="fade">
+          <TouchableOpacity activeOpacity={1} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setTimerCustomModalOpen(false)}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#1F2937', borderRadius: 16, padding: 20, width: '100%', maxWidth: 320 }}>
+              <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>{t('ui.turnTimerLabel')}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
+                  <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
+                    {Array.from({ length: 60 }, (_, i) => i).map((s) => (
+                      <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ color: (customTimerSeconds % 60) === s ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
+                  <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
+                    {Array.from({ length: 6 }, (_, i) => i).map((m) => (
+                      <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FBBC05' : '#9CA3AF' : m === 0 ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'center' }}>
+                <TouchableOpacity onPress={() => setTimerCustomModalOpen(false)} style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                  <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('ui.cancel')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => { setTimer('custom'); setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#34A853', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                  <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('start.timerModalStart')}</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </RNModal>
         {/* Start button — למטה, ללא מסגרת/רקע נוסף סביב הכפתור */}
         <View style={{ marginTop: 12, alignItems: 'center' }}>
           <CasinoButton text={t('start.letsPlay')} width={220} height={48} fontSize={19} onPress={startGame} />
@@ -5328,6 +5979,34 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           <Text style={{ color: 'rgba(255,255,255,0.15)', fontSize: 9, textAlign: 'center', marginTop: 6 }}>v1.0.0</Text>
         </TouchableOpacity>
       </View>
+      <RNModal visible={guidancePromptOpen} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.68)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 }}>
+          <LinearGradient colors={['#7C3AED', '#2563EB', '#0EA5E9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ width: '100%', maxWidth: 360, borderRadius: 28, padding: 3 }}>
+            <View style={[alertBubbleStyle.box, { maxWidth: '100%', backgroundColor: 'rgba(15,23,42,0.96)', borderColor: 'rgba(255,255,255,0.18)', paddingVertical: 20, paddingHorizontal: 18 }]}>
+              <Text style={[alertBubbleStyle.title, { color: '#FDE68A', fontSize: 22 }]}>{t('guidance.welcomeTitle')}</Text>
+              <Text style={[alertBubbleStyle.body, { marginTop: 10, fontSize: 14, lineHeight: 22, color: '#E0F2FE' }]}>
+                {t('guidance.welcomeBody')}
+              </Text>
+              <View style={{ alignSelf: 'stretch', gap: 10, marginTop: 18 }}>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => chooseGuidanceMode(true)}
+                  style={{ backgroundColor: '#F59E0B', borderRadius: 14, paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center' }}
+                >
+                  <Text style={{ color: '#111827', fontSize: 15, fontWeight: '900' }}>{t('guidance.need')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => chooseGuidanceMode(false)}
+                  style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center' }}
+                >
+                  <Text style={{ color: '#E5E7EB', fontSize: 15, fontWeight: '800' }}>{t('guidance.skip')}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </LinearGradient>
+        </View>
+      </RNModal>
     </View>
   );
 }
@@ -5367,9 +6046,11 @@ const hsS = StyleSheet.create({
   rowSolveExercise: { backgroundColor: 'rgba(52,168,83,0.92)' },
   rowTimer: { backgroundColor: 'rgba(234,67,53,0.92)' },
   rowGuidance: { backgroundColor: 'rgba(26,115,232,0.92)' },
-  /** מיכל לגלגלת טיימר אופקית (flex כדי למדוד רוחב שורה) */
-  timerWheelWrap: { flex: 1, minWidth: 0, marginLeft: 8 },
+  /** מיכל לגלגלת טיימר — snapFocus=leading מצמיד את הצ'יפ הצהוב ליד התווית */
+  timerWheelWrap: { flex: 1, minWidth: 0, marginLeft: 4 },
   rowLabel: { color: 'rgba(255,255,255,0.9)', fontSize: 14, fontWeight: '600', flexShrink: 0 },
+  rowHint: { color: 'rgba(255,255,255,0.72)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
+  rowSubHint: { color: 'rgba(255,255,255,0.88)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
   // LTR: ברירת מחדל (האופציה הראשונה בכל מערך) תמיד משמאל גם תחת forceRTL
   toggleGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, direction: 'ltr' },
   toggleBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1 },
@@ -5408,6 +6089,89 @@ const hsS = StyleSheet.create({
   stepVal: {
     fontSize: 26, fontWeight: '700', color: '#FFF', minWidth: 28, textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8,
+  },
+  advancedEntryInner: {
+    borderRadius: 11,
+    marginHorizontal: 2,
+    marginBottom: 4,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(15,23,42,0.58)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  advancedEntryTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  advancedEntryTeaser: {
+    color: 'rgba(254,249,195,0.98)',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    marginTop: 8,
+  },
+  advancedEntryChipRow: {
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  advancedStageChip: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.35)',
+    opacity: 0.88,
+  },
+  advancedStageChipActive: {
+    borderColor: '#FDE68A',
+    borderWidth: 2,
+    opacity: 1,
+    ...Platform.select({
+      ios: { shadowColor: '#FDE68A', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.85, shadowRadius: 6 },
+      android: { elevation: 4 },
+    }),
+  },
+  advancedStageChipTxt: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: 'rgba(255,255,255,0.92)',
+  },
+  advancedStageChipTxtActive: {
+    color: '#FFFFFF',
+  },
+  advancedEntryCtaWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    alignSelf: 'flex-start',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6 },
+      android: { elevation: 5 },
+    }),
+  },
+  advancedEntryCtaTxt: {
+    color: '#5b21b6',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  advancedEntryCtaArrow: {
+    color: '#7c3aed',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: -1,
   },
 });
 
@@ -5956,6 +6720,16 @@ function TurnTransition() {
   const hasMorePlayers = state.players.length > COLLAPSED_PLAYER_CHIP_COUNT && !showAllPlayers;
   const topDiscardCard = state.discardPile.length > 0 ? state.discardPile[state.discardPile.length - 1] : null;
   const lastMoveChallengeLine = useMemo(() => null, []);
+  const turnTimerBannerValue =
+    state.timerSetting === 'custom'
+      ? (state.timerCustomSeconds >= 60
+        ? `${Math.floor(state.timerCustomSeconds / 60)}:${String(state.timerCustomSeconds % 60).padStart(2, '0')}`
+        : `${state.timerCustomSeconds}s`)
+      : state.timerSetting === '60'
+        ? '1:00'
+        : state.timerSetting === '30'
+          ? '30s'
+          : null;
 
   if (!cp) return null;
 
@@ -6055,6 +6829,15 @@ function TurnTransition() {
           </View>
         </View>
       </View>
+      {turnTimerBannerValue && (
+        <View style={{ alignItems: 'center', paddingHorizontal: 12, paddingTop: 2, paddingBottom: 8 }}>
+          <View style={[alertBubbleStyle.box, { paddingVertical: 6, paddingHorizontal: 12 }]}>
+            <Text style={[alertBubbleStyle.body, { marginTop: 0, fontWeight: '800', textAlign: 'center' }]}>
+              {t('ui.timedGameBanner', { value: turnTimerBannerValue })}
+            </Text>
+          </View>
+        </View>
+      )}
 
       <AppModal visible={tournamentInfoOpen} onClose={() => setTournamentInfoOpen(false)} title="טורניר — טבלת טורניר">
         <View style={{ gap: 8 }}>
@@ -6238,8 +7021,8 @@ function TurnTransition() {
                 <SimpleHand
                   cards={sorted}
                   stagedCardIds={emptySet}
-                  equationOpCardId={null}
-                  equationOpPlaced={false}
+                  equationHandPlacedIds={EMPTY_ID_SET}
+                  equationHandPendingId={null}
                   defenseValidCardIds={null}
                   forwardCardId={null}
                   onTap={(card) => {
@@ -6700,10 +7483,6 @@ function GameScreen() {
 
   // כשהטיימר מגיע ל־0: מציגים הודעה חוסמת בתחתית, אחרי 2.5 שניות — שלוף קלף ומעבר לתור הבא
   const [timerExpiredOverlay, setTimerExpiredOverlay] = useState(false);
-  const SHOW_LAYOUT_GUIDE = true;
-  const GUIDE_STEP = 40;
-  const guideRows = Math.ceil(SCREEN_H / GUIDE_STEP);
-  const guideCols = Math.ceil(SCREEN_W / GUIDE_STEP);
   const timerExpiredRef = useRef(false);
   const [rollArrowSeen, setRollArrowSeen] = useState(true);
   const rollArrowAnim = useRef(new Animated.Value(0)).current;
@@ -6945,7 +7724,6 @@ function GameScreen() {
   const td = state.discardPile[state.discardPile.length - 1];
 
   const [tutLoaded, setTutLoaded] = useState(false);
-  const isNewUserRef = useRef(false);
 
   // Fraction arrow — only first time ever
   const [fracArrowSeen, setFracArrowSeen] = useState(true); // default true = hidden until loaded
@@ -7011,7 +7789,6 @@ function GameScreen() {
     ])
       .then(([guidance, tut, tip1, tip2, arrow, identArrow, noIdenticalHint, ...rest]) => {
         if (cancelled) return;
-        isNewUserRef.current = tut !== 'true';
         const enabled = guidance !== 'false';
         guidanceEnabledRef.current = enabled;
         dispatch({ type: 'SET_GUIDANCE_ENABLED', enabled });
@@ -7089,9 +7866,12 @@ function GameScreen() {
       if (!playable) {
         dispatch({ type: 'PUSH_NOTIFICATION', payload: {
           id: `frac-${Date.now()}`,
-          message: '😊 הקלף הזה לא מתאים כאן — נסה קלף אחר!',
+          title: t('fraction.challengeToastTitle'),
+          message: '',
+          body: t('fraction.cannotPlayHere'),
+          emoji: '😊',
           style: 'warning',
-          autoDismissMs: 2200,
+          autoDismissMs: 5500,
         }});
         return true;
       }
@@ -7107,7 +7887,7 @@ function GameScreen() {
             message: t('fraction.firstTapHintBody'),
             emoji: '💡',
             style: 'info',
-            autoDismissMs: 3200,
+            autoDismissMs: 7000,
           },
         });
         if (!fracArrowSeen) { setFracArrowSeen(true); AsyncStorage.setItem('lulos_frac_arrow_seen', 'true'); }
@@ -7179,13 +7959,24 @@ function GameScreen() {
           type: 'PUSH_NOTIFICATION',
           payload: {
             id: `frac-challenge-${dedupeKey}`,
-            title: isChallengedMe ? '⚔️ אותגרת!' : '⚔️ התקפת שבר',
-            message: isChallengedMe
-              ? t('gameTip.fractionDefend', { d: String(state.fractionPenalty) })
-              : `${challengedName} נמצא/ת מול התקפת שבר (יעד ${state.pendingFractionTarget}).`,
+            title: isChallengedMe
+              ? t('notification.fractionAttack.titleSelf')
+              : t('notification.fractionAttack.titleWatch'),
+            message: '',
+            body: isChallengedMe
+              ? t('notification.fractionAttack.bodySelf', {
+                  target: String(state.pendingFractionTarget),
+                  penalty: String(state.fractionPenalty),
+                })
+              : t('notification.fractionAttack.bodyWatch', {
+                  name: challengedName,
+                  target: String(state.pendingFractionTarget),
+                  penalty: String(state.fractionPenalty),
+                }),
             emoji: '⚔️',
             style: 'warning',
-            autoDismissMs: isChallengedMe ? 3800 : 3000,
+            requireAck: isChallengedMe,
+            autoDismissMs: isChallengedMe ? undefined : 14000,
           },
         });
       }
@@ -7197,7 +7988,6 @@ function GameScreen() {
     && cp.hand.some(c => validateIdenticalPlay(c, td));
   const notificationTurnKey = `${state.roundsPlayed}-${state.currentPlayerIndex}`;
   const identArrowShownForTurn = useRef<string | null>(null);
-  const deferredIdentArrowFromTurn = useRef<string | null>(null);
 
   // Contract:
   // - hasIdentical: player can legally answer with a matching card now.
@@ -7212,14 +8002,8 @@ function GameScreen() {
   // Identical card arrow hint — מוצג כשיש קלף זהה זמין, פעם אחת בכל תור.
   useEffect(() => {
     if (!guidanceEnabledRef.current || !tutLoaded || (identArrowSeen && identArrowShownForTurn.current === notificationTurnKey)) return;
-    if (isNewUserRef.current && hasIdentical && deferredIdentArrowFromTurn.current == null) {
-      deferredIdentArrowFromTurn.current = notificationTurnKey;
-      return;
-    }
     if (hasIdentical && !identArrowVisible && identArrowShownForTurn.current !== notificationTurnKey) {
-      if (deferredIdentArrowFromTurn.current === notificationTurnKey) return;
       identArrowShownForTurn.current = notificationTurnKey;
-      deferredIdentArrowFromTurn.current = null;
       setIdentArrowVisible(true);
       identArrowX.setValue(0);
       identArrowLoop.current = Animated.loop(Animated.sequence([
@@ -7378,13 +8162,20 @@ function GameScreen() {
     }
   }, [state.dice, showGuidance, t]);
 
+  const hasWildForResults = useMemo(() => cp?.hand.some(c => c.type === 'wild') ?? false, [cp?.hand]);
   const handNumberValuesForResults = useMemo(
-    () => new Set(cp?.hand.filter(c => c.type === 'number').map(c => c.value!) ?? []),
-    [cp?.hand]
+    () =>
+      new Set(
+        cp?.hand.filter(c => c.type === 'number' && c.value != null).map(c => c.value as number) ?? [],
+      ),
+    [cp?.hand],
   );
   const filteredResultsForHand = useMemo(
-    () => state.validTargets.filter(t => handNumberValuesForResults.has(t.result)),
-    [state.validTargets, handNumberValuesForResults]
+    () =>
+      hasWildForResults
+        ? state.validTargets
+        : state.validTargets.filter(t => handNumberValuesForResults.has(t.result)),
+    [state.validTargets, handNumberValuesForResults, hasWildForResults],
   );
   // AppShell לא מוסיף safe-bottom במובייל — כאן שומרים רווח עבור המניפה + אזור המחוות
   const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
@@ -7470,18 +8261,20 @@ function GameScreen() {
           <ResultsSlot
             onToggle={toggleResultsBadges}
             filteredResults={filteredResultsForHand}
-            matchCount={(() => {
-              return state.validTargets.filter(t => cp?.hand.some(c => c.type === 'number' && c.value === t.result)).length;
-            })()}
-            timerResetVisible={state.timerSetting !== 'off'}
-            onTimerReset={resetTurnTimer}
+            matchCount={
+              hasWildForResults
+                ? state.validTargets.length
+                : state.validTargets.filter(t =>
+                    cp?.hand.some(c => c.type === 'number' && c.value === t.result),
+                  ).length
+            }
           />
         </View>
       )}
 
       {/* ── SLOT 3: שולחן ירוק + תרגיל + טיימר (מוקאפ תרגיל הועבר ליד תוצאות אפשריות) ── */}
-      <View style={{position:'absolute',top:200,left:17,right:7,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0,transform:[{translateX:5}]}}>
-        <View style={{flex:1,minWidth:0,justifyContent:'flex-end',paddingBottom:105}}>
+      <View style={{position:'absolute',top:EQUATION_TABLE_TOP,left:17,right:7,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0,transform:[{translateX:EQUATION_TABLE_SHIFT_X}]}}>
+        <View style={{flex:1,minWidth:0,justifyContent:'flex-end',paddingBottom:75}}>
           <ImageBackground
             source={pokerTableImg}
             style={{
@@ -7522,13 +8315,14 @@ function GameScreen() {
         <View
           style={{
             position: 'absolute',
-            bottom: HAND_ZONE_TOP - 20,
+            // FuseTimer draws the rope at internal Y=40, so place container at 400 for visual Y=440.
+            top: 400,
             left: 0,
             right: 0,
-            minHeight: 110,
+            minHeight: 0,
             zIndex: 4,
             alignItems: 'center',
-            justifyContent: 'flex-end',
+            justifyContent: 'flex-start',
             paddingBottom: 4,
           }}
           pointerEvents="none"
@@ -7569,7 +8363,7 @@ function GameScreen() {
 
       {/* מיני תוצאות — מעט מתחת לטיימר פתיל, מעל קו המניפה */}
       {(state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || (state.phase === 'solved' && state.stagedCards.length === 0)) && !state.hasPlayedCards) ? (
-        <View style={{ position: 'absolute', bottom: HAND_MINI_RESULTS_BOTTOM + 10, left: 0, right: 0, height: 50, zIndex: 3, alignItems: 'center', justifyContent: 'center' }} pointerEvents="box-none">
+        <View style={{ position: 'absolute', top: 455, left: 0, right: 0, height: 50, zIndex: 30, alignItems: 'center', justifyContent: 'center' }} pointerEvents="box-none">
           <ResultsStripBelowTable
             resultsOpen={resultsOpen}
             filteredResults={filteredResultsForHand}
@@ -7603,7 +8397,7 @@ function GameScreen() {
             })}
           >
             <LulosButton
-              text={t('game.pickCards')}
+              text={t('game.buildingEquationNext')}
               color="orange"
               width={220}
               height={48}
@@ -7717,39 +8511,6 @@ function GameScreen() {
         <View style={{ position: 'absolute', top: GOLD_ACTION_BUTTON_TOP, left: 0, right: 0, zIndex: 25, alignItems: 'center' }} pointerEvents="box-none">
           <View style={{ position: 'relative', alignItems: 'center', overflow: 'visible' }}>
             <GoldDiceButton onPress={handleRoll} width={160} size={58} />
-            <View
-              style={{
-                position: 'absolute',
-                left: -70,
-                top: 0,
-              }}
-              pointerEvents="none"
-            >
-              <StartTurnCountdownCircle
-                deadlineAt={gameTurnDeadlineAt}
-                size={50}
-                soundEnabled={soundOn}
-                showLabel={false}
-              />
-            </View>
-            {gameTurnDeadlineAt != null && (
-              <Text
-                style={{
-                  marginTop: 6,
-                  color: '#FDE68A',
-                  fontSize: 10,
-                  fontWeight: '600',
-                  textAlign: 'center',
-                  paddingHorizontal: 12,
-                  opacity: 0.92,
-                  maxWidth: 300,
-                  lineHeight: 14,
-                  writingDirection: isRTL ? 'rtl' : 'ltr',
-                }}
-              >
-                {t('ui.turnTimerLabel')}
-              </Text>
-            )}
             {showRollArrow && (
               <Animated.View
                 pointerEvents="none"
@@ -7832,68 +8593,6 @@ function GameScreen() {
           </View>
         </View>
       )}
-
-      {/* Grid overlay for precise layout alignment */}
-      {SHOW_LAYOUT_GUIDE && <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 90 }}>
-        {Array.from({ length: guideRows + 1 }).map((_, i) => (
-          <View key={`gh-${i}`}>
-            <View
-              style={{
-                position: 'absolute',
-                top: i * GUIDE_STEP,
-                left: 0,
-                right: 0,
-                height: 1,
-                backgroundColor: i % 5 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.16)',
-              }}
-            />
-            <View
-              style={{
-                position: 'absolute',
-                top: i * GUIDE_STEP - 8,
-                left: 2,
-                backgroundColor: 'rgba(0,0,0,0.35)',
-                borderRadius: 4,
-                paddingHorizontal: 4,
-                paddingVertical: 1,
-              }}
-            >
-              <Text style={{ color: 'rgba(255,255,255,0.92)', fontSize: 9, fontWeight: '700' }}>
-                Y{i * GUIDE_STEP}
-              </Text>
-            </View>
-          </View>
-        ))}
-        {Array.from({ length: guideCols + 1 }).map((_, i) => (
-          <View key={`gv-${i}`}>
-            <View
-              style={{
-                position: 'absolute',
-                left: i * GUIDE_STEP,
-                top: 0,
-                bottom: 0,
-                width: 1,
-                backgroundColor: i % 5 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.16)',
-              }}
-            />
-            <View
-              style={{
-                position: 'absolute',
-                left: i * GUIDE_STEP + 2,
-                top: 2,
-                backgroundColor: 'rgba(0,0,0,0.35)',
-                borderRadius: 4,
-                paddingHorizontal: 4,
-                paddingVertical: 1,
-              }}
-            >
-              <Text style={{ color: 'rgba(255,255,255,0.92)', fontSize: 9, fontWeight: '700' }}>
-                X{i * GUIDE_STEP}
-              </Text>
-            </View>
-          </View>
-        ))}
-      </View>}
 
     </View>
   );
@@ -8011,10 +8710,7 @@ function NotificationZone() {
   const prevId = useRef<string | null>(null);
   // מיקום הודעות "מתחת/סביב כפתורים" צריך להתבסס על גובה אזור היד (מניפה),
   // ולא להיצמד לתחתית הפיזית של המסך (אחרת זה יורד על המניפה).
-  const isBottomNotif = notif && (
-    // השאירנו רק הודעות קצרות של "המשחק/שליפה" לתחתית הפיזית
-    notif.id.startsWith('discard-') || notif.id.startsWith('frac-')
-  );
+  const isBottomNotif = notif && notif.id.startsWith('discard-');
   // בתוך AppShell ה-safe area כבר בריפוד — מרווח מינימלי מעל הקצה הפנימי
   const bottomPos = isBottomNotif ? 12 : notifBottom;
 
@@ -8059,7 +8755,9 @@ function NotificationZone() {
 
   const dismiss = () => dispatch({ type: 'DISMISS_NOTIFICATION', id: notif.id });
   const winH = Dimensions.get('window').height;
-  const notifBodyMaxH = Math.min(200, Math.round(winH * 0.38));
+  const notifBodyMaxH = notif.id.startsWith('frac-challenge-')
+    ? Math.min(320, Math.round(winH * 0.48))
+    : Math.min(200, Math.round(winH * 0.38));
   return (
     <>
       {shouldDimScreen && (
@@ -8177,8 +8875,8 @@ function PlayerWaitingScreen({
             <SimpleHand
               cards={sorted}
               stagedCardIds={emptySet}
-              equationOpCardId={null}
-              equationOpPlaced={false}
+              equationHandPlacedIds={EMPTY_ID_SET}
+              equationHandPendingId={null}
               defenseValidCardIds={null}
               forwardCardId={null}
               onTap={() => {}}
@@ -8323,10 +9021,12 @@ function GameRouter() {
   const welcomeMusicRef = useRef<Audio.Sound | null>(null);
   const soundOn = state.soundsEnabled !== false;
   const [salindaVolume, setSalindaVolume] = useState(0.14);
+  const salindaVolumeRef = useRef(0.14);
   const [showSalindaPanel, setShowSalindaPanel] = useState(false);
+  const salindaTrackRef = useRef<View | null>(null);
+  const trackWindowRef = useRef<{ y: number; h: number }>({ y: 0, h: 140 });
   const SALINDA_PANEL_H = 160;
   const SALINDA_TRACK_H = 140;
-  const SALINDA_TRACK_TOP_PAD = 10;
   const SALINDA_VOLUME_KEY = 'lulos_salinda_volume';
   useEffect(() => {
     sendDebugLog('H4', 'index.tsx:GameRouter.useEffect', 'GameRouter state snapshot', {
@@ -8338,6 +9038,12 @@ function GameRouter() {
   }, [state.phase, playMode, mp, state.soundsEnabled]);
 
   useEffect(() => {
+    if (Platform.OS !== 'web' || playMode !== 'choose') return;
+    const { roomCode } = parseJoinParamsFromUrl();
+    if (roomCode) setPlayMode('online');
+  }, [playMode]);
+
+  useEffect(() => {
     let mounted = true;
     (async () => {
       try {
@@ -8347,6 +9053,7 @@ function GameRouter() {
           const parsed = Number(volumeRaw);
           if (Number.isFinite(parsed)) {
             const normalized = Math.max(0, Math.min(0.4, parsed));
+            salindaVolumeRef.current = normalized;
             setSalindaVolume(normalized);
           }
         }
@@ -8358,6 +9065,17 @@ function GameRouter() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showSalindaPanel) return;
+    const id = requestAnimationFrame(() => {
+      salindaTrackRef.current?.measureInWindow((_, winY, __, winH) => {
+        const h = winH > 1 ? winH : SALINDA_TRACK_H;
+        trackWindowRef.current = { y: winY, h };
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [showSalindaPanel, SALINDA_TRACK_H]);
 
   useEffect(() => {
     let disposed = false;
@@ -8379,8 +9097,10 @@ function GameRouter() {
         if (fadeOutMs > 0) {
           const steps = 8;
           const stepMs = Math.max(16, Math.floor(fadeOutMs / steps));
+          const maxVol = Math.max(0, Math.min(0.4, salindaVolumeRef.current));
           for (let i = steps - 1; i >= 0; i -= 1) {
-            await sound.setVolumeAsync((salindaVolume * i) / steps);
+            if (disposed) return;
+            await sound.setVolumeAsync((maxVol * i) / steps);
             await new Promise<void>((resolve) => setTimeout(resolve, stepMs));
           }
         }
@@ -8422,7 +9142,9 @@ function GameRouter() {
         const fadeInSteps = 8;
         const fadeInStepMs = 25;
         for (let i = 1; i <= fadeInSteps; i += 1) {
-          await sound.setVolumeAsync((salindaVolume * i) / fadeInSteps);
+          if (disposed) return;
+          const target = Math.max(0, Math.min(0.4, salindaVolumeRef.current));
+          await sound.setVolumeAsync((target * i) / fadeInSteps);
           await new Promise<void>((resolve) => setTimeout(resolve, fadeInStepMs));
         }
       } catch (_) {
@@ -8434,12 +9156,28 @@ function GameRouter() {
     return () => {
       disposed = true;
     };
-  }, [playMode, state.phase, state.soundsEnabled, salindaVolume]);
+  }, [playMode, state.phase, state.soundsEnabled]);
 
+  const welcomeVolRafRef = useRef<number | null>(null);
   useEffect(() => {
     const sound = welcomeMusicRef.current;
     if (!sound) return;
-    sound.setVolumeAsync(Math.max(0, Math.min(0.4, salindaVolume))).catch(() => {});
+    const v = Math.max(0, Math.min(0.4, salindaVolume));
+    if (welcomeVolRafRef.current != null) {
+      cancelAnimationFrame(welcomeVolRafRef.current);
+    }
+    welcomeVolRafRef.current = requestAnimationFrame(() => {
+      welcomeVolRafRef.current = null;
+      const s = welcomeMusicRef.current;
+      if (!s) return;
+      s.setVolumeAsync(v).catch(() => {});
+    });
+    return () => {
+      if (welcomeVolRafRef.current != null) {
+        cancelAnimationFrame(welcomeVolRafRef.current);
+        welcomeVolRafRef.current = null;
+      }
+    };
   }, [salindaVolume]);
 
   useEffect(() => {
@@ -8457,11 +9195,15 @@ function GameRouter() {
     dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: next });
     AsyncStorage.setItem('lulos_sounds_enabled', next ? 'true' : 'false');
   }, [dispatch, soundOn]);
-  const setSalindaVolumeFromRatio = useCallback((ratio: number) => {
+  const applySalindaRatio = useCallback((ratio: number) => {
     const normalized = Math.max(0, Math.min(1, ratio));
     const next = Math.round((0.4 * normalized) * 100) / 100;
+    salindaVolumeRef.current = next;
     setSalindaVolume(next);
-    void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(next));
+  }, []);
+
+  const persistSalindaVolume = useCallback(() => {
+    void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(salindaVolumeRef.current));
   }, []);
 
   let screen: React.ReactNode;
@@ -8544,19 +9286,33 @@ function GameRouter() {
               onStartShouldSetResponder={() => true}
               onMoveShouldSetResponder={() => true}
               onResponderGrant={(e) => {
-                const y = e.nativeEvent.locationY;
-                const withinTrackY = Math.max(0, Math.min(SALINDA_TRACK_H, y - SALINDA_TRACK_TOP_PAD));
-                setSalindaVolumeFromRatio(1 - (withinTrackY / SALINDA_TRACK_H));
+                const pageY = e.nativeEvent.pageY;
+                salindaTrackRef.current?.measureInWindow((_, winY, __, winH) => {
+                  const h = winH > 1 ? winH : SALINDA_TRACK_H;
+                  trackWindowRef.current = { y: winY, h };
+                  const rel = pageY - winY;
+                  applySalindaRatio(1 - Math.max(0, Math.min(1, rel / h)));
+                });
               }}
               onResponderMove={(e) => {
-                const y = e.nativeEvent.locationY;
-                const withinTrackY = Math.max(0, Math.min(SALINDA_TRACK_H, y - SALINDA_TRACK_TOP_PAD));
-                setSalindaVolumeFromRatio(1 - (withinTrackY / SALINDA_TRACK_H));
+                const pageY = e.nativeEvent.pageY;
+                const { y: winY, h: winH } = trackWindowRef.current;
+                const h = winH > 1 ? winH : SALINDA_TRACK_H;
+                const rel = pageY - winY;
+                applySalindaRatio(1 - Math.max(0, Math.min(1, rel / h)));
               }}
-              onResponderRelease={() => setShowSalindaPanel(false)}
-              onResponderTerminate={() => setShowSalindaPanel(false)}
+              onResponderRelease={() => {
+                persistSalindaVolume();
+                setShowSalindaPanel(false);
+              }}
+              onResponderTerminate={() => {
+                persistSalindaVolume();
+                setShowSalindaPanel(false);
+              }}
             >
               <View
+                ref={salindaTrackRef}
+                collapsable={false}
                 style={{
                   width: 6,
                   height: SALINDA_TRACK_H,
@@ -8760,7 +9516,7 @@ function SplashScreen({ onFinish }: { onFinish: () => void }) {
             Salinda
           </Text>
           <Text
-            style={{ color: '#F8FAFC', fontSize: 16, fontWeight: '800', marginTop: 2, textAlign: 'center', writingDirection: 'rtl' }}
+            style={{ color: '#F59E0B', fontSize: 16, fontWeight: '800', marginTop: 2, textAlign: 'center', writingDirection: 'rtl' }}
           >
             סלינדה
           </Text>
@@ -8780,14 +9536,14 @@ function SplashScreen({ onFinish }: { onFinish: () => void }) {
               />
             </Animated.View>
           </View>
-          <Animated.Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 12, opacity: loadingTextOpacity }}>
+          <Animated.Text style={{ color: 'rgba(245,158,11,0.8)', fontSize: 12, marginTop: 12, opacity: loadingTextOpacity }}>
             ...טוען
           </Animated.Text>
         </View>
 
         {/* Version */}
         <View style={{ position: 'absolute', bottom: 32 }}>
-          <Text style={{ color: 'rgba(255,255,255,0.2)', fontSize: 10, textAlign: 'center' }}>v1.0.0</Text>
+          <Text style={{ color: 'rgba(245,158,11,0.55)', fontSize: 10, textAlign: 'center' }}>v1.0.0</Text>
         </View>
       </LinearGradient>
     </Animated.View>

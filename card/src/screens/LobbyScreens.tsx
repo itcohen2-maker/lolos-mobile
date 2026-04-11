@@ -60,7 +60,9 @@ function getInviteWebBaseUrl(): string {
     return String(process.env.EXPO_PUBLIC_WEB_APP_URL).trim();
   }
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+    const pathname = window.location.pathname || '/';
+    const cleanPath = pathname === '/' ? '' : pathname.replace(/\/$/, '');
+    return `${window.location.origin}${cleanPath}`;
   }
   return '';
 }
@@ -86,7 +88,7 @@ function guestInviteSearchParams(roomCode: string, serverUrl: string): URLSearch
   return params;
 }
 
-function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: string; name?: string } {
+export function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: string; name?: string } {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return {};
   try {
     const params = new URLSearchParams(window.location.search);
@@ -215,7 +217,7 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
 export function LobbyScreen() {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
-  const { roomCode, players, isHost, startGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
+  const { roomCode, players, lobbyStatus, isHost, connected, startGame, startBotGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
   const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
   const [showFractions, setShowFractions] = useState(true);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
@@ -223,7 +225,9 @@ export function LobbyScreen() {
   const [timerSetting, setTimerSetting] = useState<HostGameSettings['timerSetting']>('off');
   const [timerCustomSeconds, setTimerCustomSeconds] = useState(60);
   const [starting, setStarting] = useState(false);
+  const [startingBot, setStartingBot] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [botCountdown, setBotCountdown] = useState<number | null>(null);
   /** עוקף בסיס Web אוטומטי; ריק = שימוש ב־EXPO_PUBLIC_WEB_APP_URL או במקור הדף (Web). נשמר במכשיר. */
   const [manualWebInviteBase, setManualWebInviteBase] = useState('');
 
@@ -249,23 +253,54 @@ export function LobbyScreen() {
   useEffect(() => {
     if (error) {
       setStarting(false);
+      setStartingBot(false);
       const t = setTimeout(clearError, 4000);
       return () => clearTimeout(t);
     }
   }, [error, clearError]);
 
+  useEffect(() => {
+    if (lobbyStatus?.status !== 'waiting_for_player' || !lobbyStatus.botOfferAt) {
+      setBotCountdown(null);
+      return;
+    }
+    const updateCountdown = () => {
+      const seconds = Math.max(0, Math.ceil((lobbyStatus.botOfferAt! - Date.now()) / 1000));
+      setBotCountdown(seconds);
+    };
+    updateCountdown();
+    const timer = setInterval(updateCountdown, 1000);
+    return () => clearInterval(timer);
+  }, [lobbyStatus]);
+
   const handleStart = () => {
     if (!isHost || players.length < 2) return;
     setStarting(true);
-    const gameSettings: HostGameSettings = {
-      diceMode: '3',
-      showFractions,
-      showPossibleResults,
-      showSolveExercise,
-      timerSetting,
-      timerCustomSeconds: timerSetting === 'custom' ? timerCustomSeconds : 60,
-    };
-    startGame(difficulty, gameSettings);
+    startGame(difficulty, buildGameSettings());
+  };
+
+  const buildGameSettings = (): HostGameSettings => ({
+    diceMode: '3',
+    showFractions,
+    showPossibleResults,
+    showSolveExercise,
+    mathRangeMax: difficulty === 'easy' ? 12 : 25,
+    enabledOperators: ['+'],
+    allowNegativeTargets: false,
+    difficultyStage: difficulty === 'easy' ? 'A' : 'E',
+    abVariant: difficulty === 'easy' ? 'control_0_12_plus' : 'variant_0_15_plus',
+    timerSetting,
+    timerCustomSeconds: timerSetting === 'custom' ? timerCustomSeconds : 60,
+  });
+
+  const handleStartBotGame = async () => {
+    if (!isHost) return;
+    setStartingBot(true);
+    try {
+      await startBotGame(difficulty, buildGameSettings());
+    } finally {
+      setStartingBot(false);
+    }
   };
 
   const hostSettingsSummary = useMemo(() => {
@@ -327,6 +362,10 @@ export function LobbyScreen() {
     return () => clearTimeout(t);
   }, [copyFeedback]);
 
+  const canStartBotGame = isHost && players.filter((player) => !player.isBot).length === 1;
+  const waitingForBotOffer = canStartBotGame && lobbyStatus?.status === 'waiting_for_player';
+  const botOfferReady = canStartBotGame && lobbyStatus?.status === 'bot_offer';
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
       <LanguageToggle />
@@ -386,6 +425,7 @@ export function LobbyScreen() {
         <View key={p.id} style={styles.playerRow}>
           <Text style={styles.playerName}>{p.name}</Text>
           {p.isHost && <Text style={styles.hostBadge}>{t('lobby.host')}</Text>}
+          {p.isBot && <Text style={styles.botBadge}>{t('lobby.botBadge')}</Text>}
           {!p.isConnected && <Text style={styles.disconnectedBadge}>{t('lobby.disconnected')}</Text>}
         </View>
       ))}
@@ -433,7 +473,10 @@ export function LobbyScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, !showPossibleResults && styles.diffBtnActive]}
-              onPress={() => setShowPossibleResults(false)}
+              onPress={() => {
+                setShowPossibleResults(false);
+                setShowSolveExercise(false);
+              }}
             >
               <Text style={[styles.diffText, !showPossibleResults && styles.diffTextActive]}>{t('lobby.hide')}</Text>
             </TouchableOpacity>
@@ -442,8 +485,8 @@ export function LobbyScreen() {
           <Text style={styles.label}>{t('lobby.solveExercise')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
-              style={[styles.diffBtn, showSolveExercise && styles.diffBtnActive]}
-              onPress={() => setShowSolveExercise(true)}
+              style={[styles.diffBtn, showSolveExercise && styles.diffBtnActive, !showPossibleResults && styles.diffBtnDisabled]}
+              onPress={() => showPossibleResults && setShowSolveExercise(true)}
             >
               <Text style={[styles.diffText, showSolveExercise && styles.diffTextActive]}>{t('lobby.on')}</Text>
             </TouchableOpacity>
@@ -512,7 +555,37 @@ export function LobbyScreen() {
             )}
           </TouchableOpacity>
           {players.length < 2 && (
-            <Text style={styles.hint}>{t('lobby.minPlayers')}</Text>
+            <>
+              <Text style={styles.hint}>{t('lobby.minPlayers')}</Text>
+              {waitingForBotOffer && (
+                <Text style={styles.waitingHint}>
+                  {botCountdown != null
+                    ? t('lobby.waitingForPlayerCountdown', { n: botCountdown })
+                    : t('lobby.waitingForPlayer')}
+                </Text>
+              )}
+              {canStartBotGame && (
+                <View style={styles.botOfferBox}>
+                  <Text style={[styles.botOfferTitle, { textAlign: ta }]}>
+                    {botOfferReady ? t('lobby.botOfferTitle') : t('lobby.startBotGame')}
+                  </Text>
+                  <Text style={[styles.botOfferBody, { textAlign: ta }]}>
+                    {botOfferReady ? t('lobby.botOfferBody') : t('lobby.waitingForPlayer')}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.secondaryPrimaryBtn, (startingBot || !connected) && styles.primaryBtnDisabled]}
+                    onPress={handleStartBotGame}
+                    disabled={startingBot || !connected}
+                  >
+                    {startingBot ? (
+                      <ActivityIndicator color="#F8FAFC" />
+                    ) : (
+                      <Text style={styles.secondaryPrimaryBtnText}>{t('lobby.startBotGame')}</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
           )}
         </>
       )}
@@ -619,10 +692,12 @@ const styles = StyleSheet.create({
   },
   playerName: { color: '#E2E8F0', fontSize: 16, flex: 1, textAlign: 'right' },
   hostBadge: { backgroundColor: brand.gold, color: '#111827', fontSize: 10, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 8 },
+  botBadge: { backgroundColor: 'rgba(34,211,238,0.18)', color: brand.cyan, fontSize: 10, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 8 },
   disconnectedBadge: { color: '#EF4444', fontSize: 10 },
   diffRow: { flexDirection: 'row', gap: 10, width: '100%', marginBottom: 8 },
   diffBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#374151', alignItems: 'center' },
   diffBtnActive: { backgroundColor: brand.gold },
+  diffBtnDisabled: { opacity: 0.45 },
   diffText: { color: '#9CA3AF', fontWeight: '600' },
   diffTextActive: { color: '#111827' },
   timerGrid: {
@@ -643,6 +718,27 @@ const styles = StyleSheet.create({
   },
   timerChipText: { color: '#9CA3AF', fontWeight: '600', fontSize: 13 },
   waitingText: { color: '#9CA3AF', fontSize: 14, marginTop: 24, textAlign: 'center' },
+  waitingHint: { color: '#93C5FD', fontSize: 12, marginTop: 6, textAlign: 'center' },
+  botOfferBox: {
+    width: '100%',
+    marginTop: 10,
+    backgroundColor: 'rgba(8,47,73,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.35)',
+    borderRadius: 12,
+    padding: 14,
+  },
+  botOfferTitle: { color: '#E0F2FE', fontSize: 15, fontWeight: '800', marginBottom: 6 },
+  botOfferBody: { color: '#BFDBFE', fontSize: 12, lineHeight: 18 },
+  secondaryPrimaryBtn: {
+    backgroundColor: '#0F766E',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  secondaryPrimaryBtnText: { color: '#F8FAFC', fontSize: 15, fontWeight: '700' },
   summaryBox: {
     width: '100%',
     backgroundColor: 'rgba(15,23,42,0.75)',

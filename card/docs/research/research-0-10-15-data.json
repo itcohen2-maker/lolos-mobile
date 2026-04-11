@@ -1,0 +1,16 @@
+{
+  "title": "אגרגט מחקר 0–10 / 0–15 / קוביות 0–10",
+  "folder": "docs/research/",
+  "sources": {
+    "exerciseMetrics": "docs/research/research-0-10-15-exercise-metrics.json",
+    "diceEnumeration": "docs/research/research-0-10-dice-enumeration.json",
+    "simulation": "docs/research/research-0-10-15-simulation.json"
+  },
+  "infographic": "docs/research/research-0-10-0-15-dice-infographic-he.html",
+  "consolidatedDoc": "docs/research/research-full-he-google-docs.md",
+  "scripts": [
+    "scripts/research-exercise-space.js",
+    "scripts/research-dice-enumeration.js",
+    "scripts/research-simulate-0-10-15.js"
+  ]
+}

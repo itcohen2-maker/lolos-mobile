@@ -6,18 +6,64 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { io, type Socket } from 'socket.io-client';
-import type { PlayerView, HostGameSettings } from '../../shared/types';
+import type { LobbyStatus, PlayerView, HostGameSettings, StartBotGameAck } from '../../shared/types';
 import { useLocale } from '../i18n/LocaleContext';
 
-// Default server URL — same machine. For device use your computer's LAN IP (e.g. 192.168.1.x:3001)
-const getServerUrl = () => {
-  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL) {
-    return process.env.EXPO_PUBLIC_SERVER_URL;
+const DEFAULT_SOCKET_PORT = 3001;
+
+/**
+ * בפיתוח עם Expo: אותה כתובת שממנה נטען ה-JS (hostUri) — בדרך כלל IP המחשב ברשת המקומית.
+ * כך טלפון עם Expo Go מתחבר לשרת שרץ על המחשב (`npm run server:dev`) בלי להקליד IP ידנית.
+ */
+function inferDevMachineSocketUrl(): string | null {
+  try {
+    const hostUri = Constants.expoConfig?.hostUri;
+    if (!hostUri || typeof hostUri !== 'string') return null;
+    const host = hostUri.split(':')[0]?.trim();
+    if (!host) return null;
+    return `http://${host}:${DEFAULT_SOCKET_PORT}`;
+  } catch {
+    return null;
   }
-  // Web / Expo: localhost. For Android emulator use 10.0.2.2, for real device use your PC's IP
-  return 'http://localhost:3001';
-};
+}
+
+function envFlagTrue(name: string): boolean {
+  const v =
+    typeof process !== 'undefined' && process.env?.[name]
+      ? String(process.env[name]).trim().toLowerCase()
+      : '';
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/**
+ * כתובת שרת Socket:
+ * - בפיתוח + EXPO_PUBLIC_LOCAL_SOCKET_SERVER=1 → תמיד מחשב מקומי (מתעלם מ-Render ב-.env)
+ * - אחרת: EXPO_PUBLIC_SERVER_URL אם מוגדר → גילוי hostUri בפיתוח → localhost / אמולטור
+ */
+function getServerUrl(): string {
+  const forceLocalPc =
+    typeof __DEV__ !== 'undefined' && __DEV__ && envFlagTrue('EXPO_PUBLIC_LOCAL_SOCKET_SERVER');
+  if (forceLocalPc) {
+    const inferred = inferDevMachineSocketUrl();
+    if (inferred) return inferred;
+    if (Platform.OS === 'android') return `http://10.0.2.2:${DEFAULT_SOCKET_PORT}`;
+    return `http://localhost:${DEFAULT_SOCKET_PORT}`;
+  }
+
+  const fromEnv =
+    typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
+      ? String(process.env.EXPO_PUBLIC_SERVER_URL).trim()
+      : '';
+  if (fromEnv) return fromEnv;
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const inferred = inferDevMachineSocketUrl();
+    if (inferred) return inferred;
+  }
+  if (Platform.OS === 'android') return `http://10.0.2.2:${DEFAULT_SOCKET_PORT}`;
+  return `http://localhost:${DEFAULT_SOCKET_PORT}`;
+}
 
 export type PlayMode = 'choose' | 'local' | 'online';
 
@@ -26,6 +72,12 @@ export interface LobbyPlayer {
   name: string;
   isHost: boolean;
   isConnected: boolean;
+  isBot: boolean;
+}
+
+export interface LobbyStatusState {
+  status: LobbyStatus;
+  botOfferAt: number | null;
 }
 
 export interface MultiplayerContextValue {
@@ -41,12 +93,14 @@ export interface MultiplayerContextValue {
   roomCode: string | null;
   playerId: string | null;
   players: LobbyPlayer[];
+  lobbyStatus: LobbyStatusState | null;
   isHost: boolean;
   inRoom: boolean;
   createRoom: (playerName: string) => void;
   joinRoom: (roomCode: string, playerName: string) => void;
   leaveRoom: () => void;
   startGame: (difficulty: 'easy' | 'full', gameSettings?: Partial<HostGameSettings>) => void;
+  startBotGame: (difficulty: 'easy' | 'full', gameSettings?: Partial<HostGameSettings>) => Promise<boolean>;
   // Game state from server (when game has started)
   serverState: PlayerView | null;
   // Emit game actions (only valid when serverState is set)
@@ -90,6 +144,7 @@ function playerViewToGameState(view: PlayerView): any {
       id: i,
       name: p.name,
       hand,
+      isBot: p.isBot ?? false,
       calledLolos: p.calledLolos,
       afkWarnings: p.afkWarnings ?? 0,
       isEliminated: p.isEliminated ?? false,
@@ -105,15 +160,12 @@ function playerViewToGameState(view: PlayerView): any {
     timerSetting: 'off' as const,
     timerCustomSeconds: 60,
   };
-  let equationOpCard: any = null;
-  let equationOpPosition: number | null = null;
-  let equationOpJokerOp: any = null;
-  if (view.equationCommit) {
-    const c = view.myHand.find((x) => x.id === view.equationCommit!.cardId);
-    if (c) {
-      equationOpCard = c;
-      equationOpPosition = view.equationCommit.position;
-      equationOpJokerOp = view.equationCommit.jokerAs;
+  const equationHandSlots: [any, any] = [null, null];
+  const commits = view.equationCommits?.length ? view.equationCommits : view.equationCommit ? [view.equationCommit] : [];
+  for (const ec of commits) {
+    const c = view.myHand.find((x) => x.id === ec.cardId);
+    if (c && (ec.position === 0 || ec.position === 1)) {
+      equationHandSlots[ec.position] = { card: c, jokerAs: ec.jokerAs };
     }
   }
   return {
@@ -141,9 +193,8 @@ function playerViewToGameState(view: PlayerView): any {
     consecutiveIdenticalPlays: view.consecutiveIdenticalPlays ?? 0,
     identicalAlert: view.identicalCelebration ?? null,
     jokerModalOpen: false,
-    equationOpCard,
-    equationOpPosition,
-    equationOpJokerOp,
+    equationHandSlots,
+    equationHandPick: null,
     lastMoveMessage: view.lastMoveMessage,
     lastDiscardCount: 0,
     lastEquationDisplay: null,
@@ -176,7 +227,7 @@ function actionToSocketEvent(action: any): { event: string; data?: any } | null 
         data: {
           result: action.result,
           equationDisplay: action.equationDisplay || '',
-          equationCommit: action.equationCommit ?? null,
+          equationCommits: action.equationCommits ?? [],
         },
       };
     case 'STAGE_CARD': return { event: 'stage_card', data: { cardId: action.card?.id } };
@@ -206,11 +257,14 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [players, setPlayers] = useState<LobbyPlayer[]>([]);
+  const [lobbyStatus, setLobbyStatus] = useState<LobbyStatusState | null>(null);
   const [isHost, setIsHost] = useState(false);
   const [serverState, setServerState] = useState<PlayerView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const playerIdRef = useRef<string | null>(null);
+  const startBotGameReqRef = useRef(0);
 
   const setServerUrl = useCallback((url: string) => {
     setServerUrlState(url);
@@ -225,6 +279,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     setRoomCode(null);
     setPlayerId(null);
     setPlayers([]);
+    setLobbyStatus(null);
     setServerState(null);
     setIsHost(false);
   }, []);
@@ -243,12 +298,15 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setConnected(false);
       setRoomCode(null);
       setPlayerId(null);
+      playerIdRef.current = null;
       setPlayers([]);
+      setLobbyStatus(null);
       setServerState(null);
     });
     socket.on('room_created', ({ roomCode: code, playerId: pid }) => {
       setRoomCode(code);
       setPlayerId(pid);
+      playerIdRef.current = pid;
     });
     socket.on('player_joined', ({ players: p }) => {
       setPlayers(p.map((x: any) => ({
@@ -256,12 +314,22 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
         name: x.name,
         isHost: x.isHost,
         isConnected: x.isConnected,
+        isBot: x.isBot ?? false,
       })));
+      const pid = playerIdRef.current;
+      if (pid) {
+        const me = p.find((x: { id: string }) => x.id === pid);
+        if (me) setIsHost(!!me.isHost);
+      }
+    });
+    socket.on('lobby_status', (data: LobbyStatusState) => {
+      setLobbyStatus(data);
     });
     socket.on('player_left', () => {
       // List will be updated by next player_joined or we could request state
     });
     socket.on('game_started', (view: PlayerView) => {
+      setLobbyStatus({ status: 'bot_game_started', botOfferAt: null });
       setServerState(view);
     });
     socket.on('state_update', (view: PlayerView) => {
@@ -273,24 +341,23 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
 
   const createRoom = useCallback((playerName: string) => {
     connect();
-    setTimeout(() => {
-      socketRef.current?.emit('create_room', { playerName, locale });
-      setIsHost(true);
-    }, 500);
+    setIsHost(true);
+    // Socket.io מנהל תור עד ל־connect — בלי השהיה קבועה (היה גורם למרוצים)
+    socketRef.current?.emit('create_room', { playerName, locale });
   }, [connect, locale]);
 
   const joinRoom = useCallback((code: string, playerName: string) => {
     connect();
-    setTimeout(() => {
-      socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName, locale });
-    }, 500);
+    socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName, locale });
   }, [connect, locale]);
 
   const leaveRoom = useCallback(() => {
     socketRef.current?.emit('leave_room');
     setRoomCode(null);
     setPlayerId(null);
+    playerIdRef.current = null;
     setPlayers([]);
+    setLobbyStatus(null);
     setServerState(null);
     setIsHost(false);
   }, []);
@@ -302,6 +369,52 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       socketRef.current?.emit('start_game', { difficulty });
     }
   }, []);
+
+  const startBotGame = useCallback((difficulty: 'easy' | 'full', gameSettings?: Partial<HostGameSettings>) => {
+    const socket = socketRef.current;
+    if (!socket || !socket.connected) {
+      const message = locale === 'he'
+        ? 'אין חיבור לשרת. בדקו כתובת שרת ונסו שוב.'
+        : 'No server connection. Check server URL and try again.';
+      setError(message);
+      return Promise.resolve(false);
+    }
+
+    startBotGameReqRef.current += 1;
+    const requestId = startBotGameReqRef.current;
+    const payload = gameSettings && Object.keys(gameSettings).length > 0
+      ? { difficulty, gameSettings }
+      : { difficulty };
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled || requestId !== startBotGameReqRef.current) return;
+        settled = true;
+        const message = locale === 'he'
+          ? 'השרת לא הגיב לבקשה להתחלת משחק מול בוט. נסו שוב.'
+          : 'Server did not respond to start-vs-bot request. Please try again.';
+        setError(message);
+        resolve(false);
+      }, 7000);
+
+      socket.emit('start_bot_game', payload, (ack: StartBotGameAck) => {
+        if (settled || requestId !== startBotGameReqRef.current) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (!ack?.ok) {
+          setError(ack?.message || (locale === 'he' ? 'לא ניתן להתחיל משחק מול בוט.' : 'Unable to start vs bot game.'));
+          resolve(false);
+          return;
+        }
+        if (ack.playerView) {
+          setServerState(ack.playerView);
+          setLobbyStatus({ status: 'bot_game_started', botOfferAt: null });
+        }
+        resolve(true);
+      });
+    });
+  }, [locale]);
 
   const emit = useCallback((event: string, data?: any) => {
     if (data !== undefined) socketRef.current?.emit(event as any, data);
@@ -344,12 +457,14 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     roomCode,
     playerId,
     players,
+    lobbyStatus,
     isHost,
     inRoom,
     createRoom,
     joinRoom,
     leaveRoom,
     startGame,
+    startBotGame,
     serverState,
     emit,
     error: error ?? null,

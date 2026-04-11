@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>לולוס: סיכום מחקר וריאנטים</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --ink: #18202a;
+      --muted: #5e6b7a;
+      --line: #d8dfeb;
+      --card: #ffffff;
+      --blue: #2f6fed;
+      --teal: #0e9f9a;
+      --orange: #ef8b17;
+      --red: #d64c4c;
+      --green: #23945b;
+      --shadow: 0 16px 40px rgba(27, 39, 63, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: linear-gradient(180deg, #eef3ff 0%, var(--bg) 28%, #ffffff 100%);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    .page {
+      width: 1280px;
+      margin: 0 auto;
+      padding: 48px 48px 56px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #16396f 0%, #2f6fed 52%, #5cb8ff 100%);
+      color: #fff;
+      border-radius: 28px;
+      padding: 36px 40px;
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -90px -90px auto;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 42px;
+      line-height: 1.15;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 920px;
+      font-size: 19px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      margin-top: 22px;
+    }
+
+    .stat, .panel {
+      background: var(--card);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(216, 223, 235, 0.75);
+    }
+
+    .stat {
+      padding: 22px 24px;
+    }
+
+    .stat .label {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    .stat .value {
+      font-size: 32px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .stat .note {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .section-title {
+      margin: 34px 0 14px;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+
+    .panel {
+      padding: 24px 26px;
+      margin-top: 16px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .bullets {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .bullets li {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .bullets li:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .tag {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      border-radius: 999px;
+      padding: 5px 10px;
+      margin-left: 8px;
+      vertical-align: middle;
+      color: #fff;
+    }
+
+    .tag.blue { background: var(--blue); }
+    .tag.orange { background: var(--orange); }
+    .tag.red { background: var(--red); }
+    .tag.green { background: var(--green); }
+    .tag.teal { background: var(--teal); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      background: #fff;
+      border-radius: 18px;
+      overflow: hidden;
+    }
+
+    th, td {
+      text-align: right;
+      padding: 13px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    th {
+      background: #edf3ff;
+      color: #25406e;
+      font-size: 13px;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .risk-low { color: var(--green); font-weight: 700; }
+    .risk-mid { color: var(--orange); font-weight: 700; }
+    .risk-high { color: var(--red); font-weight: 700; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .flow .step {
+      background: linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px 14px;
+      min-height: 150px;
+    }
+
+    .step .n {
+      width: 34px;
+      height: 34px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #dfe9ff;
+      color: #1c4bb1;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .step h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: auto; margin: 0; padding: 18mm 14mm; }
+      .hero, .stat, .panel { box-shadow: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="eyebrow">סיכום מחקר מוצרי + פדגוגי</div>
+      <h1>איך למכור את לולוס לכל רמות היכולת</h1>
+      <p>
+        המסקנה המרכזית: לא מתחילים מהווריאנט העשיר ביותר. פותחים ב־<strong>`0-12` בלי כפל וחילוק</strong>,
+        מעבירים ל־<strong>`0-15` בלי כפל וחילוק</strong>, ורק אחר כך מציגים כפל, חילוק ושברים כשכבות העמקה.
+      </p>
+    </section>
+
+    <div class="grid-3">
+      <div class="stat">
+        <div class="label">ברירת מחדל מומלצת</div>
+        <div class="value">`0-12` בלי `x/÷`</div>
+        <div class="note">הכי נגיש להסבר, להצלחה מהירה ולהתאמה לקהל רחב.</div>
+      </div>
+      <div class="stat">
+        <div class="label">שלב המעבר המרכזי</div>
+        <div class="value">`0-15` בלי `x/÷`</div>
+        <div class="note">מגדיל טווח מספרים בלי להוסיף מושג חשבוני חדש.</div>
+      </div>
+      <div class="stat">
+        <div class="label">גרסה מתקדמת מבדלת</div>
+        <div class="value">`0-25` עם שברים</div>
+        <div class="note">מתאים למסגרות העשרה, פרימיום וכיתות מתקדמות.</div>
+      </div>
+    </div>
+
+    <h2 class="section-title">מה המחקר הקיים כבר אומר</h2>
+    <div class="two-col">
+      <div class="panel">
+        <ul class="bullets">
+          <li><span class="tag blue">קושי</span> במחקר הפנימי, `0-12 +` קיבל עומס 29.0, בעוד `0-15 +` קיבל 34.6.</li>
+          <li><span class="tag orange">קפיצת קושי</span> ערבוב `+/-` מעלה עומס גם בלי שליליים: `0-12 +/-` קיבל 42.5, ו־`0-15 +/-` קיבל 48.5.</li>
+          <li><span class="tag red">לא לשים מוקדם</span> שליליים הם קפיצת קושי חדה ולכן לא מתאימים כברירת מחדל לפתיחה.</li>
+          <li><span class="tag green">שברים</span> חוקי השבר מעלים אפשרויות משחק ואינם "תקלה", אבל הם שייכים לשלב עשיר יותר ולא לשער הכניסה.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>מדד</th>
+              <th>`0-12 +`</th>
+              <th>`0-15 +`</th>
+              <th>`0-12 +/-`</th>
+              <th>`0-15 +/-`</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>עומס קוגניטיבי</td>
+              <td>29.0</td>
+              <td>34.6</td>
+              <td>42.5</td>
+              <td>48.5</td>
+            </tr>
+            <tr>
+              <td>פרשנות</td>
+              <td>כניסה קלה</td>
+              <td>מעבר עדין</td>
+              <td>שלב ביניים</td>
+              <td>ביניים חזק</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="section-title">טבלת החלטה: איזה וריאנט מתאים למי</h2>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>וריאנט</th>
+            <th>שברים</th>
+            <th>עומס משוער</th>
+            <th>רמה מתאימה</th>
+            <th>כיתה/גיל</th>
+            <th>יתרון לימודי</th>
+            <th>סיכון תסכול</th>
+            <th>שימוש עסקי</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>`0-12` בלי `x/÷`</strong></td>
+            <td>לא</td>
+            <td>נמוך־בינוני</td>
+            <td>מתחילים</td>
+            <td>גן חובה עד ב'</td>
+            <td>בונה ביטחון ושטף בסיסי</td>
+            <td class="risk-low">נמוך</td>
+            <td>ברירת מחדל, דמו, קהל רחב</td>
+          </tr>
+          <tr>
+            <td><strong>`0-12` עם `x/÷`</strong></td>
+            <td>לא</td>
+            <td>בינוני</td>
+            <td>מתחילים חזקים עד ביניים</td>
+            <td>ב'–ג'</td>
+            <td>מוסיף חשיבה רב־שלבית</td>
+            <td class="risk-mid">בינוני</td>
+            <td>חבילת התקדמות</td>
+          </tr>
+          <tr>
+            <td><strong>`0-15` בלי `x/÷`</strong></td>
+            <td>לא</td>
+            <td>בינוני</td>
+            <td>ביניים</td>
+            <td>ג'–ד'</td>
+            <td>מרחיב טווח בלי לשנות שפת חשבון</td>
+            <td class="risk-mid">בינוני</td>
+            <td>שלב מעבר בית ספרי</td>
+          </tr>
+          <tr>
+            <td><strong>`0-15` עם `x/÷`</strong></td>
+            <td>לא</td>
+            <td>בינוני־גבוה</td>
+            <td>ביניים חזקים</td>
+            <td>ד'–ה'</td>
+            <td>משלב טווח רחב ופעולות מורכבות</td>
+            <td class="risk-mid">בינוני־גבוה</td>
+            <td>העשרה / קבוצה מתקדמת</td>
+          </tr>
+          <tr>
+            <td><strong>`0-25` עם שברים בלי `x/÷`</strong></td>
+            <td>כן</td>
+            <td>גבוה</td>
+            <td>ביניים חזקים עד מתקדמים</td>
+            <td>ד'–ו'</td>
+            <td>התחלקות, שברים וערכים גדולים</td>
+            <td class="risk-high">גבוה</td>
+            <td>מוצר מתקדם</td>
+          </tr>
+          <tr>
+            <td><strong>`0-25` מלא</strong></td>
+            <td>כן</td>
+            <td>גבוה מאוד</td>
+            <td>מתקדמים</td>
+            <td>ה'–ז'</td>
+            <td>כיסוי עשיר: סדר פעולות, כפל, חילוק ושברים</td>
+            <td class="risk-high">גבוה מאוד</td>
+            <td>פרימיום / כיתות מתקדמות</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="footer-note">
+        הערה: ב־`0-12` וב־`0-15` יש עוגן מחקרי ישיר. בגרסאות עם `x/÷` וב־`0-25` מדובר בהסקה מושכלת הנשענת על המימוש בפועל, על החפיסה ועל המחקר הקיים.
+      </div>
+    </div>
+
+    <h2 class="section-title">מסלול מוצר מומלץ</h2>
+    <div class="flow">
+      <div class="step">
+        <div class="n">1</div>
+        <h3>כניסה קלה</h3>
+        <p>`0-12` בלי `x/÷`<br>מוצר פתיחה להורים, דמו ומכירה ראשונית.</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h3>מעבר טבעי</h3>
+        <p>`0-15` בלי `x/÷`<br>שומר על שפה מוכרת ומעלה את הרמה בלי הלם.</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h3>העמקת פעולות</h3>
+        <p>`0-12` או `0-15` עם `x/÷`<br>למי שמוכן לתכנון רב־שלבי.</p>
+      </div>
+      <div class="step">
+        <div class="n">4</div>
+        <h3>מתקדם</h3>
+        <p>`0-25` עם שברים בלי `x/÷`<br>מבדל את המשחק כמוצר חינוכי עשיר.</p>
+      </div>
+      <div class="step">
+        <div class="n">5</div>
+        <h3>פרימיום</h3>
+        <p>`0-25` מלא<br>לקבוצות חזקות, העשרה ומסגרות מתקדמות.</p>
+      </div>
+    </div>
+
+    <h2 class="section-title">המלצה אחת פשוטה למכירה</h2>
+    <div class="panel">
+      <ul class="bullets">
+        <li><span class="tag green">למכור קל</span> מציגים קודם הצלחה, לא עומס. לכן ברירת המחדל צריכה להיות `0-12` בלי כפל וחילוק.</li>
+        <li><span class="tag blue">למכור התקדמות</span> לא צריך מוצר אחד לכולם; צריך מסלול אחד ברור לכולם.</li>
+        <li><span class="tag teal">למכור בידול</span> את `0-25` עם שברים שומרים כיתרון של הגרסה המתקדמת, לא של הכניסה.</li>
+      </ul>
+    </div>
+
+    <div class="footer-note">
+      מבוסס על המסמכים: docs/research/research-beginner-difficulty-he.md, docs/recommendations-deck-and-rules.md, docs/research/research-variants-0-12-0-15-0-25-he.md
+    </div>
+  </div>
+</body>
+</html>

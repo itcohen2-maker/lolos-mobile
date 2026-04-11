@@ -1,4 +1,14 @@
 /** Hebrew strings — keys map 1:1 to en.ts */
+const heLateOverrides: Record<string, string> = {
+  'guidance.welcomeTitle': 'ברוכים הבאים',
+  'guidance.welcomeBody': 'רוצים שאציג הדרכה והסברים תוך כדי המשחק, או להמשיך בלי הדרכה?',
+  'guidance.skip': 'בלי הדרכה',
+  'guidance.need': 'כן, עם הדרכה',
+  'start.wheel.beginnerStage': 'שלב תרגול (A-H)',
+  'start.wheel.beginnerStageHelp':
+    'A–D: טווח קלפים 0–12. E–H: טווח 0–25. A/E רק חיבור (+), B/F רק חיסור (−), C/G חיבור וחיסור, D/H חיבור וחיסור כולל תוצאות שליליות. השורה מתחת לכפתורים מסכמת את הבחירה — אין צורך לזכור בעל פה.',
+};
+
 export const he: Record<string, string> = {
   // ── Room / socket errors ──
   'room.notFound': 'חדר לא נמצא',
@@ -27,6 +37,10 @@ export const he: Record<string, string> = {
   'equation.invalidOpPosition': 'מיקום קלף פעולה לא חוקי',
   'equation.chooseJokerOp': 'נא לבחור פעולה לג\'וקר',
   'equation.regularOpNoJoker': 'קלף פעולה רגיל לא צריך בחירת ג\'וקר',
+  'equation.tooManyCommits': 'יותר מדי קלפי פעולה בתרגיל',
+  'equation.duplicateOpPosition': 'משבצת כפולה בתרגיל',
+  'equation.duplicateCommitCard': 'אותו קלף הוגדר פעמיים',
+  'equation.handSlotsFull': 'הסר קלף מהמשוואה קודם (עד שני קלפי פעולה)',
 
   'stage.cannotStageNow': 'לא ניתן לשלב קלף כעת',
   'stage.alreadyInEquation': 'הקלף כבר משובץ בתרגיל הקוביות',
@@ -174,7 +188,7 @@ export const he: Record<string, string> = {
   'start.playerPlaceholder': 'שחקן {{n}}',
   'start.difficulty': 'רמת קושי',
   'start.diffFull': 'מלא (0-25)',
-  'start.diffEasy': 'קל (0-12)',
+  'start.diffEasy': 'קל (0-12, בלי שברים)',
   'start.startGame': 'התחל משחק',
   'start.hideRules': 'הסתר חוקים',
   'start.showRules': 'איך משחקים?',
@@ -232,7 +246,7 @@ export const he: Record<string, string> = {
   'catalog.jokerTitle': '🃏 ג\'וקר',
   'catalog.jokerBody': 'בוחרים איזו פעולה הוא מייצג (+, −, ×, ÷). משתמשים בו בבניית התרגיל כדי להיפטר מקלף. לא מגן מפני אתגר שבר.',
   'catalog.wildTitle': '★ קלף פרא',
-  'catalog.wildBody': 'נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה (כשראש הערימה קלף מספר — פרא נספר כאותו מספר).',
+  'catalog.wildBody': 'נספר ככל מספר בטווח שנבחר (מתחילים: 0–12 או 0–25). בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה.',
   'catalog.fracTitle': '½ ⅓ ¼ ⅕ קלף שבר',
   'catalog.fracBody': 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף.\nבחפיסה: ½ — 6 קלפים, ⅓ — 4, ¼ — 3, ⅕ — 2 (סה"כ 15).',
 
@@ -240,10 +254,11 @@ export const he: Record<string, string> = {
   'rulesLine.fracCard': '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף עונש.',
   'rulesLine.opCard': '➕ קלף פעולה (+, −, ×, ÷) — שלב את הסימן בתרגיל והפטר מקלף.',
   'rulesLine.jokerCard': '🃏 ג\'וקר — בוחרים איזו פעולה הוא מייצג. אפשר להשתמש בו בבניית התרגיל כדי להיפטר מקלף. לא מגן מפני אתגר שבר.',
-  'rulesLine.wildCard': '★ קלף פרא — נספר ככל מספר 0–25. בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה (כשראש הערימה קלף מספר — פרא נספר כאותו מספר).',
+  'rulesLine.wildCard': '★ קלף פרא — נספר ככל מספר בטווח הפעיל (0–12/0–25 למתחילים). בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה.',
 
   'ui.gotIt': 'הבנתי',
   'ui.welcomeHowTitle': '👋 ברוכים הבאים — איך משחקים',
+  'ui.timedGameBanner': 'משחק על זמן: {{value}} לכל תור',
   'ui.turnTimerLabel': 'אם לא תפעל/י — התור יעבור',
   'ui.wildIdenticalHint': 'יש לך קלף פרא? תוכל להפטר ממנו כקלף זהה — כשראש הערימה קלף מספר, הפרא נספר כאותו מספר.',
 
@@ -327,6 +342,8 @@ export const he: Record<string, string> = {
   'guidance.alertBody': 'להציג הסברים וטיפים במשחק הפעם?',
   'guidance.skip': 'דלג על הדרכה',
   'guidance.need': 'צריך הדרכה',
+  'guidance.hint.matchTopCard': 'יש לך קלף זהה לקלף העליון בערימה. הנח אותו עכשיו.',
+  'guidance.hint.drawFromDeck': 'לא מצאת התאמה? שלוף קלף מהחבילה כאן.',
 
   'demoSim.pickLevel': 'בחר/י רמה ולחץ/י "התחל סימולציה" במסלול זמן ללימוד',
   'demoSim.teacherNoAction': 'טרם בוצעה התערבות',
@@ -366,16 +383,31 @@ export const he: Record<string, string> = {
   'game.placeCards': 'הנח קלפים',
   'game.placeCardsNow': 'הנח קלפים מיד',
   'game.pickCards': 'בחר קלפים',
+  /** כפתור כתום אחרי תרגיל תקין — מאשר מעבר ל־solved ואז בחירת קלפים מהיד */
+  'game.buildingEquationNext': 'אשר/י תרגיל → בחר/י קלפים',
+  'hand.buildingNumberWildHint':
+    'עכשיו בונים תרגיל מהקוביות על השולחן (ולא מקלפי מספר ביד). כשהתרגיל מוכן — הכפתור הכתום. אחרי האישור בוחרים קלפים מהיד שסכומם מתאים.',
   'game.resetEquation': 'איפוס התרגיל',
   'game.drawForfeit': 'שלוף קלף - ויתור',
   'game.backToEquation': 'חזרה לתרגיל',
 
   'fraction.bubblePlayed': 'שיחקת קלף שבר — האתגר עבר לשחקן הבא.',
+  'fraction.attackPlayedExplain':
+    'שיחקת שבר: חילקת את היעד במכנה של הקלף. האתגר עובר לשחקן הבא — הוא יכול להגן במספר שמתחלק בעונש, בפרא עם ערך מתאים, לחסום בשבר נגדי (האתגר ממשיך הלאה), או לשלוף קלפי עונש.',
+  'fraction.cannotPlayHere': 'השבר הזה לא מתאים לקלף על הערימה — נסה שבר אחר או המשך לפי חוקי התור.',
   'fraction.challengeToastTitle': '⚔️ התקפת שבר',
   'fraction.firstTapHintTitle': 'יש לך קלף שבר',
   'fraction.firstTapHintBody':
     'שבר מחלק את יעד התור במכנה (למשל 10 הופך ל־5 ב־½). אפשר לתקוף עכשיו בשבר, או להמשיך לשחק רגיל עם הקוביות.',
   'fraction.counterHint': 'שבר נגדי מותר כהגנה — האתגר עובר לשחקן הבא.',
+  'fraction.counterHintDetail':
+    'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלפי עונש. ג\'וקר לא מגין מול שבר.',
+  'notification.fractionAttack.titleSelf': '⚔️ אותגרת בשבר',
+  'notification.fractionAttack.bodySelf':
+    'יעד חדש לתור: {{target}}. עונש אם לא מגנים: שליפת {{penalty}} קלפים.\n\nאפשרויות:\n• מספר שמתחלק ב־{{penalty}} (או פרא עם ערך כזה)\n• שבר נגדי — מפצל שוב את היעד והאתגר עובר לשחקן הבא\n• שליפת {{penalty}} קלפים — סיום האתגר\n\nג\'וקר לא מגן מול אתגר שבר.',
+  'notification.fractionAttack.titleWatch': '⚔️ אתגר שבר פעיל',
+  'notification.fractionAttack.bodyWatch':
+    'תורו/ה של {{name}}. יעד {{target}}, עונש {{penalty}} קלפים אם לא מגנים. אפשר הגנה במספר/פרא מתאימים, שבר נגדי (האתגר ממשיך), או שליפה.',
   'equation.twoDiceOnly': 'אפשר לסיים עם 2 קוביות בלבד',
   'game.almostDone': '🏁 כמעט סיימתי!',
   'wildModal.mustDivide': 'הערך חייב להתחלק ב־{{pen}} (בטווח 1–{{max}}).',
@@ -475,6 +507,40 @@ export const he: Record<string, string> = {
   'ui.confirm': 'אישור',
 
   'start.wheel.numberRange': 'טווח מספרים',
+  'start.advancedSetup.entryTitle': 'מתקדמים',
+  'start.advancedSetup.entryRowTeaser': 'שלבים A–H, טיימר, שברים וכוונון מלא — לחצו לפתיחה',
+  'start.advancedSetup.entryOpenCta': 'פתיחה',
+  'start.advancedSetup.entrySubtitle': 'כאן נכנסים לחדר הגדרות — רמת תרגול (A–H), טווח מספרים, שברים, תוצאות אפשריות, פתרון תרגיל וטיימר.',
+  'start.advancedSetup.modalTitle': 'הגדרות משחק מלאות',
+  'start.advancedSetup.stagePicker.sectionTitle': 'רמת תרגול (A–H)',
+  'start.advancedSetup.stagePicker.intro':
+    'לחצו על אות כדי לראות בדיוק מה השלב כולל. לחיצה שוב על אותה אות מסתירה את הטקסט. האות המודגשת היא מה שישמש במשחק הבא.',
+  'start.advancedSetup.stagePicker.detailPlaceholder': 'לחצו על A–H למעלה כדי לקרוא את התיאור המלא לשלב הזה.',
+  'start.advancedSetup.stagePicker.currentChoice': 'פעיל למשחק הבא: {{stage}}',
+  'start.advancedSetup.paywall.title': 'שלבי תרגול',
+  'start.advancedSetup.paywall.body':
+    'בחירת שלב תרגול מפורט (A–H) תהיה חלק מ־Salinda Plus. בינתיים נשארים על השלב הנוכחי; כאן יתחבר תשלום כשיהיה מוכן.',
+  'start.advancedSetup.paywall.ctaPlaceholder': 'שחרור עם Salinda Plus (בקרוב)',
+  'start.advancedSetup.stage.A.detail':
+    'קלפי מספרים 0–12. במשוואה מהקוביות רק חיבור (+). התוצאות מהקוביות לא שליליות.',
+  'start.advancedSetup.stage.B.detail':
+    'קלפי מספרים 0–12. רק חיסור (−). התוצאות נשארות אפס ומעלה.',
+  'start.advancedSetup.stage.C.detail':
+    'קלפי מספרים 0–12. חיבור וחיסור; תוצאות תקפות בלי שלילי.',
+  'start.advancedSetup.stage.D.detail':
+    'קלפי מספרים 0–12. חיבור וחיסור; מותרות תוצאות שליליות מהקוביות.',
+  'start.advancedSetup.stage.E.detail':
+    'קלפי מספרים 0–25. רק חיבור (+); בלי תוצאות שליליות.',
+  'start.advancedSetup.stage.F.detail':
+    'קלפי מספרים 0–25. רק חיסור (−); בלי תוצאות שליליות.',
+  'start.advancedSetup.stage.G.detail':
+    'קלפי מספרים 0–25. חיבור וחיסור; תוצאות תקפות בלי שלילי.',
+  'start.advancedSetup.stage.H.detail':
+    'קלפי מספרים 0–25. חיבור וחיסור; מותרות תוצאות שליליות מהקוביות.',
+  'start.wheel.beginnerStage': 'רמת תרגול (A-H)',
+  'start.wheel.beginnerStageHelp':
+    'A–D: טווח קלפים 0–12. E–H: טווח 0–25. A/E רק חיבור (+), B/F רק חיסור (−), C/G חיבור וחיסור, D/H חיבור וחיסור כולל תוצאות שליליות. השורה מתחת לכפתורים מסכמת את הבחירה — אין צורך לזכור בעל פה.',
+  'start.wheel.operators': 'סימנים במשחק',
   'start.wheel.timerRow': 'טיימר',
   'start.wheel.guidanceRow': 'הדרכה והסברים',
   'start.customTimerMinSec': "{{sec}} שנ' {{min}} דק'",
@@ -591,4 +657,12 @@ export const he: Record<string, string> = {
   'lab.steal.d1': 'מנגנון: קלף אחד מיד יריב — נבחר אקראית, או השחקן בוחר קלף גלוי (לפי חוקים).',
   'lab.steal.d2': 'משפיע על אסטרטגיית "לולוס" — סיכון שגונבים קלף טוב לפני סיום; או גניבה מקלפים חלשים.',
   'lab.steal.d3': 'אפשר לשלב עם קלף מגן (שמירה) — הגנה מפני גניבה באותו תור (ראה מסמך shield-card-design).',
+  'game.botAlreadyHasOpponent': 'כבר יש יריב אמיתי בחדר',
+  'lobby.botBadge': 'בוט',
+  'lobby.waitingForPlayer': 'מחפשים שחקן נוסף...',
+  'lobby.waitingForPlayerCountdown': 'מחפשים שחקן נוסף... אפשרות לבוט בעוד {{n}} שניות',
+  'lobby.botOfferTitle': 'עדיין אין יריב',
+  'lobby.botOfferBody': 'עדיין לא נכנס שחקן נוסף. אפשר להתחיל עכשיו מול בוט ולהשאיר את קוד החדר להזמנה בהמשך.',
+  'lobby.startBotGame': 'התחל מול בוט',
+  ...heLateOverrides,
 };

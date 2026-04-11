@@ -26,6 +26,11 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 
+# editor / IDE
+.cursor/
+.vscode/
+.idea/
+
 # macOS
 .DS_Store
 *.pem

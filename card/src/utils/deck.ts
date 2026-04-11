@@ -22,16 +22,18 @@ export function generateDeck(difficulty: 'easy' | 'full'): Card[] {
     }
   }
 
-  // Fraction cards: 6x ½, 4x each of ⅓, ¼, ⅕
-  const fractions: { frac: Fraction; count: number }[] = [
-    { frac: '1/2', count: 6 },
-    { frac: '1/3', count: 4 },
-    { frac: '1/4', count: 4 },
-    { frac: '1/5', count: 4 },
-  ]
-  for (const { frac, count } of fractions) {
-    for (let i = 0; i < count; i++) {
-      cards.push({ id: makeId(), type: 'fraction', fraction: frac })
+  if (difficulty === 'full') {
+    // Fraction cards are intentionally excluded from easy mode.
+    const fractions: { frac: Fraction; count: number }[] = [
+      { frac: '1/2', count: 6 },
+      { frac: '1/3', count: 4 },
+      { frac: '1/4', count: 4 },
+      { frac: '1/5', count: 4 },
+    ]
+    for (const { frac, count } of fractions) {
+      for (let i = 0; i < count; i++) {
+        cards.push({ id: makeId(), type: 'fraction', fraction: frac })
+      }
     }
   }
 

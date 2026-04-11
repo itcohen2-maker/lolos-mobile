@@ -52,6 +52,7 @@ export interface GameState {
   difficulty: 'easy' | 'full'
   hasPlayedCards: boolean
   hasDrawnCard: boolean
+  guidanceTurnsRemaining: number
 }
 
 export interface EquationOption {

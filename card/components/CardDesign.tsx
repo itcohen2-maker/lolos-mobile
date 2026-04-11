@@ -7,6 +7,7 @@ import React, { useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Animated, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
+import { displayFontFamily } from '../src/theme/fonts';
 
 // ─── טיפוס קלף לתצוגה ─────────────────────────────────────────
 export type CardType = 'number' | 'fraction' | 'operation' | 'joker' | 'wild';
@@ -68,6 +69,7 @@ export function Text3D({
   maxOffset?: number;
 }) {
   const colors = interpolateColor(darkColor, lightColor, maxOffset);
+  const fontFamily = displayFontFamily(text);
   return (
     <View>
       {colors.map((color, i) => (
@@ -79,13 +81,13 @@ export function Text3D({
             left: maxOffset - i,
             color,
             fontSize,
-            fontFamily: 'Fredoka_700Bold',
+            fontFamily,
           }}
         >
           {text}
         </Text>
       ))}
-      <Text style={{ color: faceColor, fontSize, fontFamily: 'Fredoka_700Bold' }}>{text}</Text>
+      <Text style={{ color: faceColor, fontSize, fontFamily }}>{text}</Text>
     </View>
   );
 }

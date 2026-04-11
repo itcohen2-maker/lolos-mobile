@@ -1,0 +1,161 @@
+{
+  "generatedAt": "2026-04-10T20:17:03.671Z",
+  "methodology": {
+    "naor": "חיבור: נשיאה כאשר (a%10)+(b%10)≥10. חיסור מקס־מין: השאלה כאשר (max%10)<(min%10). דו־שלבי עם שליליים: מחצית שנייה — (a%10)<(b%10).",
+    "kashim": "A: 0. B: כמו נשיאה/השאלה. C: מונה מקס־מין / (2n²). D: מונה נשיאה בחיבור / n² (כמו שורת D במחקר 0–12).",
+    "score": "ציון עומס: כיול לינארי מול A–H: -86.07 + 26.065×entropy - 0.5626×neg% + 0.7713×kashim%, חתוך ל־0–100."
+  },
+  "productNote": "במוצר: מצב קל 0–12, קוביות 1–6. כאן ניתוח לפי בקשת המחקר: קלפים 0–10 / 0–15.",
+  "byMax": {
+    "10": {
+      "max": 10,
+      "nPairs": 121,
+      "rows": [
+        {
+          "id": "A",
+          "label": "10: + בלבד",
+          "states": 121,
+          "uniqRes": 21,
+          "negPct": 0,
+          "naorPct": 37.1900826446281,
+          "entropy": 4.17,
+          "kashimPct": 0,
+          "cognitive": 22.6
+        },
+        {
+          "id": "B",
+          "label": "10: - בלבד (ללא שליליים, מקס־מין)",
+          "states": 121,
+          "uniqRes": 11,
+          "negPct": 0,
+          "naorPct": 14.87603305785124,
+          "entropy": 3.261,
+          "kashimPct": 14.87603305785124,
+          "cognitive": 10.4
+        },
+        {
+          "id": "C",
+          "label": "10: +/- ללא שליליים",
+          "states": 242,
+          "uniqRes": 21,
+          "negPct": 0,
+          "naorPct": 26.03,
+          "entropy": 4.132,
+          "kashimPct": 7.44,
+          "cognitive": 27.4
+        },
+        {
+          "id": "D",
+          "label": "10: +/- עם שליליים",
+          "states": 242,
+          "uniqRes": 31,
+          "negPct": 22.73,
+          "naorPct": 40.91,
+          "entropy": 4.746,
+          "kashimPct": 37.19,
+          "cognitive": 53.5
+        }
+      ]
+    },
+    "12": {
+      "max": 12,
+      "nPairs": 169,
+      "rows": [
+        {
+          "id": "A",
+          "label": "12: + בלבד",
+          "states": 169,
+          "uniqRes": 25,
+          "negPct": 0,
+          "naorPct": 30.17751479289941,
+          "entropy": 4.414,
+          "kashimPct": 0,
+          "cognitive": 29
+        },
+        {
+          "id": "B",
+          "label": "12: - בלבד (ללא שליליים, מקס־מין)",
+          "states": 169,
+          "uniqRes": 13,
+          "negPct": 0,
+          "naorPct": 28.402366863905325,
+          "entropy": 3.491,
+          "kashimPct": 28.402366863905325,
+          "cognitive": 26.8
+        },
+        {
+          "id": "C",
+          "label": "12: +/- ללא שליליים",
+          "states": 338,
+          "uniqRes": 25,
+          "negPct": 0,
+          "naorPct": 29.29,
+          "entropy": 4.381,
+          "kashimPct": 14.2,
+          "cognitive": 39.1
+        },
+        {
+          "id": "D",
+          "label": "12: +/- עם שליליים",
+          "states": 338,
+          "uniqRes": 37,
+          "negPct": 23.08,
+          "naorPct": 37.28,
+          "entropy": 5,
+          "kashimPct": 30.18,
+          "cognitive": 54.5
+        }
+      ]
+    },
+    "15": {
+      "max": 15,
+      "nPairs": 256,
+      "rows": [
+        {
+          "id": "A",
+          "label": "15: + בלבד",
+          "states": 256,
+          "uniqRes": 31,
+          "negPct": 0,
+          "naorPct": 29.6875,
+          "entropy": 4.716,
+          "kashimPct": 0,
+          "cognitive": 36.8
+        },
+        {
+          "id": "B",
+          "label": "15: - בלבד (ללא שליליים, מקס־מין)",
+          "states": 256,
+          "uniqRes": 16,
+          "negPct": 0,
+          "naorPct": 30.46875,
+          "entropy": 3.778,
+          "kashimPct": 30.46875,
+          "cognitive": 35.9
+        },
+        {
+          "id": "C",
+          "label": "15: +/- ללא שליליים",
+          "states": 512,
+          "uniqRes": 31,
+          "negPct": 0,
+          "naorPct": 30.08,
+          "entropy": 4.689,
+          "kashimPct": 15.23,
+          "cognitive": 47.9
+        },
+        {
+          "id": "D",
+          "label": "15: +/- עם שליליים",
+          "states": 512,
+          "uniqRes": 46,
+          "negPct": 23.44,
+          "naorPct": 37.11,
+          "entropy": 5.312,
+          "kashimPct": 29.69,
+          "cognitive": 62.1
+        }
+      ]
+    }
+  }
+}

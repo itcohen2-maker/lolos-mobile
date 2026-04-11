@@ -16,6 +16,11 @@ const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
   showFractions: true,
   showPossibleResults: true,
   showSolveExercise: true,
+  mathRangeMax: 25,
+  enabledOperators: ['+'],
+  allowNegativeTargets: false,
+  difficultyStage: 'E',
+  abVariant: 'variant_0_15_plus',
   timerSetting: 'off',
   timerCustomSeconds: 60,
 };
@@ -149,7 +154,7 @@ function endTurnLogic(st: ServerGameState): ServerGameState {
     stagedCards: [], equationResult: null, validTargets: [],
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: null, fractionPenalty: 0,
-    equationCommit: null,
+    equationCommits: [],
   };
 }
 
@@ -173,7 +178,14 @@ export function startGame(
     ...DEFAULT_HOST_GAME_SETTINGS,
     ...partialSettings,
   };
-  const deck = shuffle(generateDeck(difficulty, hostGameSettings.showFractions));
+  const deck = shuffle(
+    generateDeck(
+      difficulty,
+      hostGameSettings.showFractions,
+      hostGameSettings.enabledOperators,
+      hostGameSettings.mathRangeMax,
+    ),
+  );
   const { hands, remaining } = dealCards(deck, room.players.length, CARDS_PER_PLAYER);
   let drawPile = remaining;
 
@@ -228,7 +240,7 @@ export function startGame(
     message: '' as GameStatusMessage,
     openingDrawId,
     turnDeadlineAt: null,
-    equationCommit: null,
+    equationCommits: [],
   };
   return withOnlineTurnDeadline(initial);
 }
@@ -268,13 +280,18 @@ export function doRollDice(st: ServerGameState): ServerGameState | { error: Loca
     ns = s;
   }
 
-  const vt = generateValidTargets(dice);
+  const vt = generateValidTargets(
+    dice,
+    st.hostGameSettings.enabledOperators,
+    st.hostGameSettings.allowNegativeTargets ?? false,
+    st.hostGameSettings.mathRangeMax ?? 12,
+  );
   return {
     ...ns,
     validTargets: vt,
     phase: 'building',
     consecutiveIdenticalPlays: 0,
-    equationCommit: null,
+    equationCommits: [],
     message: statusMsg,
   };
 }
@@ -341,6 +358,7 @@ export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error
       validTargets: [],
       equationResult: null,
       stagedCards: [],
+      equationCommits: [],
       hasPlayedCards: false,
       hasDrawnCard: false,
       lastCardValue: null,
@@ -366,32 +384,51 @@ export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error
   return { ...base, lastMoveMessage: tMsg, message: '' };
 }
 
-function validateEquationCommitPayload(
+function validateEquationCommitsPayload(
   st: ServerGameState,
-  payload: EquationCommitPayload | null | undefined,
-): { error: LocalizedMessage } | { ok: true; commit: EquationCommitPayload | null } {
-  if (payload == null) return { ok: true, commit: null };
-  const card = findCard(st, payload.cardId);
-  if (!card) return locErr('equation.commitCardNotInHand');
-  if (card.type !== 'operation' && card.type !== 'joker') return locErr('equation.invalidCommitCard');
-  if (payload.position !== 0 && payload.position !== 1) return locErr('equation.invalidOpPosition');
-  if (card.type === 'joker') {
-    if (payload.jokerAs == null) return locErr('equation.chooseJokerOp');
-  } else if (payload.jokerAs != null) {
-    return locErr('equation.regularOpNoJoker');
+  payloads: EquationCommitPayload[] | null | undefined,
+): { error: LocalizedMessage } | { ok: true; commits: EquationCommitPayload[] } {
+  if (payloads == null || payloads.length === 0) return { ok: true, commits: [] };
+  if (payloads.length > 2) return locErr('equation.tooManyCommits');
+  const seenPos = new Set<number>();
+  const seenCard = new Set<string>();
+  const out: EquationCommitPayload[] = [];
+  for (const payload of payloads) {
+    if (seenPos.has(payload.position)) return locErr('equation.duplicateOpPosition');
+    if (seenCard.has(payload.cardId)) return locErr('equation.duplicateCommitCard');
+    seenPos.add(payload.position);
+    seenCard.add(payload.cardId);
+    const card = findCard(st, payload.cardId);
+    if (!card) return locErr('equation.commitCardNotInHand');
+    if (card.type !== 'operation' && card.type !== 'joker') return locErr('equation.invalidCommitCard');
+    if (payload.position !== 0 && payload.position !== 1) return locErr('equation.invalidOpPosition');
+    if (card.type === 'joker') {
+      if (payload.jokerAs == null) return locErr('equation.chooseJokerOp');
+    } else if (payload.jokerAs != null) {
+      return locErr('equation.regularOpNoJoker');
+    }
+    out.push({ cardId: payload.cardId, position: payload.position, jokerAs: payload.jokerAs });
   }
-  return { ok: true, commit: { cardId: payload.cardId, position: payload.position, jokerAs: payload.jokerAs } };
+  return { ok: true, commits: out };
 }
 
 export function confirmEquation(
   st: ServerGameState,
   result: number,
   equationDisplay: string,
+  equationCommits?: EquationCommitPayload[] | null,
+  /** @deprecated use equationCommits */
   equationCommit?: EquationCommitPayload | null,
 ): ServerGameState | { error: LocalizedMessage } {
   if (st.phase !== 'building') return locErr('equation.notBuildingPhase');
   if (!st.validTargets.some(t => t.result === result)) return locErr('equation.invalidResult');
-  const validated = validateEquationCommitPayload(st, equationCommit);
+  const raw =
+    equationCommits != null && equationCommits.length > 0
+      ? equationCommits
+      : equationCommit != null
+        ? [equationCommit]
+        : [];
+  const validated = validateEquationCommitsPayload(st, raw);
   if ('error' in validated) return validated;
   return {
     ...st,
@@ -399,14 +436,14 @@ export function confirmEquation(
     equationResult: result,
     lastEquationDisplay: equationDisplay,
     stagedCards: [],
-    equationCommit: validated.commit,
+    equationCommits: validated.commits,
     message: '',
   };
 }
 
 export function stageCard(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
   if (st.phase !== 'solved' || st.hasPlayedCards) return locErr('stage.cannotStageNow');
-  if (st.equationCommit?.cardId === cardId) return locErr('stage.alreadyInEquation');
+  if (st.equationCommits.some((c) => c.cardId === cardId)) return locErr('stage.alreadyInEquation');
   const card = findCard(st, cardId);
   if (!card) return locErr('stage.cardNotFound');
   if (st.stagedCards.some(c => c.id === card.id)) return locErr('stage.alreadyInStaging');
@@ -434,15 +471,16 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
   const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
   if (stNumbers.length === 0) return locErr('confirm.needNumberOrWild');
   if (st.equationResult === null) return locErr('confirm.noEquationResult');
-  if (!validateStagedCards(stNumbers, stOpCard, st.equationResult)) {
+  const maxWild = st.hostGameSettings?.mathRangeMax ?? 25;
+  if (!validateStagedCards(stNumbers, stOpCard, st.equationResult, maxWild)) {
     return locErr('confirm.sumMismatch');
   }
 
   const stIds = new Set(st.stagedCards.map(c => c.id));
-  if (st.equationCommit) stIds.add(st.equationCommit.cardId);
+  for (const ec of st.equationCommits) stIds.add(ec.cardId);
   const stCp = st.players[st.currentPlayerIndex];
   const stNp = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: stCp.hand.filter(c => !stIds.has(c.id)) } : p);
-  const discardDisplayCard = resolveDiscardNumberCardFromStaged(st.stagedCards, st.equationResult);
+  const discardDisplayCard = resolveDiscardNumberCardFromStaged(st.stagedCards, st.equationResult, maxWild);
   const lastCardVal = getEffectiveNumber(discardDisplayCard);
   const stDiscard = [...st.discardPile, discardDisplayCard];
   const stToast = locMsg('toast.equationPlayed', {
@@ -456,7 +494,7 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
     stagedCards: [], consecutiveIdenticalPlays: 0,
     hasPlayedCards: true, lastCardValue: lastCardVal,
     lastMoveMessage: stToast, lastEquationDisplay: null,
-    equationCommit: null,
+    equationCommits: [],
     message: '',
   };
   stNs = checkWin(stNs);
@@ -519,7 +557,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
       hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
       pendingFractionTarget: newTarget, fractionPenalty: denom,
       fractionAttackResolved: false,
-      equationCommit: null,
+      equationCommits: [],
       lastMoveMessage: locMsg('toast.fractionBlock', { name: cp.name, fraction: String(card.fraction) }),
       message: locMsg('toast.msg.fractionBlocked', { name: cp.name, fraction: String(card.fraction) }),
     };
@@ -546,7 +584,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: newTarget, fractionPenalty: denom,
     fractionAttackResolved: false,
-    equationCommit: null,
+    equationCommits: [],
     lastMoveMessage: locMsg('toast.fractionAttack', { name: cp.name, fraction: String(card.fraction) }),
     message: locMsg('toast.msg.fractionPlayed', { name: cp.name, fraction: String(card.fraction) }),
   };
@@ -664,6 +702,7 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
         cardCount: p.hand.length,
         isConnected: p.isConnected,
         isHost: p.isHost,
+        isBot: p.isBot,
         calledLolos: p.calledLolos,
         afkWarnings: p.afkWarnings,
         isEliminated: p.isEliminated,
@@ -675,6 +714,7 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
       cardCount: p.hand.length,
       isConnected: p.isConnected,
       isHost: p.isHost,
+      isBot: p.isBot,
       calledLolos: p.calledLolos,
       afkWarnings: p.afkWarnings,
       isEliminated: p.isEliminated,
@@ -702,6 +742,6 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     message: formatGameMessage(locale, state.message),
     openingDrawId: state.openingDrawId,
     turnDeadlineAt: state.turnDeadlineAt,
-    equationCommit: state.equationCommit,
+    equationCommits: state.equationCommits,
   };
 }

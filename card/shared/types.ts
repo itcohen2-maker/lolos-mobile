@@ -33,6 +33,7 @@ export interface Player {
   calledLolos: boolean;
   isConnected: boolean;
   isHost: boolean;
+  isBot: boolean;
   afkWarnings: number;
   isEliminated: boolean;
   isSpectator: boolean;
@@ -47,11 +48,18 @@ export interface OpponentView {
   cardCount: number;
   isConnected: boolean;
   isHost: boolean;
+  isBot: boolean;
   calledLolos: boolean;
   afkWarnings: number;
   isEliminated: boolean;
   isSpectator: boolean;
 }
+
+export type LobbyStatus = 'waiting_for_player' | 'bot_offer' | 'bot_game_started';
+/** playerView ב־ok (שרת מעודכן) — גיבוי אם game_started נאבד; אופציונלי לתאימות לשרת ישן */
+export type StartBotGameAck =
+  | { ok: true; playerView?: PlayerView }
+  | { ok: false; message: string };
 
 // ── Dice ──
 
@@ -93,6 +101,11 @@ export interface HostGameSettings {
   showFractions: boolean;
   showPossibleResults: boolean;
   showSolveExercise: boolean;
+  mathRangeMax?: 12 | 25;
+  enabledOperators?: Operation[];
+  allowNegativeTargets?: boolean;
+  difficultyStage?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
+  abVariant?: 'control_0_12_plus' | 'variant_0_15_plus';
   timerSetting: '30' | '60' | 'off' | 'custom';
   timerCustomSeconds: number;
 }
@@ -129,8 +142,8 @@ export interface ServerGameState {
   openingDrawId: string;
   /** מועד יעד (epoch ms) לפעולת התור הנוכחית — מקוון בלבד; null כשלא במצב המתנה */
   turnDeadlineAt: number | null;
-  /** אחרי אישור תרגיל קוביות: קלף פעולה/ג'וקר ששולב בתרגיל ויוסר ביחד עם קלפי ההנחה */
-  equationCommit: EquationCommitPayload | null;
+  /** אחרי אישור תרגיל קוביות: עד 2 קלפי פעולה/ג'וקר במשבצות 0 ו־1; יוסרו עם קלפי ההנחה */
+  equationCommits: EquationCommitPayload[];
 }
 
 // ── Client Player View (what each player sees) ──
@@ -142,7 +155,7 @@ export interface PlayerView {
   myPlayerId: string;
   opponents: OpponentView[];
   currentPlayerIndex: number;
-  players: { id: string; name: string; cardCount: number; isConnected: boolean; isHost: boolean; calledLolos: boolean; afkWarnings: number; isEliminated: boolean; isSpectator: boolean }[];
+  players: { id: string; name: string; cardCount: number; isConnected: boolean; isHost: boolean; isBot: boolean; calledLolos: boolean; afkWarnings: number; isEliminated: boolean; isSpectator: boolean }[];
   pileTop: Card | null;
   deckCount: number;
   dice: DiceResult | null;
@@ -165,7 +178,9 @@ export interface PlayerView {
   message: string;
   openingDrawId: string;
   turnDeadlineAt: number | null;
-  /** נתון רק אחרי אישור תרגיל עם קלף פעולה/ג'וקר מהיד */
+  /** נתון רק אחרי אישור תרגיל עם קלף/י פעולה או ג'וקר מהיד */
+  equationCommits?: EquationCommitPayload[];
+  /** @deprecated השרת שולח equationCommits */
   equationCommit?: EquationCommitPayload | null;
 }
 
@@ -176,9 +191,19 @@ export interface ClientToServerEvents {
   join_room: (data: { roomCode: string; playerName: string; locale?: AppLocale }) => void;
   leave_room: () => void;
   start_game: (data: { difficulty: 'easy' | 'full'; gameSettings?: Partial<HostGameSettings> }) => void;
+  start_bot_game: (
+    data: { difficulty: 'easy' | 'full'; gameSettings?: Partial<HostGameSettings> },
+    ack?: (result: StartBotGameAck) => void,
+  ) => void;
   roll_dice: () => void;
   set_operator: (data: { position: number; operator: string }) => void;
-  confirm_equation: (data: { result: number; equationDisplay: string; equationCommit?: EquationCommitPayload | null }) => void;
+  confirm_equation: (data: {
+    result: number;
+    equationDisplay: string;
+    equationCommits?: EquationCommitPayload[];
+    /** @deprecated normalized server-side to equationCommits */
+    equationCommit?: EquationCommitPayload | null;
+  }) => void;
   stage_card: (data: { cardId: string }) => void;
   unstage_card: (data: { cardId: string }) => void;
   confirm_staged: () => void;
@@ -199,8 +224,9 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   room_created: (data: { roomCode: string; playerId: string }) => void;
-  player_joined: (data: { players: { id: string; name: string; isHost: boolean; isConnected: boolean }[] }) => void;
+  player_joined: (data: { players: { id: string; name: string; isHost: boolean; isConnected: boolean; isBot: boolean }[] }) => void;
   player_left: (data: { playerId: string; playerName: string }) => void;
+  lobby_status: (data: { status: LobbyStatus; botOfferAt: number | null }) => void;
   game_started: (data: PlayerView) => void;
   state_update: (data: PlayerView) => void;
   toast: (data: { message: string }) => void;

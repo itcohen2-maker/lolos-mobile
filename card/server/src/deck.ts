@@ -21,10 +21,15 @@ export function shuffle<T>(array: T[]): T[] {
 }
 
 /** Generate a full Lolos deck (מיושר ל־index.tsx: מספרים, שברים אופציונליים, פעולות, ג'וקרים, פרא) */
-export function generateDeck(difficulty: 'easy' | 'full', includeFractions: boolean = true): Card[] {
+export function generateDeck(
+  difficulty: 'easy' | 'full',
+  includeFractions: boolean = true,
+  enabledOperators?: Operation[],
+  rangeMaxOverride?: 12 | 25,
+): Card[] {
   resetCardIds();
   const cards: Card[] = [];
-  const maxNumber = difficulty === 'easy' ? 12 : 25;
+  const maxNumber = rangeMaxOverride ?? (difficulty === 'easy' ? 12 : 25);
 
   // Number cards: 4 copies of each (0 to maxNumber)
   for (let set = 0; set < 4; set++)
@@ -42,7 +47,7 @@ export function generateDeck(difficulty: 'easy' | 'full', includeFractions: bool
   }
 
   // Operation cards: 4 of each
-  const operations: Operation[] = ['+', '-', 'x', '÷'];
+  const operations: Operation[] = enabledOperators && enabledOperators.length > 0 ? enabledOperators : ['+', '-', 'x', '÷'];
   for (const op of operations)
     for (let i = 0; i < (op === '÷' ? 3 : 4); i++)
       cards.push({ id: makeId(), type: 'operation', operation: op });

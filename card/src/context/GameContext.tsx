@@ -12,6 +12,7 @@ import {
 import { applyFraction, isDivisibleByFraction } from '../utils/arithmetic'
 
 const CARDS_PER_PLAYER = 10
+const GUIDED_TURNS_PER_PLAYER = 3
 
 const initialState: GameState = {
   phase: 'setup',
@@ -34,6 +35,7 @@ const initialState: GameState = {
   difficulty: 'full',
   hasPlayedCards: false,
   hasDrawnCard: false,
+  guidanceTurnsRemaining: 0,
 }
 
 function reshuffleDiscard(state: GameState): GameState {
@@ -101,6 +103,7 @@ function gameReducer(
         drawPile,
         discardPile: topCard ? [topCard] : [],
         difficulty: action.difficulty,
+        guidanceTurnsRemaining: playerCount * GUIDED_TURNS_PER_PLAYER,
       }
     }
 
@@ -472,6 +475,7 @@ function gameReducer(
         identicalPlayCount: 0,
         hasPlayedCards: false,
         hasDrawnCard: false,
+        guidanceTurnsRemaining: Math.max(0, s.guidanceTurnsRemaining - 1),
       }
     }
 

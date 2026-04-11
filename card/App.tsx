@@ -20,6 +20,7 @@ import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
 import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
 import * as Localization from 'expo-localization';
 import { t as translate } from './shared/i18n';
+import { displayFontFamily } from './src/theme/fonts';
 
 I18nManager.allowRTL(true);
 I18nManager.forceRTL(true);
@@ -767,15 +768,16 @@ function Text3D({ text, fontSize, faceColor, darkColor, lightColor, maxOffset = 
   text: string; fontSize: number; faceColor: string; darkColor: string; lightColor: string; maxOffset?: number;
 }) {
   const colors = interpolateColor(darkColor, lightColor, maxOffset);
+  const fontFamily = displayFontFamily(text);
   return (
     <View>
       {colors.map((color, i) => (
         <Text key={i} style={{
           position: 'absolute', top: maxOffset - i, left: maxOffset - i,
-          color, fontSize, fontFamily: 'Fredoka_700Bold',
+          color, fontSize, fontFamily,
         }}>{text}</Text>
       ))}
-      <Text style={{ color: faceColor, fontSize, fontFamily: 'Fredoka_700Bold' }}>{text}</Text>
+      <Text style={{ color: faceColor, fontSize, fontFamily }}>{text}</Text>
     </View>
   );
 }

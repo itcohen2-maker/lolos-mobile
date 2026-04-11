@@ -13,6 +13,7 @@ export const en: Record<string, string> = {
   'game.hostOnlyStart': 'Only the host can start the game',
   'game.minTwoPlayers': 'At least 2 players are required',
   'game.noRoom': 'Room not found',
+  'game.botAlreadyHasOpponent': 'A real opponent is already in the room',
 
   'dice.cannotRollNow': 'You cannot roll dice right now',
   'timer.notActivePhase': 'Timer is not active for this phase',
@@ -25,6 +26,10 @@ export const en: Record<string, string> = {
   'equation.invalidOpPosition': 'Invalid operator slot',
   'equation.chooseJokerOp': 'Choose an operation for the Joker',
   'equation.regularOpNoJoker': 'A regular operation card does not need Joker choice',
+  'equation.tooManyCommits': 'Too many operation cards in the equation',
+  'equation.duplicateOpPosition': 'Duplicate operator slot in equation',
+  'equation.duplicateCommitCard': 'Same card committed twice',
+  'equation.handSlotsFull': 'Remove a card from the equation first (max two operation cards)',
 
   'stage.cannotStageNow': 'Cannot stage a card now',
   'stage.alreadyInEquation': 'That card is already in the dice equation',
@@ -124,6 +129,7 @@ export const en: Record<string, string> = {
   'lobby.copy': 'Copy',
   'lobby.playersInRoom': 'Players in room ({{count}}/6)',
   'lobby.host': 'Host',
+  'lobby.botBadge': 'Bot',
   'lobby.disconnected': 'Offline',
   'lobby.difficulty': 'Difficulty',
   'lobby.diffShortEasy': 'Easy',
@@ -148,6 +154,11 @@ export const en: Record<string, string> = {
   'lobby.summaryTitle': 'Summary before start (everyone)',
   'lobby.startGame': 'Start game',
   'lobby.minPlayers': 'At least 2 players are required to start',
+  'lobby.waitingForPlayer': 'Looking for another player...',
+  'lobby.waitingForPlayerCountdown': 'Looking for another player... bot option in {{n}} sec',
+  'lobby.botOfferTitle': 'No opponent yet',
+  'lobby.botOfferBody': 'No player joined yet. You can start now against a bot and keep the room code for future real matches.',
+  'lobby.startBotGame': 'Start vs bot',
   'lobby.waitHost': 'Waiting for the host to start… settings will appear for everyone once the scenario loads.',
   'lobby.summary.difficulty': 'Difficulty: {{value}}',
   'lobby.summary.dice': 'Dice: 3',
@@ -172,7 +183,7 @@ export const en: Record<string, string> = {
   'start.playerPlaceholder': 'Player {{n}}',
   'start.difficulty': 'Difficulty',
   'start.diffFull': 'Full (0-25)',
-  'start.diffEasy': 'Easy (0-12)',
+  'start.diffEasy': 'Easy (0-12, no fractions)',
   'start.startGame': 'Start game',
   'start.hideRules': 'Hide rules',
   'start.showRules': 'How to play?',
@@ -230,7 +241,7 @@ export const en: Record<string, string> = {
   'catalog.jokerTitle': '🃏 Joker',
   'catalog.jokerBody': 'Choose which operation it represents. Use it in the equation to discard it. Cannot defend a fraction attack.',
   'catalog.wildTitle': '★ Wild',
-  'catalog.wildBody': 'Counts as any number 0–25. Pick its value in the equation; can be played as a match when the top is a number.',
+  'catalog.wildBody': 'Counts as any value in the active range (beginner tracks: 0–12 or 0–25). Choose its value in the equation; it can also be played as a matching card.',
   'catalog.fracTitle': '½ ⅓ ¼ ⅕ Fraction',
   'catalog.fracBody': 'Divides the target by the denominator. Can attack — next player must defend, block with another fraction, or draw.\nDeck: ½ ×6, ⅓ ×4, ¼ ×3, ⅕ ×2 (15 total).',
 
@@ -238,10 +249,11 @@ export const en: Record<string, string> = {
   'rulesLine.fracCard': '½ ⅓ ¼ ⅕ Fraction — attack: next player needs a divisible card, another fraction, or penalty draw.',
   'rulesLine.opCard': '➕ Operation — place the sign in the equation to discard.',
   'rulesLine.jokerCard': '🃏 Joker — pick its operation; use in the equation to discard. No fraction defense.',
-  'rulesLine.wildCard': '★ Wild — any value 0–25; can match when top is a number.',
+  'rulesLine.wildCard': '★ Wild — any value in the active range (0–12/0–25 for beginners); can match when top is a number.',
 
   'ui.gotIt': 'Got it',
   'ui.welcomeHowTitle': '👋 Welcome — how to play',
+  'ui.timedGameBanner': 'Timed game: {{value}} per turn',
   'ui.turnTimerLabel': 'If you do not act, turn passes',
   'ui.wildIdenticalHint': 'Wild handy? Discard it as a match when the top is a number — it counts as that number.',
 
@@ -322,8 +334,12 @@ export const en: Record<string, string> = {
 
   'guidance.alertTitle': 'Guidance',
   'guidance.alertBody': 'Show hints and explanations in this game?',
-  'guidance.skip': 'Skip guidance',
-  'guidance.need': 'Show guidance',
+  'guidance.skip': 'Without guidance',
+  'guidance.need': 'Yes, with guidance',
+  'guidance.welcomeTitle': 'Welcome',
+  'guidance.welcomeBody': 'Do you want guided hints and explanations during the game, or continue without guidance?',
+  'guidance.hint.matchTopCard': 'You have a card matching the top discard. Play it now.',
+  'guidance.hint.drawFromDeck': 'No match yet? Draw a card from this deck.',
 
   'demoSim.pickLevel': 'Pick a level and tap “Start simulation” in the learning-time path',
   'demoSim.teacherNoAction': 'No intervention yet',
@@ -364,16 +380,30 @@ export const en: Record<string, string> = {
   'game.placeCards': 'Place cards',
   'game.placeCardsNow': 'Place cards now',
   'game.pickCards': 'Pick cards',
+  'game.buildingEquationNext': 'Confirm equation → pick cards',
+  'hand.buildingNumberWildHint':
+    'Build the equation from the dice on the table (not number cards in hand yet). When it is valid, use the orange button — then pick hand cards that sum to the result.',
   'game.resetEquation': 'Reset equation',
   'game.drawForfeit': 'Draw card — forfeit',
   'game.backToEquation': 'Back to equation',
 
   'fraction.bubblePlayed': 'You played a fraction card — the challenge passes to the next player.',
+  'fraction.attackPlayedExplain':
+    'You played a fraction: it divided the target by its denominator. The next player must respond — with a divisible number (or wild), a counter fraction (passes the chain on), or by drawing the penalty cards.',
+  'fraction.cannotPlayHere': 'That fraction cannot be played on the current top card — try another fraction or follow the turn rules.',
   'fraction.challengeToastTitle': '⚔️ Fraction attack',
   'fraction.firstTapHintTitle': 'You have a fraction card',
   'fraction.firstTapHintBody':
     'A fraction divides the turn target by its denominator (for example, 10 becomes 5 with ½). You can attack with it now, or continue with regular dice play.',
   'fraction.counterHint': 'A counter fraction is a valid defense — the challenge passes to the next player.',
+  'fraction.counterHintDetail':
+    'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or take the penalty draw. Joker does not defend a fraction attack.',
+  'notification.fractionAttack.titleSelf': '⚔️ Fraction challenge — your turn to defend',
+  'notification.fractionAttack.bodySelf':
+    'New target: {{target}}. If you do not defend, draw {{penalty}} cards.\n\nYou can:\n• Play a number divisible by {{penalty}} (or a wild set to such a value)\n• Block with another fraction — target divides again and the challenge moves to the next player\n• Draw {{penalty}} cards — ends the challenge for you\n\nJoker cannot defend a fraction attack.',
+  'notification.fractionAttack.titleWatch': '⚔️ Fraction challenge in progress',
+  'notification.fractionAttack.bodyWatch':
+    "{{name}}'s turn. Target {{target}}, penalty {{penalty}} cards if they do not defend. They may play a matching number/wild, a counter fraction (chain continues), or draw.",
   'equation.twoDiceOnly': 'You can finish using only 2 dice',
   'game.almostDone': '🏁 Almost done!',
   'wildModal.mustDivide': 'The value must be divisible by {{pen}} (in range 1–{{max}}).',
@@ -473,6 +503,40 @@ export const en: Record<string, string> = {
   'ui.confirm': 'OK',
 
   'start.wheel.numberRange': 'Number range',
+  'start.advancedSetup.entryTitle': 'Advanced',
+  'start.advancedSetup.entryRowTeaser': 'Levels A–H, timer, fractions & fine-tuning — tap to open',
+  'start.advancedSetup.entryOpenCta': 'Open',
+  'start.advancedSetup.entrySubtitle': 'Open the full setup room: practice level (A–H), number range, fractions, possible results, solve hint, and timer.',
+  'start.advancedSetup.modalTitle': 'Full game settings',
+  'start.advancedSetup.stagePicker.sectionTitle': 'Practice level (A–H)',
+  'start.advancedSetup.stagePicker.intro':
+    'Tap a letter to see exactly what it changes. Tap the same letter again to hide the text. The highlighted letter is what the next game will use.',
+  'start.advancedSetup.stagePicker.detailPlaceholder': 'Tap A–H above to read the full description for that level.',
+  'start.advancedSetup.stagePicker.currentChoice': 'Active for next game: {{stage}}',
+  'start.advancedSetup.paywall.title': 'Practice levels',
+  'start.advancedSetup.paywall.body':
+    'Choosing a custom practice level (A–H) will be part of Salinda Plus. Until then, your current level stays as set; connect purchases here when ready.',
+  'start.advancedSetup.paywall.ctaPlaceholder': 'Unlock with Salinda Plus (coming soon)',
+  'start.advancedSetup.stage.A.detail':
+    'Number cards 0–12. Equations may use addition (+) only. Dice results are not negative.',
+  'start.advancedSetup.stage.B.detail':
+    'Number cards 0–12. Equations may use subtraction (−) only. Results stay at zero or above.',
+  'start.advancedSetup.stage.C.detail':
+    'Number cards 0–12. Both + and − are allowed; valid targets stay at zero or above.',
+  'start.advancedSetup.stage.D.detail':
+    'Number cards 0–12. Both + and −; negative targets from the dice are allowed.',
+  'start.advancedSetup.stage.E.detail':
+    'Number cards 0–25. Addition (+) only; non-negative targets.',
+  'start.advancedSetup.stage.F.detail':
+    'Number cards 0–25. Subtraction (−) only; non-negative targets.',
+  'start.advancedSetup.stage.G.detail':
+    'Number cards 0–25. Both + and −; targets stay at zero or above.',
+  'start.advancedSetup.stage.H.detail':
+    'Number cards 0–25. Both + and −; negative targets from the dice are allowed.',
+  'start.wheel.beginnerStage': 'Practice level (A-H)',
+  'start.wheel.beginnerStageHelp':
+    'A–D: number cards 0–12. E–H: 0–25. A/E: addition (+) only; B/F: subtraction (−) only; C/G: + and −; D/H: + and − with negative results allowed. The summary line under the buttons updates when you tap — you do not need to memorize the letters.',
+  'start.wheel.operators': 'Operators in play',
   'start.wheel.timerRow': 'Timer',
   'start.wheel.guidanceRow': 'Guidance & hints',
   'start.customTimerMinSec': '{{min}} min {{sec}} s',

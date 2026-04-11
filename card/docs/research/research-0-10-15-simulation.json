@@ -1,0 +1,83 @@
+{
+  "generatedAt": "2026-04-10T19:40:46.226Z",
+  "maxTurnsCap": 400,
+  "numPlayers": 3,
+  "gamesPerVariant": 2000,
+  "dice": "אחיד 0–10 לכל קוביה (3 קוביות)",
+  "operations": "+ / − בלבד בחישוב יעדים; חפיסה כוללת קלפי פעולה + ו־− בלבד",
+  "disclaimer": "מודל שחקן פשוט כמו simulate-variants.js — לא אסטרטגיה אנושית.",
+  "results": [
+    {
+      "name": "קלפים 0–10, 3 עותקים, שברים, ללא יעדים שליליים",
+      "maxNum": 10,
+      "copies": 3,
+      "includeFractions": true,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 587,
+      "pFinishPct": 29.349999999999998,
+      "meanTurns": 30.4
+    },
+    {
+      "name": "קלפים 0–15, 3 עותקים, שברים, ללא יעדים שליליים",
+      "maxNum": 15,
+      "copies": 3,
+      "includeFractions": true,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 734,
+      "pFinishPct": 36.7,
+      "meanTurns": 34.9
+    },
+    {
+      "name": "קלפים 0–10, 3 עותקים, בלי שברים",
+      "maxNum": 10,
+      "copies": 3,
+      "includeFractions": false,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 302,
+      "pFinishPct": 15.1,
+      "meanTurns": 28.9
+    },
+    {
+      "name": "קלפים 0–15, 3 עותקים, בלי שברים",
+      "maxNum": 15,
+      "copies": 3,
+      "includeFractions": false,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 458,
+      "pFinishPct": 22.900000000000002,
+      "meanTurns": 35.1
+    },
+    {
+      "name": "קלפים 0–10, 4 עותקים, שברים",
+      "maxNum": 10,
+      "copies": 4,
+      "includeFractions": true,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 755,
+      "pFinishPct": 37.75,
+      "meanTurns": 32.2
+    },
+    {
+      "name": "קלפים 0–15, 4 עותקים, שברים",
+      "maxNum": 15,
+      "copies": 4,
+      "includeFractions": true,
+      "allowNegativeTargets": false,
+      "cardsPerPlayer": 7,
+      "games": 2000,
+      "finished": 969,
+      "pFinishPct": 48.449999999999996,
+      "meanTurns": 36.4
+    }
+  ]
+}

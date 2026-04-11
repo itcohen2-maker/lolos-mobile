@@ -94,7 +94,13 @@ function permutations(arr: number[]): number[][] {
   return result;
 }
 
-export function generateValidTargets(dice: DiceResult): EquationOption[] {
+export function generateValidTargets(
+  dice: DiceResult,
+  enabledOperators?: Operation[],
+  allowNegativeTargets: boolean = false,
+  maxTarget: number = 25,
+): EquationOption[] {
+  const allowedOps = enabledOperators && enabledOperators.length > 0 ? enabledOperators : ALL_OPS;
   const values = [dice.die1, dice.die2, dice.die3];
   const perms = permutations(values);
   const seen = new Set<string>();
@@ -102,10 +108,10 @@ export function generateValidTargets(dice: DiceResult): EquationOption[] {
 
   // 3-dice combinations (standard order of operations)
   for (const [a, b, c] of perms) {
-    for (const op1 of ALL_OPS) {
-      for (const op2 of ALL_OPS) {
+    for (const op1 of allowedOps) {
+      for (const op2 of allowedOps) {
         const r = evalThreeTerms(a, op1, b, op2, c);
-        if (r !== null && r >= 0 && Number.isInteger(r)) {
+        if (r !== null && (allowNegativeTargets || r >= 0) && Number.isInteger(r)) {
           const eq = `${a} ${op1} ${b} ${op2} ${c} = ${r}`;
           if (!seen.has(`${r}:${eq}`)) { seen.add(`${r}:${eq}`); results.push({ equation: eq, result: r }); }
         }
@@ -118,14 +124,14 @@ export function generateValidTargets(dice: DiceResult): EquationOption[] {
     [values[0], values[1]], [values[0], values[2]], [values[1], values[2]],
   ];
   for (const [a, b] of pairs) {
-    for (const op of ALL_OPS) {
+    for (const op of allowedOps) {
       const r1 = applyOperation(a, op, b);
-      if (r1 !== null && r1 >= 0 && Number.isInteger(r1)) {
+      if (r1 !== null && (allowNegativeTargets || r1 >= 0) && Number.isInteger(r1)) {
         const eq1 = `${a} ${op} ${b} = ${r1}`;
         if (!seen.has(`${r1}:${eq1}`)) { seen.add(`${r1}:${eq1}`); results.push({ equation: eq1, result: r1 }); }
       }
       const r2 = applyOperation(b, op, a);
-      if (r2 !== null && r2 >= 0 && Number.isInteger(r2)) {
+      if (r2 !== null && (allowNegativeTargets || r2 >= 0) && Number.isInteger(r2)) {
         const eq2 = `${b} ${op} ${a} = ${r2}`;
         if (!seen.has(`${r2}:${eq2}`)) { seen.add(`${r2}:${eq2}`); results.push({ equation: eq2, result: r2 }); }
       }
@@ -135,7 +141,9 @@ export function generateValidTargets(dice: DiceResult): EquationOption[] {
   // Deduplicate by result, keep first equation per result
   const byResult = new Map<number, EquationOption>();
   for (const opt of results)
-    if (!byResult.has(opt.result)) byResult.set(opt.result, opt);
+    if ((allowNegativeTargets || opt.result >= 0) && opt.result <= maxTarget && !byResult.has(opt.result)) {
+      byResult.set(opt.result, opt);
+    }
   return Array.from(byResult.values()).sort((a, b) => a.result - b.result);
 }
 
@@ -180,7 +188,13 @@ function getStagedPermutations(arr: number[]): number[][] {
   return result;
 }
 
-export function validateStagedCards(numberCards: Card[], opCard: Card | null, target: number): boolean {
+export function validateStagedCards(
+  numberCards: Card[],
+  opCard: Card | null,
+  target: number,
+  maxWild: number = 25,
+): boolean {
+  const cap = Math.max(0, Math.min(25, maxWild));
   const wildCount = numberCards.filter(c => c.type === 'wild').length;
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
@@ -189,10 +203,10 @@ export function validateStagedCards(numberCards: Card[], opCard: Card | null, ta
     if (!opCard) {
       const sum = values.reduce((s, v) => s + v, 0);
       const wildVal = target - sum;
-      return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal);
+      return wildVal >= 0 && wildVal <= cap && Number.isInteger(wildVal);
     }
     const op = opCard.operation!;
-    for (let wildVal = 0; wildVal <= 25; wildVal++) {
+    for (let wildVal = 0; wildVal <= cap; wildVal++) {
       const allVals = [...values, wildVal];
       const perms = getStagedPermutations(allVals);
       for (const perm of perms) {
@@ -227,17 +241,23 @@ export function validateStagedCards(numberCards: Card[], opCard: Card | null, ta
   return false;
 }
 
-export function computeWildValueInStaged(numberCards: Card[], opCard: Card | null, target: number): number | null {
+export function computeWildValueInStaged(
+  numberCards: Card[],
+  opCard: Card | null,
+  target: number,
+  maxWild: number = 25,
+): number | null {
+  const cap = Math.max(0, Math.min(25, maxWild));
   const wildCount = numberCards.filter(c => c.type === 'wild').length;
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
   if (wildCount !== 1) return null;
   if (!opCard) {
     const wildVal = target - values.reduce((s, v) => s + v, 0);
-    return wildVal >= 0 && wildVal <= 25 && Number.isInteger(wildVal) ? wildVal : null;
+    return wildVal >= 0 && wildVal <= cap && Number.isInteger(wildVal) ? wildVal : null;
   }
   const op = opCard.operation!;
-  for (let wildVal = 0; wildVal <= 25; wildVal++) {
+  for (let wildVal = 0; wildVal <= cap; wildVal++) {
     const allVals = [...values, wildVal];
     const perms = getStagedPermutations(allVals);
     for (const perm of perms) {
@@ -255,11 +275,15 @@ export function computeWildValueInStaged(numberCards: Card[], opCard: Card | nul
   return null;
 }
 
-export function resolveDiscardNumberCardFromStaged(stagedCards: Card[], equationResult: number): Card {
+export function resolveDiscardNumberCardFromStaged(
+  stagedCards: Card[],
+  equationResult: number,
+  maxWild: number = 25,
+): Card {
   const stagedNumbers = stagedCards.filter(c => c.type === 'number' || c.type === 'wild');
   const stagedOpCard = stagedCards.find(c => c.type === 'operation') ?? null;
   const wildVal = stagedNumbers.some(c => c.type === 'wild')
-    ? computeWildValueInStaged(stagedNumbers, stagedOpCard, equationResult)
+    ? computeWildValueInStaged(stagedNumbers, stagedOpCard, equationResult, maxWild)
     : null;
 
   for (let i = stagedCards.length - 1; i >= 0; i--) {
