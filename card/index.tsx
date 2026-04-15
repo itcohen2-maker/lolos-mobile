@@ -121,7 +121,7 @@ const EQUATION_TABLE_TOP = 205;
 const EQUATION_TABLE_SHIFT_X = 10;
 const EQUATION_BUILDER_FINE_OFFSET_Y = -2;
 /** היסט אופקי של המשוואה בלבד; שלילי = שמאלה (LTR), חיובי = ימינה */
-const EQUATION_BUILDER_FINE_OFFSET_X = 0;
+const EQUATION_BUILDER_FINE_OFFSET_X = -15;
 
 const EXCELLENCE_METER_DEMO_VALUE = 65;
 
@@ -292,6 +292,8 @@ interface GameState {
   botDicePausePending: boolean;
   /** השהיית "חשיבה" לבוט כשהוא מאותגר בשבר. */
   botFractionDefenseTicks: number;
+  /** תור הצגה לבוט: פוקוס קלף/השהיה/הסבר לפני החלת פעולה. */
+  botPresentation: BotPresentationState;
   /** Monotonic counter incremented on every BOT_STEP dispatch. Used by bot clock useEffect dep array
    *  to guarantee re-scheduling on no-op ticks. Prevents "frozen bot" bugs. See spec §0.5.2. */
   botTickSeq: number;
@@ -310,6 +312,13 @@ interface Notification {
   /** אין סגירה אוטומטית — כפתור "הבנתי" ב־NotificationZone */
   requireAck?: boolean;
 }
+
+type BotPresentationState = {
+  action: BotAction | null;
+  candidateCardId: string | null;
+  ticks: number;
+  notification: Notification | null;
+};
 
 interface TournamentRow {
   playerId: number;
@@ -1123,6 +1132,7 @@ const initialState: GameState = {
   botNoSolutionDrawPending: false,
   botDicePausePending: false,
   botFractionDefenseTicks: 0,
+  botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
   botTickSeq: 0,
   isTutorial: false,
 };
@@ -1218,6 +1228,7 @@ function endTurnLogic(st: GameState, tf: (key: string, params?: MsgParams) => st
     botNoSolutionDrawPending: false,
     botDicePausePending: false,
     botFractionDefenseTicks: 0,
+    botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
   };
 }
 
@@ -1366,6 +1377,7 @@ function gameReducer(
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
         botDicePausePending: false,
+        botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
         botTickSeq: 0,
         isTutorial: action.type === 'START_GAME' && !!action.isTutorial,
       };
@@ -1404,6 +1416,7 @@ function gameReducer(
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
         botDicePausePending: false,
+        botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
       };
     }
     case 'BEGIN_TURN': {
@@ -1424,6 +1437,7 @@ function gameReducer(
           lastEquationDisplay: null,
           turnStartedAt: Date.now(),
           botFractionDefenseTicks: currentIsBot ? 2 : 0,
+          botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
         };
       }
       // Fraction attack: auto-detect fraction card on top of discard pile
@@ -1432,11 +1446,11 @@ function gameReducer(
       if (topDiscard && topDiscard.type === 'fraction' && !st.fractionAttackResolved) {
         const denom = fractionDenominator(topDiscard.fraction!);
 
-        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0 };
+        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null } };
       }
       // Normal turn — reset; clear last-move display (הודעת עדכון רק במסך השחקן); notify if fraction chain just ended
       const fracChainEnded = st.fractionAttackResolved && topDiscard?.type === 'fraction';
-      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0 };
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null } };
     }
     case 'ROLL_DICE': {
       if (st.phase !== 'pre-roll') return st;
@@ -1463,6 +1477,7 @@ function gameReducer(
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
         botDicePausePending: currentIsBot,
+        botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
       };
     }
     case 'CONFIRM_EQUATION': {
@@ -1488,6 +1503,7 @@ function gameReducer(
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
         botDicePausePending: false,
+        botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
       };
     }
     case 'RECORD_EQUATION_ATTEMPT': {
@@ -1508,6 +1524,7 @@ function gameReducer(
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
         botDicePausePending: false,
+        botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
       };
     }
     case 'STAGE_CARD': {
@@ -1761,7 +1778,7 @@ function gameReducer(
       let lastVal: number;
       if (action.card.type === 'number') {
         const nv = action.card.value;
-        if (nv == null || nv % pen !== 0) return st;
+        if (nv == null || nv <= 0 || nv % pen !== 0) return st;
         cardToDiscard = action.card;
         lastVal = nv;
       } else if (action.card.type === 'wild') {
@@ -1942,55 +1959,103 @@ function gameReducer(
           botNoSolutionDrawPending: false,
           botDicePausePending: false,
           botFractionDefenseTicks: 0,
+          botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
         };
       }
 
       if (stWithTick.phase === 'building' && stWithTick.botDicePausePending) {
-        return { ...stWithTick, botDicePausePending: false };
+        return {
+          ...stWithTick,
+          botDicePausePending: false,
+          botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+        };
       }
       if (stWithTick.pendingFractionTarget !== null && stWithTick.botFractionDefenseTicks > 0) {
         return { ...stWithTick, botFractionDefenseTicks: stWithTick.botFractionDefenseTicks - 1 };
       }
 
+      const activePresentation = stWithTick.botPresentation;
+      if (activePresentation.action != null) {
+        if (activePresentation.ticks > 0) {
+          return {
+            ...stWithTick,
+            botPresentation: { ...activePresentation, ticks: activePresentation.ticks - 1 },
+          };
+        }
+        const notification =
+          stWithTick.guidanceEnabled !== false ? activePresentation.notification : null;
+        const stateForAction = notification
+          ? {
+              ...stWithTick,
+              notifications: [
+                ...stWithTick.notifications.filter((n) => !n.id.startsWith('bot-step-')),
+                notification,
+              ],
+            }
+          : stWithTick;
+        const presentedAction = activePresentation.action;
+        if (presentedAction.kind === 'drawCard' && stateForAction.phase === 'building') {
+          return {
+            ...stateForAction,
+            botNoSolutionDrawPending: true,
+            botNoSolutionTicks: 2,
+            botDicePausePending: false,
+            botFractionDefenseTicks: 0,
+            botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+          };
+        }
+        let afterPresented = applyBotActionAtomically(stateForAction, presentedAction);
+        if (
+          presentedAction.kind === 'stageCard' &&
+          stWithTick.botPendingStagedIds != null &&
+          stWithTick.botPendingStagedIds[0] === presentedAction.cardId
+        ) {
+          afterPresented = {
+            ...afterPresented,
+            botPendingStagedIds: stWithTick.botPendingStagedIds.slice(1),
+          };
+        }
+        if (presentedAction.kind === 'confirmStaged') {
+          afterPresented = { ...afterPresented, botPendingStagedIds: null };
+        }
+        return {
+          ...afterPresented,
+          botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+        };
+      }
+
       if (pendingIds != null && stWithTick.phase === 'solved' && !stWithTick.hasPlayedCards) {
         if (pendingIds.length > 0) {
-          const cardId = pendingIds[0]!;
-          const stageTranslated = translateBotAction(stWithTick, { kind: 'stageCard', cardId });
-          if (!stageTranslated) {
-            const drawTranslated = translateBotAction(stWithTick, { kind: 'drawCard' });
-            if (!drawTranslated) return { ...stWithTick, botPendingStagedIds: null, botPendingDemoActions: null };
-            return gameReducer(
-              {
-                ...stWithTick,
-                botPendingStagedIds: null,
-                botPendingDemoActions: null,
-                botNoSolutionTicks: 0,
-                botNoSolutionDrawPending: false,
-                botDicePausePending: false,
-                botFractionDefenseTicks: 0,
-              },
-              drawTranslated,
-              tf,
-            );
-          }
-          const staged = gameReducer(stWithTick, stageTranslated, tf);
-          return { ...staged, botPendingStagedIds: pendingIds.slice(1) };
+          return {
+            ...stWithTick,
+            botPresentation: buildBotPresentation(stWithTick, {
+              kind: 'stageCard',
+              cardId: pendingIds[0]!,
+            }),
+          };
         }
-        const confirmStagedTranslated = translateBotAction(stWithTick, { kind: 'confirmStaged' });
-        if (!confirmStagedTranslated) {
-          return { ...stWithTick, botPendingStagedIds: null, botPendingDemoActions: null };
-        }
-        const after = gameReducer(stWithTick, confirmStagedTranslated, tf);
-        return { ...after, botPendingStagedIds: null };
+        return {
+          ...stWithTick,
+          botPresentation: buildBotPresentation(stWithTick, { kind: 'confirmStaged' }),
+        };
       }
 
       if (stWithTick.botNoSolutionDrawPending) {
         if (stWithTick.botNoSolutionTicks > 1) {
-          return { ...stWithTick, botNoSolutionTicks: stWithTick.botNoSolutionTicks - 1 };
+          return {
+            ...stWithTick,
+            botNoSolutionTicks: stWithTick.botNoSolutionTicks - 1,
+            botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+          };
         }
         const drawTranslated = translateBotAction(stWithTick, { kind: 'drawCard' });
         if (!drawTranslated) {
-          return { ...stWithTick, botNoSolutionTicks: 0, botNoSolutionDrawPending: false };
+          return {
+            ...stWithTick,
+            botNoSolutionTicks: 0,
+            botNoSolutionDrawPending: false,
+            botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+          };
         }
         const afterDraw = gameReducer(
           {
@@ -2001,6 +2066,7 @@ function gameReducer(
             botNoSolutionDrawPending: false,
             botDicePausePending: false,
             botFractionDefenseTicks: 0,
+            botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
           },
           drawTranslated,
           tf,
@@ -2021,13 +2087,16 @@ function gameReducer(
           return { ...stWithTick, botPendingDemoActions: null };
         }
         const nextDemoAction = pendingDemoActions[0]!;
-        const afterDemo = applyBotActionAtomically(stWithTick, nextDemoAction);
         const rest = pendingDemoActions.slice(1);
-        return { ...afterDemo, botPendingDemoActions: rest.length > 0 ? rest : null };
+        return {
+          ...stWithTick,
+          botPendingDemoActions: rest.length > 0 ? rest : null,
+          botPresentation: buildBotPresentation(stWithTick, nextDemoAction),
+        };
       }
 
       /** Single-step bot actions; confirmEquation only applies CONFIRM_EQUATION then queues staging. */
-      const describeBotCard = (s: GameState, cardId: string): string => {
+      function describeBotCard(s: GameState, cardId: string): string {
         const card = s.players[s.currentPlayerIndex]?.hand.find((c) => c.id === cardId);
         if (!card) return '—';
         if (card.type === 'number') return String(card.value ?? '?');
@@ -2036,8 +2105,14 @@ function gameReducer(
         if (card.type === 'wild') return tf('labels.wild');
         if (card.type === 'joker') return tf('labels.joker');
         return '—';
-      };
-      const buildBotActionNotification = (s: GameState, a: BotAction): Notification | null => {
+      }
+      function getBotCardType(
+        s: GameState,
+        cardId: string,
+      ): CardType | null {
+        return s.players[s.currentPlayerIndex]?.hand.find((c) => c.id === cardId)?.type ?? null;
+      }
+      function buildBotActionNotification(s: GameState, a: BotAction): Notification | null {
         const name = s.players[s.currentPlayerIndex]?.name ?? tf('botOffline.botName');
         const verboseTeaching = s.guidanceEnabled !== false;
         const base = {
@@ -2056,7 +2131,13 @@ function gameReducer(
           case 'rollDice':
             return { ...base, message: tf('botOffline.explain.rollDice', { name }) };
           case 'playIdentical':
-            return { ...base, message: tf('botOffline.explain.playIdentical', { name }) };
+            return {
+              ...base,
+              message: tf('botOffline.explain.playIdenticalCard', {
+                name,
+                card: describeBotCard(s, a.cardId),
+              }),
+            };
           case 'playFractionAttack': {
             const cpHand = s.players[s.currentPlayerIndex]?.hand ?? [];
             const fractionCard = cpHand.find((c) => c.id === a.cardId && c.type === 'fraction') ?? null;
@@ -2089,6 +2170,10 @@ function gameReducer(
             return { ...base, style: 'warning', emoji: '⚠️', message: tf('botOffline.explain.defendPenalty', { name, penalty: String(s.fractionPenalty) }) };
           case 'confirmEquation': {
             const jokerCommit = a.equationCommits.find((c) => c.jokerAs != null);
+            const operationCommit = a.equationCommits.find((c) => {
+              const card = s.players[s.currentPlayerIndex]?.hand.find((h) => h.id === c.cardId);
+              return card?.type === 'operation';
+            });
             return {
               ...base,
               style: 'success',
@@ -2104,11 +2189,27 @@ function gameReducer(
                     name,
                     op: String(jokerCommit.jokerAs ?? '+'),
                   })
+                : operationCommit
+                  ? tf('botOffline.explain.confirmEquationOperation', {
+                      name,
+                      op: describeBotCard(s, operationCommit.cardId),
+                    })
                 : '',
             };
           }
-          case 'stageCard':
+          case 'stageCard': {
+            const stageType = getBotCardType(s, a.cardId);
+            if (stageType === 'number') {
+              return { ...base, message: tf('botOffline.explain.stageNumber', { name, card: describeBotCard(s, a.cardId) }) };
+            }
+            if (stageType === 'wild') {
+              return { ...base, message: tf('botOffline.explain.stageWild', { name, card: describeBotCard(s, a.cardId) }) };
+            }
+            if (stageType === 'operation') {
+              return { ...base, message: tf('botOffline.explain.stageOperation', { name, card: describeBotCard(s, a.cardId) }) };
+            }
             return { ...base, message: tf('botOffline.explain.stageCard', { name, card: describeBotCard(s, a.cardId) }) };
+          }
           case 'confirmStaged':
             return { ...base, message: tf('botOffline.explain.confirmStaged', { name }) };
           case 'drawCard':
@@ -2120,7 +2221,41 @@ function gameReducer(
           default:
             return null;
         }
-      };
+      }
+      function botActionCandidateCardId(a: BotAction): string | null {
+        switch (a.kind) {
+          case 'playIdentical':
+          case 'playFractionAttack':
+          case 'playFractionBlock':
+          case 'defendFractionSolve':
+          case 'stageCard':
+          case 'unstageCard':
+            return a.cardId;
+          case 'confirmEquation':
+            return a.equationCommits[0]?.cardId ?? null;
+          default:
+            return null;
+        }
+      }
+      function buildBotPresentation(s: GameState, a: BotAction): BotPresentationState {
+        const candidateCardId = botActionCandidateCardId(a);
+        const notification = buildBotActionNotification(s, a);
+        let ticks = 0;
+        if (a.kind === 'playFractionAttack' || a.kind === 'playFractionBlock') {
+          ticks = 2;
+        } else if (candidateCardId != null) {
+          ticks = 1;
+        } else if (
+          a.kind === 'rollDice' ||
+          a.kind === 'confirmEquation' ||
+          a.kind === 'confirmStaged' ||
+          a.kind === 'drawCard' ||
+          a.kind === 'beginTurn'
+        ) {
+          ticks = 1;
+        }
+        return { action: a, candidateCardId, ticks, notification };
+      }
       function applyBotActionAtomically(s: GameState, a: BotAction): GameState {
         if (a.kind !== 'confirmEquation') {
           const translated = translateBotAction(s, a);
@@ -2149,6 +2284,7 @@ function gameReducer(
               botNoSolutionDrawPending: false,
               botDicePausePending: false,
               botFractionDefenseTicks: 0,
+              botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
             },
             translated,
             tf,
@@ -2175,6 +2311,7 @@ function gameReducer(
               botNoSolutionDrawPending: false,
               botDicePausePending: false,
               botFractionDefenseTicks: 0,
+              botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
             },
             drawTranslated,
             tf,
@@ -2188,6 +2325,7 @@ function gameReducer(
             botNoSolutionDrawPending: false,
             botDicePausePending: false,
             botFractionDefenseTicks: 0,
+            botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
           },
           confirmTranslated,
           tf,
@@ -2208,22 +2346,12 @@ function gameReducer(
             : Math.random,
       });
       if (!action_) {
-        return applyBotActionAtomically(stWithTick, { kind: 'drawCard' });
-      }
-      const actionBubble = buildBotActionNotification(stWithTick, action_);
-      const stateForAction = actionBubble
-        ? { ...stWithTick, notifications: [...stWithTick.notifications.filter((n) => !n.id.startsWith('bot-step-')), actionBubble] }
-        : stWithTick;
-      if (action_.kind === 'drawCard' && stWithTick.phase === 'building') {
         return {
-          ...stateForAction,
-          botNoSolutionDrawPending: true,
-          botNoSolutionTicks: 2,
-          botDicePausePending: false,
-          botFractionDefenseTicks: 0,
+          ...stWithTick,
+          botPresentation: buildBotPresentation(stWithTick, { kind: 'drawCard' }),
         };
       }
-      return applyBotActionAtomically(stateForAction, action_);
+      return { ...stWithTick, botPresentation: buildBotPresentation(stWithTick, action_) };
     }
     case 'RESET_GAME':
       AsyncStorage.removeItem('lulos_guidance_notifications');
@@ -4944,14 +5072,14 @@ const eqS = StyleSheet.create({
   /** שורת משוואה אחת — כל הסלוטים והסוגריים באותה שורה; ללא wrap */
   eqRow: {
     width: 'auto',
-    maxWidth: '95%',
+    maxWidth: '100%',
     alignSelf: 'center' as any,
     flexDirection: 'row',
     direction: 'ltr' as any,
     flexWrap: 'nowrap' as const,
     alignItems: 'center',
     justifyContent: 'center',
-    columnGap: 4,
+    columnGap: 2,
     paddingVertical: 10,
     paddingHorizontal: 6,
     borderRadius: 16,
@@ -4961,7 +5089,7 @@ const eqS = StyleSheet.create({
   },
   /** קבוצה שלמה של סלוטים+סימנים — לא נשברת באמצע */
   eqChunk: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 6, flexShrink: 0 },
-  bracket: { fontSize: 32, fontWeight: '900', color: '#15803D', marginHorizontal: 0, textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  bracket: { fontSize: 32, fontWeight: '900', color: '#15803D', marginHorizontal: 0, textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
   equalsSmall: { fontSize: 14, fontWeight: '800', color: 'rgba(0,0,0,0.5)', marginHorizontal: 1 },
   subResultBox: {
     minWidth: 30,
@@ -5158,7 +5286,7 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     // Move cards through the full fan path (start→end→start), not random sway.
     const maxScanSpan = Math.max(0.8, Math.min(2.6, Math.max(0, count - 1) * 0.45));
     const baseSweepDuration = botTeachingDifficulty === 'easy' ? 1180 : 920;
-    const runSweepScan = () => {
+    const runSweepScanOnce = () => {
       if (cancelled) return;
       const anim = Animated.sequence([
         Animated.timing(botScanOffset, {
@@ -5177,10 +5305,7 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         Animated.delay(Math.round(rand(120, 200))),
       ]);
       botScanAnimRef.current = anim;
-      anim.start(({ finished }) => {
-        if (!finished || cancelled) return;
-        runSweepScan();
-      });
+      anim.start();
     };
     if (botCandidateCardId) {
       stopScan();
@@ -5212,10 +5337,10 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         botScanAnimRef.current = focusAnim;
         focusAnim.start();
       } else {
-        runSweepScan();
+        runSweepScanOnce();
       }
     } else {
-      runSweepScan();
+      runSweepScanOnce();
     }
     return () => {
       cancelled = true;
@@ -5712,11 +5837,18 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
       : null;
   const botCandidateCardId = useMemo(() => {
     if (!isLocalBotTurn) return null;
+    if (state.botPresentation.candidateCardId) return state.botPresentation.candidateCardId;
     if (botTeachingPhase === 'pick' || botTeachingPhase === 'place') {
       return state.botPendingStagedIds?.[0] ?? null;
     }
     return botPredictedCardId;
-  }, [isLocalBotTurn, botTeachingPhase, state.botPendingStagedIds, botPredictedCardId]);
+  }, [
+    isLocalBotTurn,
+    botTeachingPhase,
+    state.botPendingStagedIds,
+    botPredictedCardId,
+    state.botPresentation.candidateCardId,
+  ]);
   const maxWildDefense = state.mathRangeMax;
   const wildDefensePickValues = useMemo(
     () => (hasFracDefense && state.fractionPenalty > 0 ? validWildValuesForFractionDefense(state.fractionPenalty, maxWildDefense) : []),
@@ -5822,7 +5954,12 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
 
     // ── Fraction defense: מספר (מתחלק), פרא (בחירת ערך במודאל), או שבר; ג'וקר לא מגן ──
     if (hasFracDefense) {
-      if (card.type === 'number' && card.value != null && card.value % state.fractionPenalty === 0) {
+      if (
+        card.type === 'number' &&
+        card.value != null &&
+        card.value > 0 &&
+        card.value % state.fractionPenalty === 0
+      ) {
         dispatch({ type: 'DEFEND_FRACTION_SOLVE', card });
       } else if (card.type === 'wild' && wildDefensePickValues.length > 0) {
         setWildFracDefenseCard(card);
@@ -5891,7 +6028,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     ? new Set<string>(
         sorted.filter(c => {
           const pen = state.fractionPenalty;
-          if (c.type === 'number' && c.value != null && c.value % pen === 0) return true;
+          if (c.type === 'number' && c.value != null && c.value > 0 && c.value % pen === 0) return true;
           if (c.type === 'fraction') return true;
           if (c.type === 'wild' && wildDefensePickValues.length > 0) return true;
           return false;
@@ -7103,18 +7240,14 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo, onHowToPlay }: { onBackT
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent' }}>
       {/* כפתור חזרה + חוקים — בצד למעלה */}
-      <View style={{ position: 'absolute', top: safe.insets.top || 12, left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', zIndex: 20, flexWrap: 'wrap', gap: 8 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {onBackToChoice && (
-            <LulosButton text={t('lobby.backToMode')} color="blue" width={140} height={38} fontSize={11} onPress={onBackToChoice} />
-          )}
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {onHowToPlay && (
-            <LulosButton text={t('tutorial.howToPlay')} color="yellow" width={100} height={38} fontSize={11} onPress={onHowToPlay} />
-          )}
-          <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
-        </View>
+      <View style={{ position: 'absolute', top: safe.insets.top || 12, left: 16, right: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', zIndex: 20, flexWrap: 'wrap', gap: 8 }}>
+        {onBackToChoice && (
+          <LulosButton text={t('lobby.backToMode')} color="blue" width={130} height={38} fontSize={11} onPress={onBackToChoice} />
+        )}
+        {onHowToPlay && (
+          <LulosButton text={t('tutorial.howToPlay')} color="green" width={130} height={38} fontSize={12} onPress={onHowToPlay} />
+        )}
+        <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
       </View>
       <AppModal
         visible={rulesOpen}
@@ -7682,8 +7815,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo, onHowToPlay }: { onBackT
           <Text style={{ color: '#4285F4', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{t('start.welcomeSalinda')}</Text>
         </View>
       )}
-      {/* ג'וקר — במלוא המסך */}
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginBottom: totalBottomH * 0.72 }}>
+      {/* ג'וקר — מוצמד מתחת לשורת הכפתורים העליונה (top + buttons + margin) */}
+      <View style={{ alignItems: 'center', justifyContent: 'flex-start', paddingTop: (safe.insets.top || 12) + 50 }}>
         <Animated.View style={{
           transform: [{ translateY: bounceAnim }],
           width: JOKER_SIZE,
@@ -7701,8 +7834,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo, onHowToPlay }: { onBackT
         </Animated.View>
       </View>
 
-      {/* Bottom menu — גלגלת תלת־מימד שקופה, רקע מעופף נראה מתחת */}
-      <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '50%', paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: 'transparent', zIndex: 10 }}>
+      {/* Bottom menu — הגלילה מתחילה מתחת לג'וקר ומשתרעת עד לתחתית */}
+      <View style={{ position: 'absolute', top: (safe.insets.top || 12) + 50 + JOKER_SIZE + 10, bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: 'transparent', zIndex: 10 }}>
         <Animated.ScrollView
           style={{ maxHeight: '100%', backgroundColor: 'transparent' }}
           contentContainerStyle={{ paddingTop: WHEEL_PADDING_V, paddingBottom: WHEEL_PADDING_V }}
@@ -8240,18 +8373,18 @@ const hsS = StyleSheet.create({
   toggleOffTxtVsBot: { fontSize: 12, fontWeight: '700', color: 'rgba(255,237,213,0.96)' },
   toggleOffTxt: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.5)' },
   modeToggleOn: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#FFFFFF',
+    backgroundColor: '#FACC15',
+    borderColor: '#FDE047',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.16, shadowRadius: 6 },
-      android: { elevation: 3 },
+      ios: { shadowColor: '#FACC15', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.42, shadowRadius: 8 },
+      android: { elevation: 4 },
     }),
   },
   modeToggleOff: {
     backgroundColor: '#FFFFFF',
     borderColor: '#FFFFFF',
   },
-  modeToggleOnTxt: { fontSize: 12, fontWeight: '800', color: '#7C2D12' },
+  modeToggleOnTxt: { fontSize: 12, fontWeight: '900', color: '#5B2100' },
   modeToggleOffTxt: { fontSize: 12, fontWeight: '700', color: '#9A3412' },
   modeRowGradientOuter: {
     ...Platform.select({
@@ -9089,8 +9222,13 @@ function TurnTransition() {
       <LinearGradient colors={[...playerScreensGradientColors]} start={{ x: 0, y: 0 }} end={{ x: 0.85, y: 1 }} style={StyleSheet.absoluteFill} />
       <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
       {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
-      <View pointerEvents="box-none" style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
-        <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-start',gap:2,flex:1,minWidth:0,marginTop:-65}}>
+      <View pointerEvents="box-none" style={{flexDirection:'row',direction:'ltr' as any,alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
+        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
+          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} style={{ marginBottom: -8 }} />
+          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
+          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
+        </View>
+        <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-end',gap:2,flex:1,minWidth:0,marginTop:-65,marginLeft:8}}>
           {/* תגי מידע (שברים/טיימר/פתרון תרגיל) הועברו לטורניר — שורות 446, 458, 461 ב-TournamentInfoModal */}
           <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end',alignSelf:'flex-end',marginTop:2,marginRight:4}}>
             {displayPlayers.map((p) => {
@@ -9126,11 +9264,6 @@ function TurnTransition() {
               </TouchableOpacity>
             )}
           </View>
-        </View>
-        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
-          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} style={{ marginBottom: -8 }} />
-          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
-          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
         </View>
       </View>
       {!compactPlayerScreen && turnTimerBannerValue && (
@@ -10830,54 +10963,49 @@ function GameScreen() {
       )}
       {/* טוגל סוגריים — מחוץ לשולחן, בין תוצאות אפשריות לבין השולחן הירוק */}
       {state.phase === 'building' && !state.hasPlayedCards && state.dice !== null && (
-        <View style={{ position: 'absolute', top: 170, left: 0, right: 0, zIndex: 100, flexDirection: 'row', gap: 8, justifyContent: 'center' }}>
-          {[
-            { mode: false, title: 'סוגריים משמאל (ברירת מחדל)' },
-            { mode: true, title: 'סוגריים מימין' },
-          ].map((opt) => {
-            const active = parensRight === opt.mode;
-            const isOrange = !opt.mode;
-            return (
-              <TouchableOpacity
-                key={String(opt.mode)}
-                onPress={() => setParensRight(opt.mode)}
-                accessibilityLabel={opt.title}
-                style={{
-                  paddingHorizontal: 8,
-                  paddingVertical: 4,
-                  borderRadius: 8,
-                  borderWidth: 2,
-                  borderColor: active ? '#B45309' : (isOrange ? '#FB923C' : '#1F2937'),
-                  backgroundColor: isOrange ? '#F97316' : '#FFFFFF',
-                  transform: [{ scale: active ? 1.06 : 1 }],
-                  ...Platform.select({
-                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.28, shadowRadius: 3 },
-                    android: { elevation: 4 },
-                  }),
-                }}
-              >
-                <Text allowFontScaling={false} style={{ fontSize: 11, fontWeight: '900', letterSpacing: 0.3 }}>
-                  {opt.mode ? (
-                    // לבן: □ (□□) — הסוגריים בירוק חזק
-                    <>
-                      <Text style={{ color: '#1F2937' }}>□ </Text>
-                      <Text style={{ color: '#15803D', fontSize: 15 }}>(</Text>
-                      <Text style={{ color: '#1F2937' }}>□□</Text>
-                      <Text style={{ color: '#15803D', fontSize: 15 }}>)</Text>
-                    </>
-                  ) : (
-                    // כתום: (□□) □ — הסוגריים בכתום בהיר (ההבלטה), השאר לבן
-                    <>
-                      <Text style={{ color: '#FED7AA', fontSize: 15 }}>(</Text>
-                      <Text style={{ color: '#FFF' }}>□□</Text>
-                      <Text style={{ color: '#FED7AA', fontSize: 15 }}>)</Text>
-                      <Text style={{ color: '#FFF' }}> □</Text>
-                    </>
-                  )}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+        <View style={{ position: 'absolute', top: 170, left: 0, right: 0, zIndex: 100, flexDirection: 'row', justifyContent: 'center' }}>
+          <TouchableOpacity
+            onPress={() => setParensRight((v) => !v)}
+            accessibilityLabel="שינוי מיקום הסוגריים"
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 10,
+              borderWidth: 2,
+              borderColor: parensRight ? '#1F2937' : '#B45309',
+              backgroundColor: parensRight ? '#FFFFFF' : '#F97316',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              ...Platform.select({
+                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4 },
+                android: { elevation: 5 },
+              }),
+            }}
+          >
+            {/* איקון מיקום הסוגריים — מתעדכן לפי המצב הנוכחי */}
+            <Text allowFontScaling={false} style={{ fontSize: 14, fontWeight: '900', letterSpacing: 0.5 }}>
+              {parensRight ? (
+                <>
+                  <Text style={{ color: '#1F2937' }}>□ </Text>
+                  <Text style={{ color: '#15803D', fontSize: 18 }}>(</Text>
+                  <Text style={{ color: '#1F2937' }}>□□</Text>
+                  <Text style={{ color: '#15803D', fontSize: 18 }}>)</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>(</Text>
+                  <Text style={{ color: '#FFF' }}>□□</Text>
+                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>)</Text>
+                  <Text style={{ color: '#FFF' }}> □</Text>
+                </>
+              )}
+            </Text>
+            {/* תווית ההסבר */}
+            <Text allowFontScaling={false} style={{ fontSize: 11, fontWeight: '800', color: parensRight ? '#1F2937' : '#FFF' }}>
+              שינוי מיקום הסוגריים
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -11558,6 +11686,12 @@ function getBotTeachingPhase(state: GameState): BotTeachingPhase {
 }
 
 function botTeachingDelayRange(state: GameState, difficulty: BotDifficulty): { min: number; max: number } {
+  if (state.botPresentation.action != null) {
+    if (state.botPresentation.ticks > 0) {
+      return { min: 1000, max: 1300 };
+    }
+    return { min: 850, max: 1100 };
+  }
   if (state.botDicePausePending) {
     return { min: 1500, max: 1500 };
   }
@@ -12086,6 +12220,7 @@ function NotificationZone() {
     notif.id.startsWith('guidance-results-info-fee') ||
     (notif.title != null && RESULTS_POSSIBLE_TITLES.has(String(notif.title)));
   const isWildResultsPurple = notif.id.includes('wild_results');
+  const isFractionChallengeNotif = notif.id.startsWith('frac-challenge-');
   const isNewUserNotif =
     notif.id.startsWith('onb-') ||
     notif.id.startsWith('guidance-') ||
@@ -12122,18 +12257,22 @@ function NotificationZone() {
           maxWidth: '100%',
           backgroundColor: isWildResultsPurple
             ? 'rgba(109,40,217,0.94)'
+            : isFractionChallengeNotif
+              ? 'rgba(15,23,42,0.95)'
             : isResultsNotifGreen
               ? 'rgba(22,163,74,0.92)'
               : alertBubbleStyle.box.backgroundColor,
           borderColor: isWildResultsPurple
             ? 'rgba(216,180,254,0.95)'
+            : isFractionChallengeNotif
+              ? 'rgba(125,211,252,0.95)'
             : isResultsNotifGreen
               ? 'rgba(74,222,128,0.95)'
               : alertBubbleStyle.box.borderColor,
-          borderWidth: isWildResultsPurple || isResultsNotifGreen ? 3 : alertBubbleStyle.box.borderWidth,
-          shadowColor: isWildResultsPurple ? '#4C1D95' : isResultsNotifGreen ? '#14532D' : '#000',
-          shadowOpacity: isWildResultsPurple || isResultsNotifGreen ? 0.5 : 0.4,
-          shadowRadius: isWildResultsPurple || isResultsNotifGreen ? 14 : 12,
+          borderWidth: isWildResultsPurple || isResultsNotifGreen || isFractionChallengeNotif ? 3 : alertBubbleStyle.box.borderWidth,
+          shadowColor: isWildResultsPurple ? '#4C1D95' : isResultsNotifGreen ? '#14532D' : isFractionChallengeNotif ? '#0C4A6E' : '#000',
+          shadowOpacity: isWildResultsPurple || isResultsNotifGreen || isFractionChallengeNotif ? 0.5 : 0.4,
+          shadowRadius: isWildResultsPurple || isResultsNotifGreen || isFractionChallengeNotif ? 14 : 12,
         }]}>
           {isResultsNotifGreen && (
             <>
@@ -12143,7 +12282,7 @@ function NotificationZone() {
             </>
           )}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {notif.emoji ? <Text style={{ fontSize: 26 }}>{notif.emoji}</Text> : null}
+            {notif.emoji && !needsAck ? <Text style={{ fontSize: 26 }}>{notif.emoji}</Text> : null}
             <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
               <Text style={[alertBubbleStyle.title, { marginBottom: displayBody ? 4 : 0, color: (isResultsNotifGreen || isWildResultsPurple) ? '#F0FDF4' : alertBubbleStyle.title.color, textShadowColor: (isResultsNotifGreen || isWildResultsPurple) ? 'rgba(0,0,0,0.35)' : 'transparent', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: (isResultsNotifGreen || isWildResultsPurple) ? 2 : 0 }]}>{displayTitle}</Text>
               {!!displayBody && (
@@ -12166,7 +12305,10 @@ function NotificationZone() {
           </View>
           {needsAck && (
             <TouchableOpacity activeOpacity={0.9} onPress={dismiss} style={{ alignSelf: 'flex-end', backgroundColor: 'rgba(255,215,0,0.25)', borderWidth: 1.5, borderColor: 'rgba(255,215,0,0.5)', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 12 }}>
-              <Text style={{ color: '#FFD700', fontSize: 15, fontWeight: '800' }}>הבנתי!</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {notif.emoji ? <Text style={{ color: '#FFD700', fontSize: 15 }}>{notif.emoji}</Text> : null}
+                <Text style={{ color: '#FFD700', fontSize: 15, fontWeight: '800' }}>הבנתי!</Text>
+              </View>
             </TouchableOpacity>
           )}
         </View>

@@ -134,7 +134,8 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
   }, [setServerUrl]);
 
   const handleCreate = () => {
-    if (!playerName.trim()) return;
+    console.log('[MP][debug] handleCreate pressed, name=', JSON.stringify(playerName));
+    if (!playerName.trim()) { console.log('[MP][debug] rejected: empty name'); return; }
     createRoom(playerName.trim());
     setStep('create');
   };

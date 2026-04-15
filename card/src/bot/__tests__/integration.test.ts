@@ -166,6 +166,71 @@ test('M4.5.2 — pre-roll defense: bot defends fraction attack; turn eventually 
   expect(defenseResolved).toBe(true);
 });
 
+test('M4.5.2b — fraction defense rejects 0 card and bot takes penalty path', () => {
+  const zeroCard = { id: 'zero-def', type: 'number' as const, value: 0 };
+  const startState = makeTwoPlayerBotState({
+    phase: 'pre-roll',
+    pendingFractionTarget: 8,
+    fractionPenalty: 2,
+    players: [
+      {
+        id: 0,
+        name: 'Human',
+        hand: [],
+        calledLolos: false,
+        isBot: false,
+      },
+      {
+        id: 1,
+        name: 'Bot',
+        hand: [zeroCard],
+        calledLolos: false,
+        isBot: true,
+      },
+    ],
+  } as unknown as Partial<GameState>);
+
+  const { finalState } = runBotTurns(startState, 25);
+  const botStillHasZero = finalState.players[1]?.hand.some((c) => c.id === zeroCard.id);
+  expect(botStillHasZero).toBe(true);
+  expect(finalState.pendingFractionTarget).toBeNull();
+});
+
+test('M4.5.2c — guidance off keeps pacing but suppresses bot-step text', () => {
+  const top7 = { id: 'top-identical', type: 'number' as const, value: 7 };
+  const identical7 = { id: 'identical-7', type: 'number' as const, value: 7 };
+  const startState = makeTwoPlayerBotState({
+    phase: 'pre-roll',
+    guidanceEnabled: false,
+    players: [
+      {
+        id: 0,
+        name: 'Human',
+        hand: [],
+        calledLolos: false,
+        isBot: false,
+      },
+      {
+        id: 1,
+        name: 'Bot',
+        hand: [identical7],
+        calledLolos: false,
+        isBot: true,
+      },
+    ],
+    discardPile: [top7],
+  } as unknown as Partial<GameState>);
+
+  const step1 = gameReducer(
+    startState,
+    { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
+    tf,
+  );
+  expect(step1.botPresentation.action?.kind).toBe('playIdentical');
+  expect(step1.botPresentation.ticks).toBeGreaterThan(0);
+  expect(step1.notifications.some((n) => n.id.startsWith('bot-step-'))).toBe(false);
+});
+
 // ---------------------------------------------------------------------------
 // M4.5.3 — Building with plan: confirmEquation first, then stages + confirm across BOT_STEPs
 // ---------------------------------------------------------------------------
@@ -254,11 +319,15 @@ test('M4.5.3b — building phase exposes staged queue before final confirm', () 
     enabledOperators: ['+'],
   } as unknown as GameState;
 
-  const afterConfirm = gameReducer(
-    startState,
-    { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
-    tf,
-  );
+  let afterConfirm = startState;
+  for (let i = 0; i < 6; i++) {
+    afterConfirm = gameReducer(
+      afterConfirm,
+      { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
+      tf,
+    );
+    if (afterConfirm.phase === 'solved') break;
+  }
   expect(afterConfirm.phase).toBe('solved');
   expect(afterConfirm.botPendingStagedIds).not.toBeNull();
   expect((afterConfirm.botPendingStagedIds ?? []).length).toBeGreaterThan(0);

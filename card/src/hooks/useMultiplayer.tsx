@@ -99,23 +99,6 @@ function normalizeServerUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
 }
 
-/** בפיתוח: אם ב-.env יש URL מרוחק (Render וכו') אבל יש גם LAN מזוהה — נעדיף LAN לשרת המקומי בלי התערבות */
-function envUrlLooksLikeLanOrLoopback(url: string): boolean {
-  const u = normalizeServerUrl(url).toLowerCase();
-  if (u.includes('localhost') || u.includes('127.0.0.1') || u.includes('0.0.0.0') || u.includes('10.0.2.2')) {
-    return true;
-  }
-  try {
-    const { hostname } = new URL(u);
-    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
 function envFlagTrue(name: string): boolean {
   const v =
     typeof process !== 'undefined' && process.env?.[name]
@@ -132,7 +115,7 @@ function isTransportDisconnect(reason: string): boolean {
  * כתובת שרת Socket — **אותו סדר כמו origin/main** (היסטוריה שעבדה):
  * - EXPO_PUBLIC_LOCAL_SOCKET_SERVER=1 → מחשב מקומי
  * - Web: ?server=
- * - EXPO_PUBLIC_SERVER_URL אם מוגדר (ב־__DEV__: אם זה URL מרוחק ויש LAN מזוהה — LAN קודם לשרת מקומי)
+ * - EXPO_PUBLIC_SERVER_URL אם מוגדר — בכבוד מוחלט (אם רוצים מקומי, השתמש בדגל LOCAL_SOCKET_SERVER)
  * - __DEV__: גילוי LAN (תיקון Tunnel דרך debuggerHost)
  * - אמולטור / localhost
  */
@@ -153,12 +136,6 @@ function getServerUrl(): string {
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
       ? String(process.env.EXPO_PUBLIC_SERVER_URL).trim()
       : '';
-  if (typeof __DEV__ !== 'undefined' && __DEV__ && fromEnv) {
-    const inferred = inferDevMachineSocketUrl();
-    if (inferred && !envUrlLooksLikeLanOrLoopback(fromEnv)) {
-      return inferred;
-    }
-  }
   if (fromEnv) return normalizeServerUrl(fromEnv);
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
     const inferred = inferDevMachineSocketUrl();
@@ -390,6 +367,7 @@ function playerViewToGameState(view: PlayerView): any {
     botNoSolutionDrawPending: false,
     botDicePausePending: false,
     botFractionDefenseTicks: 0,
+    botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
     botTickSeq: 0,
   };
 }
@@ -525,6 +503,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     });
     socketRef.current = socket;
     socket.on('connect', () => {
+      console.log('[MP][debug] socket connected →', want);
       setConnected(true);
       if (awaitingReconnectSyncRef.current) {
         const rc = roomCodeSessionRef.current;
@@ -549,6 +528,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       clearSessionAfterDisconnect();
     });
     socket.on('room_created', ({ roomCode: code, playerId: pid }) => {
+      console.log('[MP][debug] room_created received, code=', code, 'pid=', pid);
       roomCodeSessionRef.current = code;
       setRoomCode(code);
       setPlayerId(pid);
@@ -650,10 +630,13 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
 
   const createRoom = useCallback(
     (playerName: string) => {
+      console.log('[MP][debug] createRoom called, name=', playerName);
       connect();
+      console.log('[MP][debug] after connect(), url=', lastSocketUrlRef.current, 'socket?', !!socketRef.current);
       setIsHost(true);
       // Socket.io תור אירועים לפני connect — לא תלויים ב-once('connect')
       socketRef.current?.emit('create_room', { playerName, locale });
+      console.log('[MP][debug] emitted create_room');
     },
     [connect, locale],
   );
