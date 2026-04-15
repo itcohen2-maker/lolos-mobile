@@ -118,6 +118,7 @@ export interface GameState {
   botNoSolutionTicks?: number;
   botNoSolutionDrawPending?: boolean;
   botDicePausePending?: boolean;
+  botFractionDefenseTicks?: number;
   botTickSeq?: number;
 }
 
@@ -188,6 +189,7 @@ const baseline: GameState = {
   botNoSolutionTicks: 0,
   botNoSolutionDrawPending: false,
   botDicePausePending: false,
+  botFractionDefenseTicks: 0,
   botTickSeq: 0,
 };
 

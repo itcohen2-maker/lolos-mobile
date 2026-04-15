@@ -389,6 +389,7 @@ function playerViewToGameState(view: PlayerView): any {
     botNoSolutionTicks: 0,
     botNoSolutionDrawPending: false,
     botDicePausePending: false,
+    botFractionDefenseTicks: 0,
     botTickSeq: 0,
   };
 }

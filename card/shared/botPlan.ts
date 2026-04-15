@@ -21,7 +21,7 @@ export type PickBotPlanOptions = {
 };
 
 const EASY_BLUNDER_CHANCE = 0.2;
-const MEDIUM_RANDOM_BRANCH = 0.5;
+const MEDIUM_RANDOM_BRANCH = 0.25;
 
 function pickFromPlans(
   plans: InternalPlan[],
