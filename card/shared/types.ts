@@ -56,8 +56,22 @@ export interface OpponentView {
 }
 
 export type LobbyStatus = 'waiting_for_player' | 'bot_offer' | 'bot_game_started';
+
+/** עמודה בטבלת טורניר — אינדקס שחקן במערך `players` של המשחק */
+export interface TournamentStanding {
+  playerIndex: number;
+  playerName: string;
+  wins: number;
+  losses: number;
+}
+
+/** רמות בוט — מקומי (vs-bot) ושרת */
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
 /** playerView ב־ok (שרת מעודכן) — גיבוי אם game_started נאבד; אופציונלי לתאימות לשרת ישן */
 export type StartBotGameAck =
+  | { ok: true; playerView?: PlayerView }
+  | { ok: false; message: string };
+export type ContinueVsBotAck =
   | { ok: true; playerView?: PlayerView }
   | { ok: false; message: string };
 
@@ -104,10 +118,17 @@ export interface HostGameSettings {
   mathRangeMax?: 12 | 25;
   enabledOperators?: Operation[];
   allowNegativeTargets?: boolean;
+  /** שלבי תרגול A–H (מיגרציה מ־C–J / מאותיות ישנות בלקוח/שרת) */
   difficultyStage?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
+  /** מכנים לשברים בחבילה — רלוונטי כש־showFractions */
+  fractionKinds?: Fraction[];
   abVariant?: 'control_0_12_plus' | 'variant_0_15_plus';
   timerSetting: '30' | '60' | 'off' | 'custom';
   timerCustomSeconds: number;
+  /** רמת בוט — משחק מול בוט בלובי / התאמה למנוע; אופציונלי */
+  botDifficulty?: BotDifficulty;
+  /** שם תצוגה לבוט (מול בוט בלובי); אופציונלי — ריק משתמש בשם המתורגם */
+  botDisplayName?: string;
 }
 
 // ── Server Game State (full, only on server) ──
@@ -120,6 +141,8 @@ export interface ServerGameState {
   drawPile: Card[];
   discardPile: Card[];
   dice: DiceResult | null;
+  /** מונה מונוטוני אחרי כל ROLL_DICE — לאיפוס בונה משוואות גם כשחוזרת אותה שלישיית קוביות */
+  diceRollSeq: number;
   validTargets: EquationOption[];
   equationResult: number | null;
   stagedCards: Card[];
@@ -130,6 +153,14 @@ export interface ServerGameState {
   hasDrawnCard: boolean;
   lastCardValue: number | null;
   consecutiveIdenticalPlays: number;
+  /** מד אומץ: אחוז מילוי נוכחי (0-100) */
+  courageMeterPercent: number;
+  /** מד אומץ: אבן דרך נוכחית (0-3) */
+  courageMeterStep: number;
+  /** מד אומץ: מונה רצף הצלחות השלכה לקראת בונוס כל 2 הצלחות */
+  courageDiscardSuccessStreak: number;
+  /** מזהה פולס מונוטוני לטריגר אנימציית תגמול בלקוח */
+  courageRewardPulseId: number;
   /** לרוב null; מוגדר רק ב־state_update מיד אחרי playIdentical (מקוון) */
   identicalCelebration?: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: LastMovePayload;
@@ -142,8 +173,14 @@ export interface ServerGameState {
   openingDrawId: string;
   /** מועד יעד (epoch ms) לפעולת התור הנוכחית — מקוון בלבד; null כשלא במצב המתנה */
   turnDeadlineAt: number | null;
+  /** מונה סיומי תור (מעבר לשחקן הבא דרך endTurnLogic) */
+  roundsPlayed: number;
   /** אחרי אישור תרגיל קוביות: עד 2 קלפי פעולה/ג'וקר במשבצות 0 ו־1; יוסרו עם קלפי ההנחה */
   equationCommits: EquationCommitPayload[];
+  /** תור מזהי קלפים ל־stage אחרי confirmEquation (בוט); null/undefined = אין */
+  botPendingStagedIds?: string[] | null;
+  /** ניצחונות/הפסדים למשחק הנוכחי — מתעדכן בסיום משחק */
+  tournamentTable: TournamentStanding[];
 }
 
 // ── Client Player View (what each player sees) ──
@@ -159,8 +196,12 @@ export interface PlayerView {
   pileTop: Card | null;
   deckCount: number;
   dice: DiceResult | null;
+  /** מסונכן עם השרת — לאיפוס מצב קוביות בבונה אחרי כל הטלה */
+  diceRollSeq?: number;
   validTargets: EquationOption[];
   equationResult: number | null;
+  /** תצוגת המשוואה שאושרה (לחשיפת מהלך בוט/שחקן ב־UI) */
+  lastEquationDisplay?: string | null;
   stagedCards: Card[];
   pendingFractionTarget: number | null;
   fractionPenalty: number;
@@ -169,6 +210,10 @@ export interface PlayerView {
   hasDrawnCard: boolean;
   lastCardValue: number | null;
   consecutiveIdenticalPlays: number;
+  courageMeterPercent: number;
+  courageMeterStep: number;
+  courageDiscardSuccessStreak: number;
+  courageRewardPulseId: number;
   /** מגיע מהשרת רק בפריים אחרי קלף זהה מקוון — ממופה ל־identicalAlert בלקוח */
   identicalCelebration: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: string | null;
@@ -178,10 +223,14 @@ export interface PlayerView {
   message: string;
   openingDrawId: string;
   turnDeadlineAt: number | null;
+  /** סיומי תור ל־UI (רמז טיימר); לקוח ישן בלי שדה — מתייחסים כ־0 */
+  roundsPlayed?: number;
   /** נתון רק אחרי אישור תרגיל עם קלף/י פעולה או ג'וקר מהיד */
   equationCommits?: EquationCommitPayload[];
   /** @deprecated השרת שולח equationCommits */
   equationCommit?: EquationCommitPayload | null;
+  /** טבלת טורניר למשחק הנוכחי; לקוח ישן בלי שדה — יבנה מאפס לפי שמות שחקנים */
+  tournamentTable?: TournamentStanding[];
 }
 
 // ── Socket Events: Client → Server ──
@@ -217,7 +266,10 @@ export interface ClientToServerEvents {
   call_lulos: () => void;
   end_turn: () => void;
   begin_turn: () => void;
+  /** מארח בלבד — חדר עם בוט; מעדכן hostGameSettings.botDifficulty */
+  set_bot_difficulty: (data: { difficulty: BotDifficulty }) => void;
   reconnect: (data: { roomCode: string; playerId: string; locale?: AppLocale }) => void;
+  continue_vs_bot: (ack?: (result: ContinueVsBotAck) => void) => void;
 }
 
 // ── Socket Events: Server → Client ──
@@ -230,5 +282,8 @@ export interface ServerToClientEvents {
   game_started: (data: PlayerView) => void;
   state_update: (data: PlayerView) => void;
   toast: (data: { message: string }) => void;
+  opponent_disconnect_grace: (data: { playerId: string; playerName: string; deadlineAt: number }) => void;
+  opponent_reconnected: (data: { playerId: string; playerName: string }) => void;
+  opponent_disconnect_expired: (data: { playerId: string; playerName: string }) => void;
   error: (data: { message: string }) => void;
 }

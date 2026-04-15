@@ -14,15 +14,19 @@ import {
   Platform,
   ActivityIndicator,
   Share,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { useMultiplayer } from '../hooks/useMultiplayer';
-import type { HostGameSettings } from '../../shared/types';
+import type { BotDifficulty, Fraction, HostGameSettings } from '../../shared/types';
+
+const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
 import type { MsgParams } from '../../shared/i18n';
 import { useLocale } from '../i18n/LocaleContext';
 import SalindaLogoOption06 from '../components/branding/SalindaLogoOption06';
 import { brand } from '../theme/brand';
+import { CARDS_PER_PLAYER } from '../../shared/gameConstants';
 
 const WEB_INVITE_BASE_STORAGE_KEY = 'salinda_web_invite_base';
 
@@ -110,6 +114,7 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [joinFromLinkReady, setJoinFromLinkReady] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
 
   useEffect(() => {
     if (error) {
@@ -122,7 +127,7 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
     const { roomCode: roomFromUrl, serverUrl, name } = parseJoinParamsFromUrl();
     if (!roomFromUrl) return;
     setStep('join');
-    setRoomCode(roomFromUrl.slice(0, 4));
+    setRoomCode(roomFromUrl.replace(/\D/g, '').slice(0, 4));
     if (name) setPlayerName(name.slice(0, 7));
     if (serverUrl) setServerUrl(serverUrl);
     setJoinFromLinkReady(true);
@@ -152,6 +157,35 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
       </View>
       <Text style={styles.title}>{t('lobby.connectTitle')}</Text>
       <Text style={styles.subtitle}>{t('lobby.connectSubtitle')}</Text>
+      <TouchableOpacity style={styles.rulesLinkBtn} onPress={() => setRulesOpen(true)} accessibilityRole="button">
+        <Text style={styles.rulesLinkText}>{t('start.showRules')}</Text>
+      </TouchableOpacity>
+      <Modal visible={rulesOpen} transparent animationType="fade" onRequestClose={() => setRulesOpen(false)}>
+        <View style={styles.rulesModalBackdrop}>
+          <View style={[styles.rulesModalCard, { direction: isRTL ? 'rtl' : 'ltr' }]}>
+            <View style={styles.rulesModalLogoWrap}>
+              <SalindaLogoOption06 width={220} />
+            </View>
+            <Text style={styles.rulesModalTitle}>{t('start.rulesTitle')}</Text>
+            <ScrollView style={styles.rulesModalScroll} showsVerticalScrollIndicator={false}>
+              <Text style={[styles.rulesModalSection, { textAlign: ta }]}>{t('start.goalTitle')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.goal1', { n: CARDS_PER_PLAYER })}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.goal2')}</Text>
+              <Text style={[styles.rulesModalSection, { textAlign: ta }]}>{t('start.turnTitle')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.t1')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.t2')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.t3')}</Text>
+              <Text style={[styles.rulesModalSection, { textAlign: ta }]}>{t('start.challengesTitle')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.c1')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.c2')}</Text>
+              <Text style={[styles.rulesModalBody, { textAlign: ta }]}>{t('start.rules.c3')}</Text>
+            </ScrollView>
+            <TouchableOpacity style={styles.rulesModalCloseBtn} onPress={() => setRulesOpen(false)}>
+              <Text style={styles.rulesModalCloseBtnText}>{t('lobby.rulesModalClose')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
       {joinFromLinkReady && (
         <View style={styles.infoBox}>
           <Text style={[styles.infoText, { textAlign: ta }]}>{t('lobby.inviteLinkHint')}</Text>
@@ -184,7 +218,7 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
               <TextInput
                 style={styles.input}
                 value={roomCode}
-                onChangeText={setRoomCode}
+                onChangeText={(text) => setRoomCode(text.replace(/\D/g, '').slice(0, 4))}
                 placeholder="1234"
                 placeholderTextColor="#6B7280"
                 keyboardType="number-pad"
@@ -220,14 +254,20 @@ export function LobbyScreen() {
   const { roomCode, players, lobbyStatus, isHost, connected, startGame, startBotGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
   const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
   const [showFractions, setShowFractions] = useState(true);
+  const [fractionKinds, setFractionKinds] = useState<Fraction[]>([...ALL_FRACTION_KINDS]);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timerSetting, setTimerSetting] = useState<HostGameSettings['timerSetting']>('off');
   const [timerCustomSeconds, setTimerCustomSeconds] = useState(60);
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>('medium');
+  const [botDisplayName, setBotDisplayName] = useState('');
   const [starting, setStarting] = useState(false);
   const [startingBot, setStartingBot] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [botCountdown, setBotCountdown] = useState<number | null>(null);
+  const [showAdvancedHostSettings, setShowAdvancedHostSettings] = useState(false);
+  /** המארח רואה קודם את מסך הכיוון; רק לאחר אישור נחשף קוד החדר */
+  const [settingsConfirmed, setSettingsConfirmed] = useState(false);
   /** עוקף בסיס Web אוטומטי; ריק = שימוש ב־EXPO_PUBLIC_WEB_APP_URL או במקור הדף (Web). נשמר במכשיר. */
   const [manualWebInviteBase, setManualWebInviteBase] = useState('');
 
@@ -279,19 +319,25 @@ export function LobbyScreen() {
     startGame(difficulty, buildGameSettings());
   };
 
-  const buildGameSettings = (): HostGameSettings => ({
-    diceMode: '3',
-    showFractions,
-    showPossibleResults,
-    showSolveExercise,
-    mathRangeMax: difficulty === 'easy' ? 12 : 25,
-    enabledOperators: ['+'],
-    allowNegativeTargets: false,
-    difficultyStage: difficulty === 'easy' ? 'A' : 'E',
-    abVariant: difficulty === 'easy' ? 'control_0_12_plus' : 'variant_0_15_plus',
-    timerSetting,
-    timerCustomSeconds: timerSetting === 'custom' ? timerCustomSeconds : 60,
-  });
+  const buildGameSettings = (): HostGameSettings => {
+    const trimmed = botDisplayName.replace(/[\r\n\x00-\x1f]/g, '').trim().slice(0, 24);
+    return {
+      diceMode: '3',
+      showFractions,
+      showPossibleResults,
+      showSolveExercise,
+      mathRangeMax: difficulty === 'easy' ? 12 : 25,
+      enabledOperators: ['+', '-'],
+      allowNegativeTargets: false,
+      fractionKinds: showFractions ? (fractionKinds.length > 0 ? fractionKinds : [...ALL_FRACTION_KINDS]) : [],
+      difficultyStage: difficulty === 'easy' ? 'A' : 'H',
+      abVariant: difficulty === 'easy' ? 'control_0_12_plus' : 'variant_0_15_plus',
+      timerSetting,
+      timerCustomSeconds: timerSetting === 'custom' ? timerCustomSeconds : 60,
+      botDifficulty,
+      ...(trimmed.length > 0 ? { botDisplayName: trimmed } : {}),
+    };
+  };
 
   const handleStartBotGame = async () => {
     if (!isHost) return;
@@ -375,7 +421,8 @@ export function LobbyScreen() {
       <View style={styles.logoWrap}>
         <SalindaLogoOption06 width={260} />
       </View>
-      <Text style={styles.title}>{t('lobby.roomReady')}</Text>
+      <Text style={styles.title}>{isHost && !settingsConfirmed ? t('lobby.configureTitle') : t('lobby.roomReady')}</Text>
+      {!(isHost && !settingsConfirmed) && (
       <View style={styles.codeBox}>
         <Text style={styles.codeLabel}>{t('lobby.roomCodeLabel')}</Text>
         <Text style={styles.codeValue}>{roomCode}</Text>
@@ -420,33 +467,50 @@ export function LobbyScreen() {
           </View>
         )}
       </View>
-      <Text style={styles.label}>{t('lobby.playersInRoom', { count: players.length })}</Text>
-      {players.map((p) => (
-        <View key={p.id} style={styles.playerRow}>
-          <Text style={styles.playerName}>{p.name}</Text>
-          {p.isHost && <Text style={styles.hostBadge}>{t('lobby.host')}</Text>}
-          {p.isBot && <Text style={styles.botBadge}>{t('lobby.botBadge')}</Text>}
-          {!p.isConnected && <Text style={styles.disconnectedBadge}>{t('lobby.disconnected')}</Text>}
-        </View>
-      ))}
+      )}
+      {!(isHost && !settingsConfirmed) && (
+        <>
+          <Text style={styles.label}>{t('lobby.playersInRoom', { count: players.length })}</Text>
+          {players.map((p) => (
+            <View key={p.id} style={styles.playerRow}>
+              <Text style={styles.playerName}>{p.name}</Text>
+              {p.isHost && <Text style={styles.hostBadge}>{t('lobby.host')}</Text>}
+              {p.isBot && <Text style={styles.botBadge}>{t('lobby.botBadge')}</Text>}
+              {!p.isConnected && <Text style={styles.disconnectedBadge}>{t('lobby.disconnected')}</Text>}
+            </View>
+          ))}
+        </>
+      )}
       {isHost && (
         <>
-          <Text style={styles.label}>{t('lobby.difficulty')}</Text>
+          <Text style={styles.label}>{t('start.wheel.numberRange')}</Text>
           <View style={styles.diffRow}>
-            <TouchableOpacity
-              style={[styles.diffBtn, difficulty === 'easy' && styles.diffBtnActive]}
-              onPress={() => setDifficulty('easy')}
-            >
-              <Text style={[styles.diffText, difficulty === 'easy' && styles.diffTextActive]}>{t('lobby.diffShortEasy')}</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.diffBtn, difficulty === 'full' && styles.diffBtnActive]}
               onPress={() => setDifficulty('full')}
             >
-              <Text style={[styles.diffText, difficulty === 'full' && styles.diffTextActive]}>{t('lobby.diffShortFull')}</Text>
+              <Text style={[styles.diffText, difficulty === 'full' && styles.diffTextActive]}>0-25</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.diffBtn, difficulty === 'easy' && styles.diffBtnActive]}
+              onPress={() => setDifficulty('easy')}
+            >
+              <Text style={[styles.diffText, difficulty === 'easy' && styles.diffTextActive]}>0-12</Text>
             </TouchableOpacity>
           </View>
 
+          <TouchableOpacity
+            style={styles.advancedToggleBtn}
+            onPress={() => setShowAdvancedHostSettings((v) => !v)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.advancedToggleText}>
+              {showAdvancedHostSettings ? t('lobby.advancedToggleHide') : t('lobby.advancedToggleShow')}
+            </Text>
+          </TouchableOpacity>
+
+          {showAdvancedHostSettings && (
+            <>
           <Text style={styles.label}>{t('lobby.fractions')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
@@ -462,6 +526,27 @@ export function LobbyScreen() {
               <Text style={[styles.diffText, !showFractions && styles.diffTextActive]}>{t('lobby.noFractions')}</Text>
             </TouchableOpacity>
           </View>
+
+          {showFractions && (
+            <View style={styles.fractionKindsRow}>
+              {ALL_FRACTION_KINDS.map((fk) => {
+                const on = fractionKinds.includes(fk);
+                return (
+                  <TouchableOpacity
+                    key={fk}
+                    onPress={() => setFractionKinds((prev) => {
+                      if (!prev.includes(fk)) return [...prev, fk];
+                      if (prev.length <= 1) return prev;
+                      return prev.filter((x) => x !== fk);
+                    })}
+                    style={[styles.fractionChip, on && styles.fractionChipOn]}
+                  >
+                    <Text style={[styles.fractionChipText, on && styles.fractionChipTextOn]}>{fk}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
 
           <Text style={styles.label}>{t('lobby.possibleResults')}</Text>
           <View style={styles.diffRow}>
@@ -529,12 +614,14 @@ export function LobbyScreen() {
                     setTimerCustomSeconds(60);
                     return;
                   }
-                  setTimerCustomSeconds(Math.min(600, Math.max(10, n)));
+                  setTimerCustomSeconds(Math.min(600, Math.max(1, n)));
                 }}
                 keyboardType="number-pad"
                 maxLength={3}
                 textAlign="center"
               />
+            </>
+          )}
             </>
           )}
 
@@ -543,18 +630,27 @@ export function LobbyScreen() {
             <Text style={[styles.summaryText, { textAlign: ta }]}>{hostSettingsSummary}</Text>
           </View>
 
-          <TouchableOpacity
-            style={[styles.primaryBtn, (players.length < 2 || starting) && styles.primaryBtnDisabled]}
-            onPress={handleStart}
-            disabled={players.length < 2 || starting}
-          >
-            {starting ? (
-              <ActivityIndicator color="#111827" />
-            ) : (
-              <Text style={styles.primaryBtnText}>{t('lobby.startGame')}</Text>
-            )}
-          </TouchableOpacity>
-          {players.length < 2 && (
+          {!settingsConfirmed ? (
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={() => setSettingsConfirmed(true)}
+            >
+              <Text style={styles.primaryBtnText}>{t('lobby.continueToRoom')}</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.primaryBtn, (players.length < 2 || starting) && styles.primaryBtnDisabled]}
+              onPress={handleStart}
+              disabled={players.length < 2 || starting}
+            >
+              {starting ? (
+                <ActivityIndicator color="#111827" />
+              ) : (
+                <Text style={styles.primaryBtnText}>{t('lobby.startGame')}</Text>
+              )}
+            </TouchableOpacity>
+          )}
+          {settingsConfirmed && players.length < 2 && (
             <>
               <Text style={styles.hint}>{t('lobby.minPlayers')}</Text>
               {waitingForBotOffer && (
@@ -572,6 +668,33 @@ export function LobbyScreen() {
                   <Text style={[styles.botOfferBody, { textAlign: ta }]}>
                     {botOfferReady ? t('lobby.botOfferBody') : t('lobby.waitingForPlayer')}
                   </Text>
+                  <Text style={[styles.label, { marginTop: 8, alignSelf: 'stretch' }]}>{t('lobby.botDifficultyLabel')}</Text>
+                  <View style={styles.timerGrid}>
+                    {(
+                      [
+                        ['easy', t('start.botEasy')],
+                        ['medium', t('start.botMedium')],
+                        ['hard', t('start.botHard')],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <TouchableOpacity
+                        key={key}
+                        onPress={() => setBotDifficulty(key)}
+                        style={[styles.timerChip, botDifficulty === key && styles.diffBtnActive]}
+                      >
+                        <Text style={[styles.timerChipText, botDifficulty === key && styles.diffTextActive]}>{label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[styles.label, { marginTop: 10, alignSelf: 'stretch' }]}>{t('start.botNameLabel')}</Text>
+                  <TextInput
+                    value={botDisplayName}
+                    onChangeText={setBotDisplayName}
+                    placeholder={t('start.botNamePlaceholder')}
+                    placeholderTextColor="rgba(248,250,252,0.45)"
+                    maxLength={24}
+                    style={[styles.botNameInput, { textAlign: ta }]}
+                  />
                   <TouchableOpacity
                     style={[styles.secondaryPrimaryBtn, (startingBot || !connected) && styles.primaryBtnDisabled]}
                     onPress={handleStartBotGame}
@@ -717,6 +840,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timerChipText: { color: '#9CA3AF', fontWeight: '600', fontSize: 13 },
+  fractionKindsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 8, marginBottom: 4 },
+  fractionChip: { minWidth: 56, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center' },
+  fractionChipOn: { borderColor: '#F59E0B', backgroundColor: 'rgba(244,114,182,0.28)' },
+  fractionChipText: { color: 'rgba(226,232,240,0.7)', fontSize: 15, fontWeight: '700' },
+  fractionChipTextOn: { color: '#FEF3C7', fontWeight: '900' },
+  botNameInput: {
+    width: '100%',
+    marginTop: 4,
+    marginBottom: 4,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.45)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#F8FAFC',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   waitingText: { color: '#9CA3AF', fontSize: 14, marginTop: 24, textAlign: 'center' },
   waitingHint: { color: '#93C5FD', fontSize: 12, marginTop: 6, textAlign: 'center' },
   botOfferBox: {
@@ -763,4 +905,35 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   infoText: { color: brand.text, fontSize: 12, textAlign: 'right' },
+  rulesLinkBtn: { marginTop: 8, marginBottom: 4, paddingVertical: 8 },
+  rulesLinkText: { color: brand.cyan, fontSize: 14, fontWeight: '700', textAlign: 'center', textDecorationLine: 'underline' },
+  rulesModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  rulesModalCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.4)',
+    padding: 16,
+    maxHeight: '85%',
+  },
+  rulesModalTitle: { color: brand.gold, fontSize: 20, fontWeight: '800', marginBottom: 12, textAlign: 'center' },
+  rulesModalLogoWrap: { alignItems: 'center', marginBottom: 2 },
+  rulesModalScroll: { maxHeight: 420 },
+  rulesModalSection: { color: '#E2E8F0', fontSize: 15, fontWeight: '800', marginTop: 12, marginBottom: 6 },
+  rulesModalBody: { color: '#CBD5E1', fontSize: 14, lineHeight: 22, marginBottom: 6 },
+  rulesModalCloseBtn: {
+    marginTop: 14,
+    backgroundColor: brand.gold,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  rulesModalCloseBtnText: { color: '#111827', fontSize: 15, fontWeight: '800' },
+  advancedToggleBtn: { marginTop: 12, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, borderWidth: 2, borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.15)' },
+  advancedToggleText: { color: '#FCD34D', fontSize: 14, fontWeight: '800', textAlign: 'center' },
 });

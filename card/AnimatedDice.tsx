@@ -136,14 +136,34 @@ interface AnimatedDiceProps {
   size?: number;
   disabled?: boolean;
   buttonText?: string;
+  /** When set, the roll settles on these three values (demo / tutorial). */
+  fixedFinalValues?: [number, number, number];
+  /** Call rollDice once after mount (e.g. gameplay preview). */
+  autoRollOnMount?: boolean;
+  /** Hide the roll button (use with autoRollOnMount). */
+  hideRollButton?: boolean;
+  /** When true, do not show the post-roll sum badge (e.g. preview where sum is not "the" target). */
+  hideSumBadge?: boolean;
 }
 
-export default function AnimatedDice({ onRollComplete, onRollStart, size = DICE_SIZE, disabled = false, buttonText }: AnimatedDiceProps) {
+export default function AnimatedDice({
+  onRollComplete,
+  onRollStart,
+  size = DICE_SIZE,
+  disabled = false,
+  buttonText,
+  fixedFinalValues,
+  autoRollOnMount = false,
+  hideRollButton = false,
+  hideSumBadge = false,
+}: AnimatedDiceProps) {
   const [displayVals, setDisplayVals] = useState<[number, number, number]>([4, 2, 5]);
   const [rolling, setRolling] = useState(false);
   const [showSum, setShowSum] = useState(false);
   const [sumCountVal, setSumCountVal] = useState(0);
   const rollingRef = useRef(false);
+  const fixedFinalRef = useRef(fixedFinalValues);
+  fixedFinalRef.current = fixedFinalValues;
 
   // Per-die animations (stable refs)
   const posX = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
@@ -199,8 +219,13 @@ export default function AnimatedDice({ onRollComplete, onRollStart, size = DICE_
       rot[i].setValue(0); sc[i].setValue(1); shOp[i].setValue(0.4);
     });
 
-    const v1 = randVal(), v2 = randVal(), v3 = randVal();
-    const finalVals: [number, number, number] = [v1, v2, v3];
+    const fixed = fixedFinalRef.current;
+    const finalVals: [number, number, number] = fixed
+      ? fixed
+      : [randVal(), randVal(), randVal()];
+    const v1 = finalVals[0];
+    const v2 = finalVals[1];
+    const v3 = finalVals[2];
 
     // ═══ PHASE 1: SHAKE (550ms) ═══
     const flickerRef = { current: true };
@@ -304,26 +329,38 @@ export default function AnimatedDice({ onRollComplete, onRollStart, size = DICE_
       Animated.timing(glowOp, { toValue: 0, duration: 500, easing: Easing.in(Easing.quad), useNativeDriver: true }),
     ]).start();
 
-    setShowSum(true);
-    Animated.parallel([
-      Animated.spring(sumScale, { toValue: 1, friction: 5, tension: 100, useNativeDriver: true }),
-      Animated.timing(sumOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-    ]).start();
+    if (!hideSumBadge) {
+      setShowSum(true);
+      Animated.parallel([
+        Animated.spring(sumScale, { toValue: 1, friction: 5, tension: 100, useNativeDriver: true }),
+        Animated.timing(sumOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+      ]).start();
 
-    const total = v1 + v2 + v3;
-    const steps = Math.min(total, 10);
-    for (let step = 1; step <= steps; step++) {
-      await new Promise(r => setTimeout(r, 35));
-      setSumCountVal(Math.round((step / steps) * total));
+      const total = v1 + v2 + v3;
+      const steps = Math.min(total, 10);
+      for (let step = 1; step <= steps; step++) {
+        await new Promise(r => setTimeout(r, 35));
+        setSumCountVal(Math.round((step / steps) * total));
+      }
+      setSumCountVal(total);
     }
-    setSumCountVal(total);
 
     await new Promise(r => setTimeout(r, 300));
     rollingRef.current = false;
     setRolling(false);
     startIdle();
     onRollComplete?.(finalVals);
-  }, [disabled]);
+  }, [disabled, hideSumBadge, onRollComplete, onRollStart]);
+
+  const rollDiceRef = useRef(rollDice);
+  rollDiceRef.current = rollDice;
+  useEffect(() => {
+    if (!autoRollOnMount || disabled) return;
+    const tid = setTimeout(() => {
+      void rollDiceRef.current();
+    }, 450);
+    return () => clearTimeout(tid);
+  }, [autoRollOnMount, disabled]);
 
   // ═══════════════════════════════════════
   // RENDER
@@ -377,24 +414,26 @@ export default function AnimatedDice({ onRollComplete, onRollStart, size = DICE_
       </Animated.View>
 
       {/* Roll button — gold gradient matching HTML */}
-      <TouchableOpacity
-        style={[(rolling || disabled) && styles.rollBtnDisabled]}
-        onPress={rollDice}
-        disabled={rolling || disabled}
-        activeOpacity={0.8}
-      >
-        <View style={styles.rollBtnOuter}>
-          <LinearGradient
-            colors={[...C.btnGrad]}
-            style={styles.rollBtn}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          >
-            <Text style={styles.rollBtnText}>
-              {rolling ? '🎲 מגלגל...' : (buttonText || '🎲 הטל קוביות')}
-            </Text>
-          </LinearGradient>
-        </View>
-      </TouchableOpacity>
+      {!hideRollButton && (
+        <TouchableOpacity
+          style={[(rolling || disabled) && styles.rollBtnDisabled]}
+          onPress={rollDice}
+          disabled={rolling || disabled}
+          activeOpacity={0.8}
+        >
+          <View style={styles.rollBtnOuter}>
+            <LinearGradient
+              colors={[...C.btnGrad]}
+              style={styles.rollBtn}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            >
+              <Text style={styles.rollBtnText}>
+                {rolling ? '🎲 מגלגל...' : (buttonText || '🎲 הטל קוביות')}
+              </Text>
+            </LinearGradient>
+          </View>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }

@@ -3,7 +3,7 @@
 
 import type { Operation, EquationCommitPayload } from '../../index';
 
-export type BotDifficulty = 'easy' | 'hard';
+export type { BotDifficulty } from '../../shared/types';
 
 /**
  * Discriminated union of every action the bot brain can decide to take.

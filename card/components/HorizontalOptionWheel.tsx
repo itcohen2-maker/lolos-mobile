@@ -160,7 +160,7 @@ export function HorizontalOptionWheel({
             });
             const opacity = scrollX.interpolate({
               inputRange: [c - BAND * 0.65, c, c + BAND * 0.65],
-              outputRange: [0.55, 1, 0.55],
+              outputRange: [0.78, 1, 0.78],
               extrapolate: 'clamp',
             });
             const selected = selectedKey === opt.key;
@@ -240,8 +240,8 @@ const styles = StyleSheet.create({
     }),
   },
   chipOff: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(255,255,255,0.28)',
   },
   chipTxt: {
     fontSize: 11,
@@ -249,5 +249,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   chipTxtOn: { color: '#3c3c00' },
-  chipTxtOff: { color: 'rgba(255,255,255,0.5)' },
+  chipTxtOff: { color: 'rgba(255,255,255,0.88)' },
 });

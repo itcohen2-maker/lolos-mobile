@@ -5,7 +5,7 @@
 
 import type {
   Card, Player, ServerGameState, PlayerView, Operation, Fraction,
-  DiceResult, HostGameSettings, EquationCommitPayload, AppLocale,
+  DiceResult, HostGameSettings, EquationCommitPayload, AppLocale, TournamentStanding,
 } from '../../shared/types';
 import type { GameStatusMessage, LastMovePayload, LocalizedMessage } from '../../shared/i18n';
 import { formatGameMessage, formatLastMove } from '../../shared/i18n';
@@ -17,12 +17,14 @@ const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
   showPossibleResults: true,
   showSolveExercise: true,
   mathRangeMax: 25,
-  enabledOperators: ['+'],
-  allowNegativeTargets: false,
-  difficultyStage: 'E',
+  enabledOperators: ['x', '÷'],
+  allowNegativeTargets: true,
+  difficultyStage: 'H',
+  fractionKinds: ['1/2', '1/3', '1/4', '1/5'],
   abVariant: 'variant_0_15_plus',
   timerSetting: 'off',
   timerCustomSeconds: 60,
+  botDifficulty: 'medium',
 };
 import { generateDeck, shuffle, dealCards } from './deck';
 import {
@@ -106,6 +108,48 @@ function getActivePlayers(players: Player[]): Player[] {
   return players.filter(isActivePlayer);
 }
 
+const COURAGE_STEP_TO_PERCENT: Readonly<Record<number, number>> = {
+  0: 0,
+  1: 33,
+  2: 66,
+  3: 100,
+};
+
+function clampCourageStep(step: number): number {
+  return Math.max(0, Math.min(3, step));
+}
+
+function applyCourageStepReward(st: ServerGameState): ServerGameState {
+  const nextStep = clampCourageStep((st.courageMeterStep ?? 0) + 1);
+  if (nextStep === (st.courageMeterStep ?? 0)) return st;
+  return {
+    ...st,
+    courageMeterStep: nextStep,
+    courageMeterPercent: COURAGE_STEP_TO_PERCENT[nextStep],
+    courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
+  };
+}
+
+function applyCourageRewards(
+  st: ServerGameState,
+  options: { equationSuccess?: boolean; discardSuccess?: boolean },
+): ServerGameState {
+  let next = st;
+  if (options.equationSuccess) {
+    next = applyCourageStepReward(next);
+  }
+  if (options.discardSuccess) {
+    const currentStreak = next.courageDiscardSuccessStreak ?? 0;
+    const incremented = currentStreak + 1;
+    if (incremented >= 2) {
+      next = applyCourageStepReward({ ...next, courageDiscardSuccessStreak: 0 });
+    } else {
+      next = { ...next, courageDiscardSuccessStreak: incremented };
+    }
+  }
+  return next;
+}
+
 // ── Helper: draw N cards from draw pile for a player ──
 
 function reshuffleDiscard(st: ServerGameState): ServerGameState {
@@ -127,9 +171,27 @@ function drawFromPile(st: ServerGameState, count: number, pi: number): ServerGam
 
 // ── Check win condition ──
 
+function bumpTournamentOnWin(st: ServerGameState, winnerIndex: number): TournamentStanding[] {
+  const t = st.tournamentTable;
+  if (!t?.length) return t ?? [];
+  return t.map((row) =>
+    row.playerIndex === winnerIndex
+      ? { ...row, wins: row.wins + 1 }
+      : { ...row, losses: row.losses + 1 },
+  );
+}
+
 function checkWin(st: ServerGameState): ServerGameState {
   const cp = st.players[st.currentPlayerIndex];
-  if (cp.hand.length <= 2) return { ...st, phase: 'game-over', winner: cp };
+  if (cp.hand.length <= 2) {
+    const wi = st.currentPlayerIndex;
+    return {
+      ...st,
+      phase: 'game-over',
+      winner: cp,
+      tournamentTable: bumpTournamentOnWin(st, wi),
+    };
+  }
   if (cp.hand.length === 3) {
     const warn = locMsg('toast.threeCardsLeft', { name: cp.name });
     const mergedToast: LastMovePayload = st.lastMoveMessage
@@ -147,6 +209,7 @@ function checkWin(st: ServerGameState): ServerGameState {
 function endTurnLogic(st: ServerGameState): ServerGameState {
   let s = { ...st };
   const next = getNextActivePlayerIndex(s.players, s.currentPlayerIndex);
+  const prevRounds = s.roundsPlayed ?? 0;
   return {
     ...s,
     players: s.players.map(p => ({ ...p, calledLolos: false })),
@@ -155,6 +218,8 @@ function endTurnLogic(st: ServerGameState): ServerGameState {
     hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
     pendingFractionTarget: null, fractionPenalty: 0,
     equationCommits: [],
+    botPendingStagedIds: null,
+    roundsPlayed: prevRounds + 1,
   };
 }
 
@@ -174,16 +239,29 @@ export function startGame(
   difficulty: 'easy' | 'full',
   partialSettings?: Partial<HostGameSettings>,
 ): ServerGameState {
-  const hostGameSettings: HostGameSettings = {
+  const mergedHost: HostGameSettings = {
     ...DEFAULT_HOST_GAME_SETTINGS,
     ...partialSettings,
+  };
+  const lowRange = mergedHost.mathRangeMax === 12;
+  const showFractions = lowRange ? false : mergedHost.showFractions !== false;
+  const fk: Fraction[] = lowRange
+    ? []
+    : mergedHost.fractionKinds && mergedHost.fractionKinds.length > 0
+      ? mergedHost.fractionKinds
+      : (['1/2', '1/3', '1/4', '1/5'] as Fraction[]);
+  const hostGameSettings: HostGameSettings = {
+    ...mergedHost,
+    showFractions,
+    fractionKinds: showFractions ? fk : [],
   };
   const deck = shuffle(
     generateDeck(
       difficulty,
-      hostGameSettings.showFractions,
+      showFractions,
       hostGameSettings.enabledOperators,
       hostGameSettings.mathRangeMax,
+      showFractions ? fk : null,
     ),
   );
   const { hands, remaining } = dealCards(deck, room.players.length, CARDS_PER_PLAYER);
@@ -221,6 +299,7 @@ export function startGame(
     drawPile,
     discardPile: firstDiscard ? [firstDiscard] : [],
     dice: null,
+    diceRollSeq: 0,
     validTargets: [],
     equationResult: null,
     stagedCards: [],
@@ -231,6 +310,10 @@ export function startGame(
     hasDrawnCard: false,
     lastCardValue: null,
     consecutiveIdenticalPlays: 0,
+    courageMeterPercent: 0,
+    courageMeterStep: 0,
+    courageDiscardSuccessStreak: 0,
+    courageRewardPulseId: 0,
     identicalCelebration: null,
     lastMoveMessage: null,
     lastEquationDisplay: null,
@@ -240,7 +323,15 @@ export function startGame(
     message: '' as GameStatusMessage,
     openingDrawId,
     turnDeadlineAt: null,
+    roundsPlayed: 0,
     equationCommits: [],
+    botPendingStagedIds: null,
+    tournamentTable: players.map((p, i) => ({
+      playerIndex: i,
+      playerName: p.name,
+      wins: 0,
+      losses: 0,
+    })),
   };
   return withOnlineTurnDeadline(initial);
 }
@@ -290,9 +381,11 @@ export function doRollDice(st: ServerGameState): ServerGameState | { error: Loca
     ...ns,
     validTargets: vt,
     phase: 'building',
+    diceRollSeq: (st.diceRollSeq ?? 0) + 1,
     consecutiveIdenticalPlays: 0,
     equationCommits: [],
     message: statusMsg,
+    botPendingStagedIds: null,
   };
 }
 
@@ -334,11 +427,16 @@ export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error
     );
     const remainingActive = getActivePlayers(playersAfterElimination);
     if (remainingActive.length <= 1) {
+      const winner = remainingActive[0] ?? null;
+      const wi = winner ? playersAfterElimination.findIndex((p) => p.id === winner.id) : -1;
+      const tournamentTable =
+        wi >= 0 ? bumpTournamentOnWin({ ...st, players: playersAfterElimination, tournamentTable: st.tournamentTable }, wi) : st.tournamentTable;
       return {
         ...st,
         players: playersAfterElimination,
         phase: 'game-over',
-        winner: remainingActive[0] ?? null,
+        winner,
+        tournamentTable,
         turnDeadlineAt: null,
         lastMoveMessage: locMsg('toast.playerEliminatedAfk', { name: skippedName }),
         message: remainingActive[0]
@@ -367,6 +465,7 @@ export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error
       pendingFractionTarget: null,
       fractionPenalty: 0,
       fractionAttackResolved: true,
+      roundsPlayed: (st.roundsPlayed ?? 0) + 1,
       lastMoveMessage: locMsg('toast.eliminatedTurnTo', { name: skippedName, next: nextNameAfterKick }),
     };
   }
@@ -443,7 +542,6 @@ export function confirmEquation(
 
 export function stageCard(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
   if (st.phase !== 'solved' || st.hasPlayedCards) return locErr('stage.cannotStageNow');
-  if (st.equationCommits.some((c) => c.cardId === cardId)) return locErr('stage.alreadyInEquation');
   const card = findCard(st, cardId);
   if (!card) return locErr('stage.cardNotFound');
   if (st.stagedCards.some(c => c.id === card.id)) return locErr('stage.alreadyInStaging');
@@ -456,7 +554,10 @@ export function stageCard(st: ServerGameState, cardId: string): ServerGameState 
   if (card.type === 'operation' && st.stagedCards.some(c => c.type === 'operation')) {
     return locErr('stage.oneOpOnly');
   }
-  return { ...st, stagedCards: [...st.stagedCards, card], message: '' };
+  const equationCommits = st.equationCommits.some((c) => c.cardId === cardId)
+    ? st.equationCommits.filter((c) => c.cardId !== cardId)
+    : st.equationCommits;
+  return { ...st, equationCommits, stagedCards: [...st.stagedCards, card], message: '' };
 }
 
 export function unstageCard(st: ServerGameState, cardId: string): ServerGameState | { error: LocalizedMessage } {
@@ -497,6 +598,7 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
     equationCommits: [],
     message: '',
   };
+  stNs = applyCourageRewards(stNs, { equationSuccess: true, discardSuccess: true });
   stNs = checkWin(stNs);
   if (stNs.phase === 'game-over') return stNs;
   return endTurnLogic(stNs);
@@ -530,6 +632,7 @@ export function playIdentical(st: ServerGameState, cardId: string): ServerGameSt
     lastMoveMessage: toast, message: '',
     identicalCelebration: celebration,
   };
+  ns = applyCourageRewards(ns, { discardSuccess: true });
   ns = checkWin(ns);
   if (ns.phase === 'game-over') return { ...ns, identicalCelebration: null };
   return endTurnLogic(ns);
@@ -546,7 +649,11 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
   if (st.pendingFractionTarget !== null) {
     const newTarget = st.pendingFractionTarget / denom;
     const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-    let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true });
+    let ns = applyCourageRewards(
+      { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true },
+      { discardSuccess: true },
+    );
+    ns = checkWin(ns);
     if (ns.phase === 'game-over') return ns;
     const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
     return {
@@ -573,7 +680,11 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
   if (effTop === null) return locErr('fraction.cannotPlayOnTop');
   const newTarget = effTop / denom;
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true });
+  let ns = applyCourageRewards(
+    { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true },
+    { discardSuccess: true },
+  );
+  ns = checkWin(ns);
   if (ns.phase === 'game-over') return ns;
   const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
   return {
@@ -615,13 +726,14 @@ export function defendFractionSolve(st: ServerGameState, cardId: string, wildRes
 
   const cp = st.players[st.currentPlayerIndex];
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns = checkWin({
+  let ns = applyCourageRewards({
     ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true, lastCardValue: lastVal,
     lastMoveMessage: locMsg('toast.defenseOk'),
     message: locMsg('msg.defenseOk'),
-  });
+  }, { discardSuccess: true });
+  ns = checkWin(ns);
   if (ns.phase === 'game-over') return ns;
   return endTurnLogic(ns);
 }
@@ -724,8 +836,10 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     pileTop,
     deckCount: state.drawPile.length,
     dice: state.dice,
+    diceRollSeq: state.diceRollSeq ?? 0,
     validTargets: state.validTargets,
     equationResult: state.equationResult,
+    lastEquationDisplay: state.lastEquationDisplay,
     stagedCards: state.stagedCards,
     pendingFractionTarget: state.pendingFractionTarget,
     fractionPenalty: state.fractionPenalty,
@@ -734,6 +848,10 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     hasDrawnCard: state.hasDrawnCard,
     lastCardValue: state.lastCardValue,
     consecutiveIdenticalPlays: state.consecutiveIdenticalPlays,
+    courageMeterPercent: state.courageMeterPercent,
+    courageMeterStep: state.courageMeterStep,
+    courageDiscardSuccessStreak: state.courageDiscardSuccessStreak,
+    courageRewardPulseId: state.courageRewardPulseId,
     identicalCelebration: state.identicalCelebration ?? null,
     lastMoveMessage: formatLastMove(locale, state.lastMoveMessage),
     difficulty: state.difficulty,
@@ -742,6 +860,8 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     message: formatGameMessage(locale, state.message),
     openingDrawId: state.openingDrawId,
     turnDeadlineAt: state.turnDeadlineAt,
+    roundsPlayed: state.roundsPlayed ?? 0,
     equationCommits: state.equationCommits,
+    tournamentTable: state.tournamentTable,
   };
 }

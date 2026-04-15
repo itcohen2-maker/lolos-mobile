@@ -8,25 +8,112 @@ import type { ReactNode } from 'react';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { io, type Socket } from 'socket.io-client';
-import type { LobbyStatus, PlayerView, HostGameSettings, StartBotGameAck } from '../../shared/types';
+import type {
+  BotDifficulty,
+  ContinueVsBotAck,
+  Fraction,
+  LobbyStatus,
+  Operation,
+  PlayerView,
+  HostGameSettings,
+  StartBotGameAck,
+} from '../../shared/types';
+import { DIFFICULTY_STAGE_CONFIG, migrateDifficultyStage } from '../../shared/difficultyStages';
+import { normalizeOperationToken } from '../../shared/equationOpCycle';
+import { t } from '../../shared/i18n';
 import { useLocale } from '../i18n/LocaleContext';
 
 const DEFAULT_SOCKET_PORT = 3001;
 
+const DEFAULT_FRACTION_KINDS: Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
+
+/** hostUri של Expo במצב Tunnel — לא מעביר TCP לפורט 3001 על המחשב; חיבור ל-socket ייתקע ב-timeout */
+function isLikelyExpoTunnelRelayHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+  if (h.includes('exp.direct')) return true;
+  if (h.includes('ngrok')) return true;
+  if (h.includes('trycloudflare.com')) return true;
+  if (h.includes('loca.lt')) return true;
+  if (h.endsWith('.exp.host')) return true;
+  return false;
+}
+
+function hostFromHostPort(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const host = raw.split(':')[0]?.trim();
+  return host && host.length > 0 ? host : null;
+}
+
 /**
- * בפיתוח עם Expo: אותה כתובת שממנה נטען ה-JS (hostUri) — בדרך כלל IP המחשב ברשת המקומית.
- * כך טלפון עם Expo Go מתחבר לשרת שרץ על המחשב (`npm run server:dev`) בלי להקליד IP ידנית.
+ * בפיתוח עם Expo: כתובת LAN של המחשב לפורט המשחק.
+ * - hostUri מטעין Metro — במצב Tunnel זה relay בענן, לא מתאים ל־:3001
+ * - expoGoConfig.debuggerHost לרוב מכיל את ה־IP האמיתי (למשל 192.168.x.x:8081)
  */
 function inferDevMachineSocketUrl(): string | null {
   try {
+    const go = Constants.expoGoConfig as { debuggerHost?: string } | null | undefined;
+    const dbgHost = hostFromHostPort(go?.debuggerHost);
+
     const hostUri = Constants.expoConfig?.hostUri;
-    if (!hostUri || typeof hostUri !== 'string') return null;
-    const host = hostUri.split(':')[0]?.trim();
-    if (!host) return null;
-    return `http://${host}:${DEFAULT_SOCKET_PORT}`;
+    if (!hostUri || typeof hostUri !== 'string') {
+      if (dbgHost && !isLikelyExpoTunnelRelayHost(dbgHost)) {
+        return `http://${dbgHost}:${DEFAULT_SOCKET_PORT}`;
+      }
+      return null;
+    }
+    const fromUri = hostFromHostPort(hostUri);
+    if (!fromUri) {
+      if (dbgHost && !isLikelyExpoTunnelRelayHost(dbgHost)) {
+        return `http://${dbgHost}:${DEFAULT_SOCKET_PORT}`;
+      }
+      return null;
+    }
+    if (!isLikelyExpoTunnelRelayHost(fromUri)) {
+      return `http://${fromUri}:${DEFAULT_SOCKET_PORT}`;
+    }
+    if (dbgHost && !isLikelyExpoTunnelRelayHost(dbgHost)) {
+      return `http://${dbgHost}:${DEFAULT_SOCKET_PORT}`;
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+/** כתובת ?server= מהדפדפן — רק במצב פיתוח כדי למנוע הזרקת שרת זדוני */
+function readServerFromWebQuery(): string | null {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  // Only allow server override in development mode
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return null;
+  try {
+    const raw = new URLSearchParams(window.location.search).get('server');
+    const u = raw?.trim();
+    return u && u.length > 0 ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeServerUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
+}
+
+/** בפיתוח: אם ב-.env יש URL מרוחק (Render וכו') אבל יש גם LAN מזוהה — נעדיף LAN לשרת המקומי בלי התערבות */
+function envUrlLooksLikeLanOrLoopback(url: string): boolean {
+  const u = normalizeServerUrl(url).toLowerCase();
+  if (u.includes('localhost') || u.includes('127.0.0.1') || u.includes('0.0.0.0') || u.includes('10.0.2.2')) {
+    return true;
+  }
+  try {
+    const { hostname } = new URL(u);
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 function envFlagTrue(name: string): boolean {
@@ -37,10 +124,17 @@ function envFlagTrue(name: string): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+function isTransportDisconnect(reason: string): boolean {
+  return reason === 'ping timeout' || reason === 'transport close' || reason === 'transport error';
+}
+
 /**
- * כתובת שרת Socket:
- * - בפיתוח + EXPO_PUBLIC_LOCAL_SOCKET_SERVER=1 → תמיד מחשב מקומי (מתעלם מ-Render ב-.env)
- * - אחרת: EXPO_PUBLIC_SERVER_URL אם מוגדר → גילוי hostUri בפיתוח → localhost / אמולטור
+ * כתובת שרת Socket — **אותו סדר כמו origin/main** (היסטוריה שעבדה):
+ * - EXPO_PUBLIC_LOCAL_SOCKET_SERVER=1 → מחשב מקומי
+ * - Web: ?server=
+ * - EXPO_PUBLIC_SERVER_URL אם מוגדר (ב־__DEV__: אם זה URL מרוחק ויש LAN מזוהה — LAN קודם לשרת מקומי)
+ * - __DEV__: גילוי LAN (תיקון Tunnel דרך debuggerHost)
+ * - אמולטור / localhost
  */
 function getServerUrl(): string {
   const forceLocalPc =
@@ -52,11 +146,20 @@ function getServerUrl(): string {
     return `http://localhost:${DEFAULT_SOCKET_PORT}`;
   }
 
+  const fromWeb = readServerFromWebQuery();
+  if (fromWeb) return normalizeServerUrl(fromWeb);
+
   const fromEnv =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
       ? String(process.env.EXPO_PUBLIC_SERVER_URL).trim()
       : '';
-  if (fromEnv) return fromEnv;
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && fromEnv) {
+    const inferred = inferDevMachineSocketUrl();
+    if (inferred && !envUrlLooksLikeLanOrLoopback(fromEnv)) {
+      return inferred;
+    }
+  }
+  if (fromEnv) return normalizeServerUrl(fromEnv);
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
     const inferred = inferDevMachineSocketUrl();
     if (inferred) return inferred;
@@ -78,6 +181,12 @@ export interface LobbyPlayer {
 export interface LobbyStatusState {
   status: LobbyStatus;
   botOfferAt: number | null;
+}
+
+export interface DisconnectChoiceState {
+  playerId: string;
+  playerName: string;
+  deadlineAt: number;
 }
 
 export interface MultiplayerContextValue {
@@ -110,6 +219,12 @@ export interface MultiplayerContextValue {
   toast: string | null;
   clearError: () => void;
   clearToast: () => void;
+  /** ניתוק רשת זמני במהלך משחק — מנסים להתחבר מחדש לשרת */
+  reconnectNotice: string | null;
+  clearReconnectNotice: () => void;
+  disconnectChoice: DisconnectChoiceState | null;
+  clearDisconnectChoice: () => void;
+  continueVsBot: () => Promise<boolean>;
   // Override for GameProvider: when serverState is set, provide { state, dispatch } so game UI uses server
   gameOverride: { state: any; dispatch: (action: any) => void } | null;
 }
@@ -130,11 +245,18 @@ export function useMultiplayerOptional(): MultiplayerContextValue | null {
 function playerViewToGameState(view: PlayerView): any {
   const myPlayerIndex = view.players.findIndex((p) => p.id === view.myPlayerId);
   const safeMyIndex = myPlayerIndex >= 0 ? myPlayerIndex : 0;
+  const normalizeCardOperation = <T extends { type: string; operation?: unknown }>(card: T): T => {
+    if (card.type !== 'operation') return card;
+    const normalized = normalizeOperationToken(typeof card.operation === 'string' ? card.operation : null);
+    return normalized ? ({ ...card, operation: normalized } as T) : card;
+  };
+  const normalizedMyHand = view.myHand.map((card) => normalizeCardOperation(card));
+  const normalizedStagedCards = (view.stagedCards ?? []).map((card) => normalizeCardOperation(card));
   const players = view.players.map((p, i) => {
     const count = p.cardCount ?? 0;
     const hand =
       p.id === view.myPlayerId
-        ? view.myHand
+        ? normalizedMyHand
         : Array.from({ length: count }, (_, j) => ({
             id: `hidden-${p.id}-${j}`,
             type: 'number' as const,
@@ -160,14 +282,46 @@ function playerViewToGameState(view: PlayerView): any {
     timerSetting: 'off' as const,
     timerCustomSeconds: 60,
   };
+  const hasBotPlayer = view.players.some((p) => p.isBot);
+  const botPlayerIds = view.players.filter((p) => p.isBot).map((p) => p.id);
+  const rawDiff = gs.botDifficulty as string | undefined;
+  const difficultyStage = migrateDifficultyStage(
+    gs.difficultyStage != null ? String(gs.difficultyStage) : view.difficulty === 'full' ? 'H' : 'A',
+  );
+  const stageCfg = DIFFICULTY_STAGE_CONFIG[difficultyStage];
+  const hostBotDifficulty: BotDifficulty | null = hasBotPlayer
+    ? rawDiff === 'easy' || rawDiff === 'medium' || rawDiff === 'hard'
+      ? rawDiff
+      : rawDiff === 'beginner'
+        ? 'easy'
+        : 'medium'
+    : null;
   const equationHandSlots: [any, any] = [null, null];
   const commits = view.equationCommits?.length ? view.equationCommits : view.equationCommit ? [view.equationCommit] : [];
   for (const ec of commits) {
-    const c = view.myHand.find((x) => x.id === ec.cardId);
+    const c = normalizedMyHand.find((x) => x.id === ec.cardId);
     if (c && (ec.position === 0 || ec.position === 1)) {
-      equationHandSlots[ec.position] = { card: c, jokerAs: ec.jokerAs };
+      equationHandSlots[ec.position] = { card: c, jokerAs: normalizeOperationToken(ec.jokerAs) };
     }
   }
+  const normalizedEnabledOperators = (gs.enabledOperators ?? [])
+    .map((op) => normalizeOperationToken(op))
+    .filter((op): op is Operation => op != null);
+  const wireTournament = view.tournamentTable;
+  const tournamentTable =
+    Array.isArray(wireTournament) && wireTournament.length > 0
+      ? wireTournament.map((row) => ({
+          playerId: row.playerIndex,
+          playerName: row.playerName,
+          wins: row.wins,
+          losses: row.losses,
+        }))
+      : players.map((p) => ({
+          playerId: p.id,
+          playerName: p.name,
+          wins: 0,
+          losses: 0,
+        }));
   return {
     phase: view.phase,
     players,
@@ -176,10 +330,12 @@ function playerViewToGameState(view: PlayerView): any {
     drawPile: drawPileFake,
     discardPile: view.pileTop ? [view.pileTop] : [],
     dice: view.dice,
-    selectedCards: view.stagedCards || [],
-    stagedCards: view.stagedCards || [],
+    diceRollSeq: view.diceRollSeq ?? 0,
+    selectedCards: normalizedStagedCards,
+    stagedCards: normalizedStagedCards,
     validTargets: view.validTargets || [],
     equationResult: view.equationResult,
+    lastEquationDisplay: view.lastEquationDisplay ?? null,
     activeOperation: null,
     challengeSource: null,
     equationOpsUsed: [],
@@ -191,28 +347,47 @@ function playerViewToGameState(view: PlayerView): any {
     hasDrawnCard: view.hasDrawnCard,
     lastCardValue: view.lastCardValue,
     consecutiveIdenticalPlays: view.consecutiveIdenticalPlays ?? 0,
+    courageMeterPercent: view.courageMeterPercent ?? 0,
+    courageMeterStep: view.courageMeterStep ?? 0,
+    courageDiscardSuccessStreak: view.courageDiscardSuccessStreak ?? 0,
+    courageRewardPulseId: view.courageRewardPulseId ?? 0,
     identicalAlert: view.identicalCelebration ?? null,
     jokerModalOpen: false,
     equationHandSlots,
     equationHandPick: null,
     lastMoveMessage: view.lastMoveMessage,
     lastDiscardCount: 0,
-    lastEquationDisplay: null,
     difficulty: view.difficulty,
     diceMode: gs.diceMode,
     showFractions: gs.showFractions,
     showPossibleResults: gs.showPossibleResults,
     showSolveExercise: gs.showSolveExercise,
+    difficultyStage,
+    fractionKinds: gs.fractionKinds?.length ? gs.fractionKinds : [...DEFAULT_FRACTION_KINDS],
+    mathRangeMax: gs.mathRangeMax ?? stageCfg.rangeMax,
+    enabledOperators: (normalizedEnabledOperators.length ? normalizedEnabledOperators : stageCfg.enabledOperators) as Operation[],
+    allowNegativeTargets: gs.allowNegativeTargets ?? stageCfg.allowNegativeTargets,
+    abVariant: gs.abVariant ?? (view.difficulty === 'full' ? 'variant_0_15_plus' : 'control_0_12_plus'),
     timerSetting: gs.timerSetting,
     timerCustomSeconds: gs.timerCustomSeconds,
     winner: view.winner ? { id: 0, name: view.winner.name, hand: [], calledLolos: false } : null,
     message: view.message,
     openingDrawId: view.openingDrawId,
     turnDeadlineAt: view.turnDeadlineAt,
-    roundsPlayed: 0,
+    roundsPlayed: view.roundsPlayed ?? 0,
     notifications: [],
     moveHistory: [],
     suppressIdenticalOverlayOnline: false,
+    hostBotDifficulty,
+    tournamentTable,
+    botConfig: hasBotPlayer
+      ? { difficulty: hostBotDifficulty ?? 'medium', playerIds: botPlayerIds }
+      : null,
+    botPendingStagedIds: null,
+    botPendingDemoActions: null,
+    botNoSolutionTicks: 0,
+    botNoSolutionDrawPending: false,
+    botTickSeq: 0,
   };
 }
 
@@ -238,7 +413,7 @@ function actionToSocketEvent(action: any): { event: string; data?: any } | null 
     case 'DEFEND_FRACTION_SOLVE':
       return { event: 'defend_fraction_solve', data: { cardId: action.card?.id, wildResolve: action.wildResolve } };
     case 'DEFEND_FRACTION_PENALTY': return { event: 'defend_fraction_penalty' };
-    case 'PLAY_OPERATION': return null;
+    case 'PLAY_OPERATION': return { event: 'play_operation', data: { cardId: action.card?.id } };
     case 'FORWARD_CHALLENGE': return null;
     case 'PLAY_JOKER':
       return { event: 'play_joker', data: { cardId: action.card?.id, chosenOperation: action.chosenOperation } };
@@ -249,8 +424,24 @@ function actionToSocketEvent(action: any): { event: string; data?: any } | null 
   }
 }
 
+/** Basic sanity check on server PlayerView to guard against malformed data */
+function isValidPlayerView(view: unknown): view is PlayerView {
+  if (!view || typeof view !== 'object') return false;
+  const v = view as Record<string, unknown>;
+  return (
+    typeof v.roomCode === 'string' &&
+    typeof v.phase === 'string' &&
+    typeof v.myPlayerId === 'string' &&
+    Array.isArray(v.myHand) &&
+    Array.isArray(v.players)
+  );
+}
+
 export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const { locale } = useLocale();
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
+
   const [playMode, setPlayMode] = useState<PlayMode>('choose');
   const [serverUrl, setServerUrlState] = useState(getServerUrl);
   const [connected, setConnected] = useState(false);
@@ -262,48 +453,100 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [serverState, setServerState] = useState<PlayerView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [reconnectNotice, setReconnectNotice] = useState<string | null>(null);
+  const [disconnectChoice, setDisconnectChoice] = useState<DisconnectChoiceState | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  /** כתובת ה-io האחרונה — לזיהוי החלפת שרת מול socket ישן */
+  const lastSocketUrlRef = useRef<string | null>(null);
   const playerIdRef = useRef<string | null>(null);
+  const roomCodeSessionRef = useRef<string | null>(null);
+  const serverStateRef = useRef<PlayerView | null>(null);
+  const awaitingReconnectSyncRef = useRef(false);
   const startBotGameReqRef = useRef(0);
+
+  useEffect(() => {
+    serverStateRef.current = serverState;
+  }, [serverState]);
+
+  useEffect(() => {
+    roomCodeSessionRef.current = roomCode;
+  }, [roomCode]);
 
   const setServerUrl = useCallback((url: string) => {
     setServerUrlState(url);
   }, []);
 
-  const disconnect = useCallback(() => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
-    }
-    setConnected(false);
+  const clearSessionAfterDisconnect = useCallback(() => {
+    awaitingReconnectSyncRef.current = false;
+    setReconnectNotice(null);
     setRoomCode(null);
     setPlayerId(null);
+    playerIdRef.current = null;
+    roomCodeSessionRef.current = null;
     setPlayers([]);
     setLobbyStatus(null);
     setServerState(null);
+    setDisconnectChoice(null);
     setIsHost(false);
   }, []);
 
+  const disconnect = useCallback(() => {
+    awaitingReconnectSyncRef.current = false;
+    setReconnectNotice(null);
+    if (socketRef.current) {
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+    lastSocketUrlRef.current = null;
+    setConnected(false);
+    clearSessionAfterDisconnect();
+  }, [clearSessionAfterDisconnect]);
+
   const connect = useCallback(() => {
-    if (socketRef.current) return;
-    const url = serverUrl.trim() || getServerUrl();
-    const socket = io(url, {
+    const want = normalizeServerUrl(serverUrl.trim() || getServerUrl());
+    if (socketRef.current) {
+      if (lastSocketUrlRef.current === want && (socketRef.current.connected || socketRef.current.active)) return;
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+      lastSocketUrlRef.current = null;
+      setConnected(false);
+      clearSessionAfterDisconnect();
+    }
+    lastSocketUrlRef.current = want;
+    const socket = io(want, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
     });
     socketRef.current = socket;
-    socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => {
+    socket.on('connect', () => {
+      setConnected(true);
+      if (awaitingReconnectSyncRef.current) {
+        const rc = roomCodeSessionRef.current;
+        const pid = playerIdRef.current;
+        if (rc && pid && serverStateRef.current) {
+          socket.emit('reconnect', { roomCode: rc, playerId: pid, locale: localeRef.current });
+        } else {
+          awaitingReconnectSyncRef.current = false;
+          setReconnectNotice(null);
+        }
+      }
+    });
+    socket.on('disconnect', (reason: string) => {
       setConnected(false);
-      setRoomCode(null);
-      setPlayerId(null);
-      playerIdRef.current = null;
-      setPlayers([]);
-      setLobbyStatus(null);
-      setServerState(null);
+      const inGame = serverStateRef.current != null;
+      const recoverable = inGame && isTransportDisconnect(reason);
+      if (recoverable) {
+        awaitingReconnectSyncRef.current = true;
+        setReconnectNotice(t(localeRef.current, 'mp.reconnecting'));
+        return;
+      }
+      clearSessionAfterDisconnect();
     });
     socket.on('room_created', ({ roomCode: code, playerId: pid }) => {
+      roomCodeSessionRef.current = code;
       setRoomCode(code);
       setPlayerId(pid);
       playerIdRef.current = pid;
@@ -328,37 +571,110 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     socket.on('player_left', () => {
       // List will be updated by next player_joined or we could request state
     });
+    socket.on('opponent_disconnect_grace', ({ playerId: disconnectedId, playerName, deadlineAt }) => {
+      setDisconnectChoice({ playerId: disconnectedId, playerName, deadlineAt });
+      setToast(
+        localeRef.current === 'he'
+          ? `${playerName} התנתק. מחכים לחזרה עד הטיימר.`
+          : `${playerName} disconnected. Waiting until the timer expires.`,
+      );
+    });
+    socket.on('opponent_reconnected', ({ playerId: reconnectedId }) => {
+      setDisconnectChoice((current) => (current?.playerId === reconnectedId ? null : current));
+    });
+    socket.on('opponent_disconnect_expired', ({ playerId: disconnectedId, playerName }) => {
+      setDisconnectChoice((current) => ({
+        playerId: disconnectedId,
+        playerName,
+        deadlineAt: current?.deadlineAt ?? Date.now(),
+      }));
+      setToast(
+        localeRef.current === 'he'
+          ? `${playerName} לא חזר בזמן. אפשר להמשיך מול בוט או לצאת ללובי.`
+          : `${playerName} did not return in time. Continue vs bot or return to lobby.`,
+      );
+    });
     socket.on('game_started', (view: PlayerView) => {
+      if (!isValidPlayerView(view)) {
+        if (__DEV__) console.warn('[MP] Invalid PlayerView in game_started');
+        return;
+      }
+      awaitingReconnectSyncRef.current = false;
+      setReconnectNotice(null);
       setLobbyStatus({ status: 'bot_game_started', botOfferAt: null });
+      setDisconnectChoice(null);
       setServerState(view);
     });
     socket.on('state_update', (view: PlayerView) => {
+      if (!isValidPlayerView(view)) {
+        if (__DEV__) console.warn('[MP] Invalid PlayerView in state_update');
+        return;
+      }
+      awaitingReconnectSyncRef.current = false;
+      setReconnectNotice(null);
+      setDisconnectChoice((current) => {
+        if (!current) return null;
+        const reconnectNow = view.players.some((p) => p.id === current.playerId && p.isConnected && !p.isBot);
+        return reconnectNow ? null : current;
+      });
       setServerState(view);
     });
     socket.on('toast', ({ message }: { message: string }) => setToast(message));
-    socket.on('error', ({ message }: { message: string }) => setError(message));
-  }, [serverUrl]);
+    socket.on('error', ({ message }: { message: string }) => {
+      setError(message);
+      if (awaitingReconnectSyncRef.current) {
+        awaitingReconnectSyncRef.current = false;
+        setReconnectNotice(null);
+        clearSessionAfterDisconnect();
+      }
+    });
+    socket.on('connect_error', (err: Error) => {
+      console.warn('[MP] connect_error:', err.message, '→', want);
+      setError(`${t(localeRef.current, 'mp.connectError')}\n(${want})`);
+    });
+  }, [serverUrl, clearSessionAfterDisconnect]);
 
-  const createRoom = useCallback((playerName: string) => {
-    connect();
-    setIsHost(true);
-    // Socket.io מנהל תור עד ל־connect — בלי השהיה קבועה (היה גורם למרוצים)
-    socketRef.current?.emit('create_room', { playerName, locale });
-  }, [connect, locale]);
+  // Cleanup socket on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
 
-  const joinRoom = useCallback((code: string, playerName: string) => {
-    connect();
-    socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName, locale });
-  }, [connect, locale]);
+  const createRoom = useCallback(
+    (playerName: string) => {
+      connect();
+      setIsHost(true);
+      // Socket.io תור אירועים לפני connect — לא תלויים ב-once('connect')
+      socketRef.current?.emit('create_room', { playerName, locale });
+    },
+    [connect, locale],
+  );
+
+  const joinRoom = useCallback(
+    (code: string, playerName: string) => {
+      connect();
+      socketRef.current?.emit('join_room', { roomCode: code.trim(), playerName, locale });
+    },
+    [connect, locale],
+  );
 
   const leaveRoom = useCallback(() => {
+    awaitingReconnectSyncRef.current = false;
+    setReconnectNotice(null);
     socketRef.current?.emit('leave_room');
     setRoomCode(null);
     setPlayerId(null);
     playerIdRef.current = null;
+    roomCodeSessionRef.current = null;
     setPlayers([]);
     setLobbyStatus(null);
     setServerState(null);
+    setDisconnectChoice(null);
     setIsHost(false);
   }, []);
 
@@ -411,6 +727,31 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
           setServerState(ack.playerView);
           setLobbyStatus({ status: 'bot_game_started', botOfferAt: null });
         }
+        resolve(true);
+      });
+    });
+  }, [locale]);
+
+  const continueVsBot = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket || !socket.connected) {
+      const message = locale === 'he'
+        ? 'אין חיבור לשרת. בדקו כתובת שרת ונסו שוב.'
+        : 'No server connection. Check server URL and try again.';
+      setError(message);
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      socket.emit('continue_vs_bot', (ack: ContinueVsBotAck) => {
+        if (!ack?.ok) {
+          setError(ack?.message || (locale === 'he' ? 'לא ניתן להמשיך מול בוט.' : 'Unable to continue vs bot.'));
+          resolve(false);
+          return;
+        }
+        if (ack.playerView) {
+          setServerState(ack.playerView);
+        }
+        setDisconnectChoice(null);
         resolve(true);
       });
     });
@@ -471,6 +812,11 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     toast: toast ?? null,
     clearError: () => setError(null),
     clearToast: () => setToast(null),
+    reconnectNotice: reconnectNotice ?? null,
+    clearReconnectNotice: () => setReconnectNotice(null),
+    disconnectChoice,
+    clearDisconnectChoice: () => setDisconnectChoice(null),
+    continueVsBot,
     gameOverride,
   };
 

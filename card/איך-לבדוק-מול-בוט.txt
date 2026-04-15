@@ -1,0 +1,30 @@
+כדי לבדוק משחק מול בוט צריך שהאפליקציה תדבר עם שרת שמעודכן בקוד החדש.
+
+בדיקה מקומית:
+1. פתח טרמינל בתיקיית הפרויקט:
+   cd C:\Users\asus\bmad\card
+
+2. הרץ את השרת המקומי:
+   npm run server:dev
+
+3. בקובץ .env שנה זמנית את השורה:
+   EXPO_PUBLIC_SERVER_URL=http://localhost:3001
+
+4. הפעל מחדש את Expo:
+   npx expo start --clear
+
+5. כנס למולטיפלייר, צור חדר, ולחץ "התחל מול בוט".
+
+אם זה עובד מקומית אבל לא עובד ב-Render:
+השרת ב-Render עוד לא עודכן.
+
+מה צריך לעלות לשרת:
+- server/src/socketHandlers.ts
+- server/src/roomManager.ts
+- server/src/gameEngine.ts
+- shared/types.ts
+
+הערה:
+אם בקובץ .env יש:
+EXPO_PUBLIC_SERVER_URL=https://lolos-mobile.onrender.com
+אז האפליקציה מתחברת ל-Render ולא לשרת המקומי.

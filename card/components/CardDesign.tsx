@@ -438,7 +438,11 @@ const opColors: Record<string, { face: string; dark: string; light: string }> = 
   'x': { face: '#34A853', dark: '#1B5E2B', light: '#36944F' },
   '-': { face: '#FBBC05', dark: '#8B6800', light: '#DC9E00' },
 };
-const opDisplay: Record<string, string> = { 'x': '×', '-': '−', '/': '÷', '+': '+' };
+// Android: Fredoka_700Bold doesn't ship the Unicode math glyphs (× − ÷).
+// iOS + web render them fine; Android falls back to ASCII to stay visible.
+const opDisplay: Record<string, string> = Platform.OS === 'android'
+  ? { 'x': 'x', '-': '-', '/': '÷', '+': '+', '×': 'x', '−': '-' }
+  : { 'x': '×', '-': '−', '/': '÷', '+': '+' };
 
 export function OperationCardComp({
   card,
@@ -487,11 +491,12 @@ export function JokerCard({
     Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start();
   }, []);
 
+  const isAndroid = Platform.OS === 'android';
   const corners = [
     { sym: '+', face: '#EA4335', dark: '#8B1A12', light: '#DC4736', pos: { top: 3, left: 3 } as any, rot: '-12deg' },
-    { sym: '÷', face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9', pos: { top: 3, right: 3 } as any, rot: '10deg' },
-    { sym: '×', face: '#34A853', dark: '#1B5E2B', light: '#36944F', pos: { bottom: 10, left: 3 } as any, rot: '10deg' },
-    { sym: '−', face: '#FBBC05', dark: '#8B6800', light: '#DC9E00', pos: { bottom: 10, right: 3 } as any, rot: '-10deg' },
+    { sym: isAndroid ? '/' : '÷', face: '#2196F3', dark: '#0D5FA3', light: '#1F8CD9', pos: { top: 3, right: 3 } as any, rot: '10deg' },
+    { sym: isAndroid ? 'x' : '×', face: '#34A853', dark: '#1B5E2B', light: '#36944F', pos: { bottom: 10, left: 3 } as any, rot: '10deg' },
+    { sym: isAndroid ? '-' : '−', face: '#FBBC05', dark: '#8B6800', light: '#DC9E00', pos: { bottom: 10, right: 3 } as any, rot: '-10deg' },
   ];
 
   return (

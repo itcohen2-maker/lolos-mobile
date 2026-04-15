@@ -13,8 +13,28 @@ import { cleanupStaleRooms } from './roomManager';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
+// Production: set CORS_ORIGINS env (comma-separated list) to lock the server
+// down to known web origins. Dev (no env var) keeps the open policy that
+// origin/main shipped with — required so Expo Go on a phone (Android RN may
+// send Origin: null with the polling transport) and LAN web clients work.
+const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+  : null;
+
+const corsOriginCheck = ALLOWED_ORIGINS
+  ? (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // Mobile / non-browser clients send no Origin → allow.
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`[CORS] Rejected origin: ${origin}`);
+        callback(new Error('CORS not allowed'));
+      }
+    }
+  : true; // permissive — dev mode
+
 const app = express();
-app.use(cors());
+app.use(cors({ origin: corsOriginCheck as any }));
 app.use(express.json());
 
 // Health check
@@ -26,7 +46,7 @@ const server = http.createServer(app);
 
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: {
-    origin: '*',
+    origin: ALLOWED_ORIGINS ? corsOriginCheck as any : '*',
     methods: ['GET', 'POST'],
   },
   pingInterval: 10000,

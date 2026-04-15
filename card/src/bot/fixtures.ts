@@ -108,7 +108,15 @@ export interface GameState {
   possibleResultsInfoCountedThisTurn: boolean;
   suppressIdenticalOverlayOnline: boolean;
   // M5 additions (optional so tests compile before M5 lands):
-  botConfig?: { difficulty: BotDifficulty; playerIds: ReadonlyArray<number> } | null;
+  botConfig?: {
+    difficulty: BotDifficulty;
+    playerIds: ReadonlyArray<number>;
+    rng?: () => number;
+  } | null;
+  botPendingStagedIds?: string[] | null;
+  botPendingDemoActions?: unknown[] | null;
+  botNoSolutionTicks?: number;
+  botNoSolutionDrawPending?: boolean;
   botTickSeq?: number;
 }
 
@@ -148,11 +156,11 @@ const baseline: GameState = {
   showFractions: true,
   showPossibleResults: true,
   showSolveExercise: true,
-  difficultyStage: 'E',
-  stageTransitions: 0,
+  difficultyStage: 'H',
+  stageTransitions: 7,
   mathRangeMax: 25,
-  enabledOperators: ['+'],
-  allowNegativeTargets: false,
+  enabledOperators: ['x', '÷'],
+  allowNegativeTargets: true,
   abVariant: 'control_0_12_plus',
   equationAttempts: 0,
   equationSuccesses: 0,
@@ -174,6 +182,10 @@ const baseline: GameState = {
   possibleResultsInfoCountedThisTurn: false,
   suppressIdenticalOverlayOnline: false,
   botConfig: null,
+  botPendingStagedIds: null,
+  botPendingDemoActions: null,
+  botNoSolutionTicks: 0,
+  botNoSolutionDrawPending: false,
   botTickSeq: 0,
 };
 

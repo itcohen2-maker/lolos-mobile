@@ -7,11 +7,9 @@ import type { BotDifficulty, BotAction } from '../types';
 import type { Operation } from '../../../index';
 
 describe('src/bot/types exports', () => {
-  it('BotDifficulty accepts easy and hard', () => {
-    const easy: BotDifficulty = 'easy';
-    const hard: BotDifficulty = 'hard';
-    expect(easy).toBe('easy');
-    expect(hard).toBe('hard');
+  it('BotDifficulty accepts three levels', () => {
+    const levels: BotDifficulty[] = ['easy', 'medium', 'hard'];
+    expect(levels).toHaveLength(3);
   });
 
   it('BotAction union includes all 13 kinds', () => {

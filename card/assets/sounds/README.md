@@ -1,5 +1,13 @@
 # Sound Assets
 
+**UI SFX (preview / `playSfx`):** Regenerate crisp WAVs anytime:
+
+```bash
+node scripts/generate-ui-sfx.mjs
+```
+
+Outputs `sfx_ui_*.wav` in this folder (referenced from `src/audio/sfx.ts`).
+
 Place your sound files here or in `card/assets/` as used by the app:
 
 - `shake.mp3` — dice rattling in hand

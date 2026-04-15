@@ -13,6 +13,14 @@ describe('GameState bot fields', () => {
     expect(initialState.botTickSeq).toBe(0);
   });
 
+  it('initialState.botPendingStagedIds is null', () => {
+    expect(initialState.botPendingStagedIds).toBeNull();
+  });
+
+  it('initialState.hostBotDifficulty is null', () => {
+    expect(initialState.hostBotDifficulty).toBeNull();
+  });
+
   it('botConfig field type accepts { difficulty, playerIds } shape', () => {
     // Compile-time type check via variable assignment
     const config: GameState['botConfig'] = {
@@ -113,7 +121,7 @@ describe('START_GAME with mode and botDifficulty', () => {
     expect(next.botTickSeq).toBe(0);
   });
 
-  it('START_GAME with mode=vs-bot defaults botDifficulty to easy when omitted', () => {
+  it('START_GAME with mode=vs-bot defaults botDifficulty to medium when omitted', () => {
     const action = {
       type: 'START_GAME' as const,
       mode: 'vs-bot' as const,
@@ -125,7 +133,7 @@ describe('START_GAME with mode and botDifficulty', () => {
     };
     const mockTf = (key: string): string => key;
     const next = gameReducer(initialState, action as GameAction, mockTf);
-    expect(next.botConfig?.difficulty).toBe('easy');
+    expect(next.botConfig?.difficulty).toBe('medium');
   });
 
   it('PLAY_AGAIN preserves botConfig from previous state', () => {

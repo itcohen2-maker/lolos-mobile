@@ -6,12 +6,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, useReducer, forwardRef, useImperativeHandle } from 'react';
 import type { ReactNode } from 'react';
 import type { BotDifficulty } from './src/bot/types';
+import { botStepDelayRange } from './shared/botPlan';
 import { decideBotAction } from './src/bot/botBrain';
 import { translateBotAction } from './src/bot/executor';
 import type { BotAction } from './src/bot/types';
 import {
   I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground,
-  StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert,
+  StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert, InteractionManager,
   Keyboard, TouchableWithoutFeedback, KeyboardAvoidingView, NativeModules, AppState,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -24,16 +25,26 @@ import { useFonts, Fredoka_700Bold } from '@expo-google-fonts/fredoka';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle as SvgCircle, Rect as SvgRect, Path as SvgPath, Polygon as SvgPolygon } from 'react-native-svg';
 import { GoldDieFace } from './AnimatedDice';
+import { TutorialGameScreen } from './src/tutorial/TutorialGameScreen';
 // RoamingDice inlined below (was ./components/RoamingDice)
 import { GoldDiceButton } from './components/GoldDiceButton';
 import { LulosButton } from './components/LulosButton';
 import { CasinoButton } from './components/CasinoButton';
 import { WalkingDice } from './components/WalkingDice';
 import FuseTimer from './components/FuseTimer';
+import ExcellenceMeter from './components/ExcellenceMeter';
 import { HorizontalOptionWheel, type HorizontalWheelOption } from './components/HorizontalOptionWheel';
 import SoundDemoScreen from './src/components/screens/SoundDemoScreen';
+import GameplayPreviewOffer, { GAMEPLAY_PREVIEW_STORAGE_KEY, readGameplayPreviewDecision } from './src/components/GameplayPreviewOffer';
 import * as Localization from 'expo-localization';
 import { t, type MsgParams } from './shared/i18n';
+import {
+  DIFFICULTY_STAGE_CONFIG,
+  STAGE_SEQUENCE,
+  migrateDifficultyStage,
+  type DifficultyStageId,
+} from './shared/difficultyStages';
+import { buildEqOpDisplayCycle } from './shared/equationOpCycle';
 
 const WELCOME_NOTIFICATION_TITLES = new Set([t('he', 'welcome.title'), t('en', 'welcome.title')]);
 const RESULTS_POSSIBLE_TITLES = new Set([t('he', 'results.possibleTitle'), t('en', 'results.possibleTitle')]);
@@ -70,13 +81,14 @@ const playerScreensGradientColors = ['#070f1a', '#0f2840', '#153252'] as const;
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMultiplayer';
 import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/LobbyScreens';
-import { CARDS_PER_PLAYER } from './shared/gameConstants';
+import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
 import { displayFontFamily } from './src/theme/fonts';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-/** אותו top לכפתור הקוביות המוזהב (GameScreen) ולכפתור «אני מוכן» (TurnTransition) */
-const GOLD_ACTION_BUTTON_TOP = Math.min(680, SCREEN_H - 140);
+/** אותו top לכפתור הקוביות המוזהב (GameScreen) ולכפתור «אני מוכן» (TurnTransition).
+ *  clamp תחתון: כש־SCREEN_H קטן, ‎SCREEN_H - 140‎ שלילי — מסך המעבר עם overflow:hidden חותך את הכפתור ("נעלם"). */
+const GOLD_ACTION_BUTTON_TOP = Math.max(96, Math.min(680, SCREEN_H - 140));
 
 /** גובה אזור היד (מניפה) — זהה במסך השחקן (TurnTransition) ובמסך המשחק (GameScreen)
  *  HAND_STRIP_HEIGHT = גובה כל האזור (כולל טקסט מעל היד אם יש)
@@ -92,8 +104,9 @@ const HAND_INNER_HEIGHT = Math.ceil(HAND_FAN_CARD_H * HAND_FAN_CENTER_SCALE + HA
 /** רווח לטקסט רמז (מעבר תור) / אוורור מעל המניפה */
 const HAND_STRIP_ABOVE_FAN = 24;
 const HAND_STRIP_HEIGHT = HAND_INNER_HEIGHT + HAND_STRIP_ABOVE_FAN;
-/** מרחק (px) מתחתית המסך לתחתית פס היד — זהה ב־TurnTransition וב־GameScreen (195px) */
+/** מרחק (px) מתחתית המסך לתחתית פס היד — זהה ב־TurnTransition וב־GameScreen (195px); תואם origin/main ללא הרמה בתור בוט */
 const HAND_BOTTOM_OFFSET = 195;
+
 /** קצה עליון של אזור היד (מספר מרחק מהתחתית) — ליישור FuseTimer / מיני־תוצאות */
 const HAND_ZONE_TOP = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT;
 /** שורת מיני־תוצאות — עדיין X פיקסלים מתחת לטיימר־פתיל */
@@ -108,7 +121,9 @@ const EQUATION_TABLE_TOP = 205;
 const EQUATION_TABLE_SHIFT_X = 10;
 const EQUATION_BUILDER_FINE_OFFSET_Y = -2;
 /** היסט אופקי של המשוואה בלבד; שלילי = שמאלה (LTR), חיובי = ימינה */
-const EQUATION_BUILDER_FINE_OFFSET_X = -10;
+const EQUATION_BUILDER_FINE_OFFSET_X = 0;
+
+const EXCELLENCE_METER_DEMO_VALUE = 65;
 
 function devCheckHandLayout() {
   if (!__DEV__) return;
@@ -167,35 +182,11 @@ interface EquationOption { equation: string; result: number; }
 type GamePhase = 'setup' | 'turn-transition' | 'pre-roll' | 'building' | 'solved' | 'roll-dice' | 'game-over';
 
 const EMPTY_ID_SET = new Set<string>();
-type DifficultyStageId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
 type AbVariant = 'control_0_12_plus' | 'variant_0_15_plus';
 
-interface DifficultyStageConfig {
-  id: DifficultyStageId;
-  rangeMax: 12 | 25;
-  enabledOperators: Operation[];
-  allowNegativeTargets: boolean;
-}
+const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
 
-const DIFFICULTY_STAGE_CONFIG: Record<DifficultyStageId, DifficultyStageConfig> = {
-  A: { id: 'A', rangeMax: 12, enabledOperators: ['+'], allowNegativeTargets: false },
-  B: { id: 'B', rangeMax: 12, enabledOperators: ['-'], allowNegativeTargets: false },
-  C: { id: 'C', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: false },
-  D: { id: 'D', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: true },
-  E: { id: 'E', rangeMax: 25, enabledOperators: ['+'], allowNegativeTargets: false },
-  F: { id: 'F', rangeMax: 25, enabledOperators: ['-'], allowNegativeTargets: false },
-  G: { id: 'G', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: false },
-  H: { id: 'H', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: true },
-};
-
-const STAGE_SEQUENCE: DifficultyStageId[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-
-/** צבעי תצוגה מקדימה בשורת «מתקדמים» בכניסה */
-const ADVANCED_ENTRY_STAGE_COLORS = ['#0ea5e9', '#2563eb', '#6366f1', '#8b5cf6', '#db2777', '#ea580c', '#ca8a04', '#16a34a'] as const;
-
-/** `EXPO_PUBLIC_LOCK_ADVANCED_STAGES=1` — נעילת בחירת A–H (חיבור לרכישה בעתיד). */
-const ADVANCED_STAGE_PICKER_LOCKED =
-  typeof process !== 'undefined' && process.env.EXPO_PUBLIC_LOCK_ADVANCED_STAGES === '1';
+/** שברי ברירת מחדל למסך ההגדרות המתקדמות. */
 
 interface GameState {
   phase: GamePhase;
@@ -204,6 +195,8 @@ interface GameState {
   drawPile: Card[];
   discardPile: Card[];
   dice: DiceResult | null;
+  /** מסונכן עם השרת במקוון; מקומי מתעדכן ב־ROLL_DICE — לאיפוס בונה משוואות */
+  diceRollSeq: number;
   selectedCards: Card[];
   stagedCards: Card[];
   validTargets: EquationOption[];
@@ -219,6 +212,10 @@ interface GameState {
   hasDrawnCard: boolean;
   lastCardValue: number | null;
   consecutiveIdenticalPlays: number;
+  courageMeterPercent: number;
+  courageMeterStep: number;
+  courageDiscardSuccessStreak: number;
+  courageRewardPulseId: number;
   identicalAlert: { playerName: string; cardDisplay: string; consecutive: number } | null;
   jokerModalOpen: boolean;
   /** משבצות 0/1 — קלפים מהיד בתרגיל הקוביות */
@@ -231,6 +228,8 @@ interface GameState {
   difficulty: 'easy' | 'full';
   diceMode: '3';
   showFractions: boolean;
+  /** מכנים לכלול בחבילה כש־showFractions */
+  fractionKinds: Fraction[];
   showPossibleResults: boolean;
   showSolveExercise: boolean;
   difficultyStage: DifficultyStageId;
@@ -271,10 +270,27 @@ interface GameState {
   /** מקוון: המשתמש סגר את בועת קלף זהה לפני ש-callback השני מהשרת הסיר את identicalCelebration */
   suppressIdenticalOverlayOnline: boolean;
   /** Bot configuration for offline vs-bot mode. null = pass-and-play (no bots). See spec §0.4. */
-  botConfig: { difficulty: BotDifficulty; playerIds: ReadonlyArray<number> } | null;
+  botConfig: {
+    difficulty: BotDifficulty;
+    playerIds: ReadonlyArray<number>;
+    /** Tests only — inject RNG for deterministic bot plans. */
+    rng?: () => number;
+  } | null;
+  /** משחק מקוון מול בוט — רמת קושי מהשרת (hostGameSettings); null כשלא רלוונטי */
+  hostBotDifficulty: BotDifficulty | null;
+  /** תור מזהי קלפים ל־stage אחרי confirmEquation (בוט מקומי); null = אין תור */
+  botPendingStagedIds: string[] | null;
+  /** תור פעולות הדגמה לבוט כשאין לו פתרון ישיר (למשל stage/unstage לפני draw). */
+  botPendingDemoActions: BotAction[] | null;
+  /** מספר טיקים שנשארו להצגת "אין פתרון" לפני שהבוט שולף. */
+  botNoSolutionTicks: number;
+  /** דגל להצגת הודעת "אין פתרון, אני שולף קלף". */
+  botNoSolutionDrawPending: boolean;
   /** Monotonic counter incremented on every BOT_STEP dispatch. Used by bot clock useEffect dep array
    *  to guarantee re-scheduling on no-op ticks. Prevents "frozen bot" bugs. See spec §0.5.2. */
   botTickSeq: number;
+  /** Tutorial mode — show all validTargets in results strip (no hand-based filtering). */
+  isTutorial: boolean;
 }
 
 interface Notification {
@@ -294,6 +310,190 @@ interface TournamentRow {
   playerName: string;
   wins: number;
   losses: number;
+}
+
+/** טבלת טורניר למצב מקוון/מקומי — אם חסרה ב-state עדיין מציגים שורות לפי שחקנים */
+function getTournamentRowsForModal(state: {
+  tournamentTable?: TournamentRow[];
+  players: { id: number; name: string }[];
+}): TournamentRow[] {
+  const t = state.tournamentTable;
+  if (Array.isArray(t) && t.length > 0) return t;
+  return state.players.map((p) => ({
+    playerId: p.id,
+    playerName: p.name,
+    wins: 0,
+    losses: 0,
+  }));
+}
+
+function TournamentInfoModal({
+  visible,
+  onClose,
+  rows,
+  gameInfo,
+  onOpenRules,
+  settings,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  rows: TournamentRow[];
+  gameInfo: {
+    modeLabel: string;
+    difficultyLabel: string;
+    playersCount: number;
+    diceModeLabel?: string;
+  };
+  onOpenRules?: () => void;
+  settings: {
+    mathRangeMax: 12 | 25;
+    showFractions: boolean;
+    fractionKinds: Fraction[];
+    enabledOperators: Operation[];
+    allowNegativeTargets: boolean;
+    showPossibleResults: boolean;
+    showSolveExercise: boolean;
+    timerSetting: '30' | '60' | 'off' | 'custom';
+    timerCustomSeconds: number;
+  };
+}) {
+  const safeFractionKinds = Array.isArray(settings.fractionKinds) ? settings.fractionKinds : [];
+  const safeEnabledOperators = Array.isArray(settings.enabledOperators) ? settings.enabledOperators : [];
+  const safeTimerSetting = settings.timerSetting ?? 'off';
+  const safeTimerCustomSeconds = Number.isFinite(settings.timerCustomSeconds) ? settings.timerCustomSeconds : 60;
+  const sorted = useMemo(
+    () =>
+      [...rows].sort(
+        (a, b) => b.wins - a.wins || a.losses - b.losses || a.playerId - b.playerId,
+      ),
+    [rows],
+  );
+  if (!visible) return null;
+  return (
+    <View
+      style={[
+        StyleSheet.absoluteFillObject,
+        { zIndex: 160, backgroundColor: 'rgba(0,0,0,0.62)' },
+        Platform.OS === 'android' ? { elevation: 160 } : null,
+      ]}
+      pointerEvents="box-none"
+    >
+      <TouchableOpacity
+        style={StyleSheet.absoluteFillObject}
+        onPress={onClose}
+        activeOpacity={1}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: 18,
+          right: 18,
+          top: 36,
+          bottom: 36,
+          backgroundColor: '#1F2937',
+          borderRadius: 16,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.14)',
+          padding: 14,
+        }}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <Text style={{ color: '#FFF', fontSize: 17, fontWeight: '800' }}>טורניר — טבלת טורניר</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {onOpenRules ? (
+              <LulosButton
+                text="חוקים"
+                color="blue"
+                width={68}
+                height={30}
+                fontSize={11}
+                onPress={onOpenRules}
+              />
+            ) : null}
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={{ color: '#CBD5E1', fontSize: 22, fontWeight: '700' }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 8, paddingBottom: 8 }}>
+        <View style={{ borderWidth: 1, borderColor: 'rgba(251,191,36,0.35)', borderRadius: 10, backgroundColor: 'rgba(120,53,15,0.28)', padding: 8 }}>
+          <Text style={{ color: '#FDE68A', fontSize: 12, fontWeight: '800', textAlign: 'right', marginBottom: 6 }}>
+            מידע על המשחק
+          </Text>
+          <Text style={{ color: '#FEF3C7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`מצב: ${gameInfo.modeLabel}`}
+          </Text>
+          <Text style={{ color: '#FEF3C7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`קושי: ${gameInfo.difficultyLabel}`}
+          </Text>
+          <Text style={{ color: '#FEF3C7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`מספר שחקנים: ${gameInfo.playersCount}`}
+          </Text>
+          {gameInfo.diceModeLabel ? (
+            <Text style={{ color: '#FEF3C7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+              {`מצב קוביות: ${gameInfo.diceModeLabel}`}
+            </Text>
+          ) : null}
+        </View>
+        <View style={{ borderWidth: 1, borderColor: 'rgba(74,222,128,0.35)', borderRadius: 10, backgroundColor: 'rgba(2,44,34,0.38)', padding: 8 }}>
+          <Text style={{ color: '#86EFAC', fontSize: 12, fontWeight: '800', textAlign: 'right', marginBottom: 6 }}>
+            הגדרות המשחק הנוכחי
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`טווח מספרים: 0–${settings.mathRangeMax}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`שברים: ${settings.showFractions ? `עם (${safeFractionKinds.join(', ') || 'ברירת מחדל'})` : 'בלי'}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`סימנים פעילים: ${safeEnabledOperators.join(' ') || 'אין'}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`תוצאות מהקוביות: ${settings.allowNegativeTargets ? 'עם שלילי' : 'בלי שלילי'}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`תוצאות אפשריות: ${settings.showPossibleResults ? 'מופעל' : 'כבוי'}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`פתרון תרגיל: ${settings.showSolveExercise ? 'מופעל' : 'כבוי'}`}
+          </Text>
+          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+            {`טיימר: ${safeTimerSetting === 'off' ? 'ללא' : safeTimerSetting === 'custom' ? `${safeTimerCustomSeconds} שניות (מותאם)` : `${safeTimerSetting} שניות`}`}
+          </Text>
+        </View>
+        <Text style={{ color: '#CBD5E1', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
+          הטבלה מתאפסת בתחילת כל משחק חדש ומציגה ניצחונות/הפסדים למשחק הנוכחי.
+        </Text>
+        <View style={{ borderWidth: 1, borderColor: 'rgba(147,197,253,0.35)', borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.35)', padding: 8 }}>
+          {sorted.length === 0 ? (
+            <Text style={{ color: '#93C5FD', fontSize: 12, textAlign: 'center' }}>אין נתונים עדיין</Text>
+          ) : (
+            sorted.map((row, idx) => (
+              <View
+                key={row.playerId}
+                style={{
+                  flexDirection: 'row-reverse',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingVertical: 5,
+                  borderTopWidth: idx === 0 ? 0 : 1,
+                  borderTopColor: 'rgba(148,163,184,0.16)',
+                }}
+              >
+                <Text style={{ color: '#E2E8F0', fontSize: 12, fontWeight: '700' }}>
+                  {row.playerName || `שחקן ${row.playerId + 1}`}
+                </Text>
+                <Text style={{ color: '#93C5FD', fontSize: 12 }}>
+                  ניצחונות: {row.wins} | הפסדים: {row.losses}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
+        </ScrollView>
+      </View>
+    </View>
+  );
 }
 
 function sortHandCards(cards: Card[]): Card[] {
@@ -366,7 +566,7 @@ interface MoveHistoryEntry {
 export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty }
+  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; fractionKinds?: Fraction[]; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId | string; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty; isTutorial?: boolean }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
@@ -409,7 +609,8 @@ type GameAction =
   | { type: 'DISMISS_INTRO_HINT' }
   | { type: 'USE_POSSIBLE_RESULTS_INFO' }
   | { type: 'BOT_STEP' }
-  | { type: 'RESET_GAME' };
+  | { type: 'RESET_GAME' }
+  | { type: 'TUTORIAL_SET_HANDS'; hands: Card[][]; drawPile?: Card[]; discardPile?: Card[] };
 
 // Global mutable intercept for fraction card taps (tutorial + hint)
 const fracTapIntercept = { fn: null as ((card: Card) => boolean) | null };
@@ -495,27 +696,31 @@ function getCurrentResult(
   s1: number | null, op1: string, s2: number | null, op2: string, s3: number | null,
 ): number | null {
   try {
-    const calc = (x: number, op: string, y: number): number | null => {
-      switch (op) {
-        case '+': return x + y; case '-': return x - y;
-        case '*': case 'x': case '×': return x * y;
-        case '/': case '÷': return y !== 0 && x % y === 0 ? x / y : null;
-        default: return null;
-      }
-    };
     if (s1 === null || s2 === null) return null;
-    const intermediate = calc(s1, op1, s2);
-    if (intermediate === null) return null;
     if (s3 !== null) {
-      const final = calc(intermediate, op2, s3);
-      if (final === null || !Number.isFinite(final)) return null;
-      return final;
+      const r = evalThreeTerms(s1, op1, s2, op2, s3);
+      if (r === null || !Number.isFinite(r)) return null;
+      return r;
     }
-    if (!Number.isFinite(intermediate)) return null;
+    const intermediate = applyOperation(s1, op1, s2);
+    if (intermediate === null || !Number.isFinite(intermediate)) return null;
     return intermediate;
   } catch {
     return null;
   }
+}
+
+function displayOrOperationToToken(s: string | Operation | null): Operation | null {
+  if (s == null) return null;
+  if (s === '×' || s === '*') return 'x';
+  if (s === '+' || s === '-' || s === 'x' || s === '÷') return s;
+  return null;
+}
+
+function isOperationAllowedForStage(s: string | Operation | null, allowed: readonly Operation[]): boolean {
+  const t = displayOrOperationToToken(s);
+  if (!t) return true;
+  return allowed.includes(t);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -525,11 +730,17 @@ function getCurrentResult(
 let cardIdCounter = 0;
 function makeId(): string { return `card-${++cardIdCounter}`; }
 
+const DEFAULT_FRAC_DECK: { frac: Fraction; count: number }[] = [
+  { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
+  { frac: '1/4', count: 3 }, { frac: '1/5', count: 2 },
+];
+
 function generateDeck(
   difficulty: 'easy' | 'full',
   includeFractions: boolean = true,
   enabledOperators?: Operation[],
   rangeMaxOverride?: 12 | 25,
+  fractionKinds?: Fraction[] | null,
 ): Card[] {
   cardIdCounter = 0;
   const cards: Card[] = [];
@@ -538,10 +749,8 @@ function generateDeck(
     for (let v = 0; v <= maxNumber; v++)
       cards.push({ id: makeId(), type: 'number', value: v });
   if (includeFractions) {
-    const fracs: { frac: Fraction; count: number }[] = [
-      { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
-      { frac: '1/4', count: 3 }, { frac: '1/5', count: 2 },
-    ];
+    const allow = fractionKinds && fractionKinds.length > 0 ? new Set(fractionKinds) : null;
+    const fracs = allow ? DEFAULT_FRAC_DECK.filter((x) => allow.has(x.frac)) : DEFAULT_FRAC_DECK;
     for (const { frac, count } of fracs)
       for (let i = 0; i < count; i++)
         cards.push({ id: makeId(), type: 'fraction', fraction: frac });
@@ -552,7 +761,8 @@ function generateDeck(
       cards.push({ id: makeId(), type: 'operation', operation: op });
   for (let i = 0; i < 4; i++)
     cards.push({ id: makeId(), type: 'joker' });
-  for (let i = 0; i < 4; i++)
+  const wilds = wildDeckCount(maxNumber, includeFractions);
+  for (let i = 0; i < wilds; i++)
     cards.push({ id: makeId(), type: 'wild' });
   return cards;
 }
@@ -834,13 +1044,15 @@ function computeStagedResult(staged: Card[]): number | null {
 
 const initialState: GameState = {
   phase: 'setup', players: [], currentPlayerIndex: 0, drawPile: [], discardPile: [],
-  dice: null, selectedCards: [], stagedCards: [], validTargets: [], equationResult: null,
+  dice: null, diceRollSeq: 0, selectedCards: [], stagedCards: [], validTargets: [], equationResult: null,
   equationOpsUsed: [], activeOperation: null, challengeSource: null, activeFraction: null, pendingFractionTarget: null,
   fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
   consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationHandSlots: [null, null], equationHandPick: null,
+  courageMeterPercent: 0, courageMeterStep: 0, courageDiscardSuccessStreak: 0, courageRewardPulseId: 0,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
-  difficulty: 'full', diceMode: '3', showFractions: true, showPossibleResults: true, showSolveExercise: true,
-  difficultyStage: 'E', stageTransitions: 0, mathRangeMax: 25, enabledOperators: ['+'], allowNegativeTargets: false, abVariant: 'control_0_12_plus',
+  difficulty: 'full', diceMode: '3', showFractions: true, fractionKinds: [...ALL_FRACTION_KINDS],
+  showPossibleResults: true, showSolveExercise: true,
+  difficultyStage: 'H', stageTransitions: 7, mathRangeMax: 25, enabledOperators: ['x', '÷'], allowNegativeTargets: true, abVariant: 'control_0_12_plus',
   equationAttempts: 0, equationSuccesses: 0, turnStartedAt: null, totalEquationResponseMs: 0,
   timerSetting: 'off', timerCustomSeconds: 60, winner: null, message: '',
   roundsPlayed: 0,
@@ -855,7 +1067,13 @@ const initialState: GameState = {
   possibleResultsInfoCountedThisTurn: false,
   suppressIdenticalOverlayOnline: false,
   botConfig: null,
+  hostBotDifficulty: null,
+  botPendingStagedIds: null,
+  botPendingDemoActions: null,
+  botNoSolutionTicks: 0,
+  botNoSolutionDrawPending: false,
   botTickSeq: 0,
+  isTutorial: false,
 };
 
 function reshuffleDiscard(st: GameState): GameState {
@@ -943,7 +1161,53 @@ function endTurnLogic(st: GameState, tf: (key: string, params?: MsgParams) => st
     lastEquationDisplay: s.lastEquationDisplay,
     roundsPlayed: s.roundsPlayed + 1,
     possibleResultsInfoCountedThisTurn: false,
+    botPendingStagedIds: null,
+    botPendingDemoActions: null,
+    botNoSolutionTicks: 0,
+    botNoSolutionDrawPending: false,
   };
+}
+
+const COURAGE_STEP_TO_PERCENT: Readonly<Record<number, number>> = {
+  0: 0,
+  1: 33,
+  2: 66,
+  3: 100,
+};
+
+function clampCourageStep(step: number): number {
+  return Math.max(0, Math.min(3, step));
+}
+
+function applyCourageStepReward(st: GameState): GameState {
+  const nextStep = clampCourageStep((st.courageMeterStep ?? 0) + 1);
+  if (nextStep === (st.courageMeterStep ?? 0)) return st;
+  return {
+    ...st,
+    courageMeterStep: nextStep,
+    courageMeterPercent: COURAGE_STEP_TO_PERCENT[nextStep],
+    courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
+  };
+}
+
+function applyCourageRewards(
+  st: GameState,
+  options: { equationSuccess?: boolean; discardSuccess?: boolean },
+): GameState {
+  let next = st;
+  if (options.equationSuccess) {
+    next = applyCourageStepReward(next);
+  }
+  if (options.discardSuccess) {
+    const currentStreak = next.courageDiscardSuccessStreak ?? 0;
+    const incremented = currentStreak + 1;
+    if (incremented >= 2) {
+      next = applyCourageStepReward({ ...next, courageDiscardSuccessStreak: 0 });
+    } else {
+      next = { ...next, courageDiscardSuccessStreak: incremented };
+    }
+  }
+  return next;
 }
 
 function gameReducer(
@@ -960,9 +1224,9 @@ function gameReducer(
           ? st.players.map((p) => ({ name: p.name, isBot: p.isBot }))
           : action.players;
       const difficulty = action.type === 'PLAY_AGAIN' ? st.difficulty : action.difficulty;
-      const stage = action.type === 'PLAY_AGAIN'
-        ? st.difficultyStage
-        : (action.difficultyStage ?? 'A');
+      const stage = migrateDifficultyStage(
+        action.type === 'PLAY_AGAIN' ? st.difficultyStage : (action.difficultyStage ?? 'H'),
+      );
       const stageCfg = DIFFICULTY_STAGE_CONFIG[stage];
       const enabledOperators = action.type === 'PLAY_AGAIN'
         ? st.enabledOperators
@@ -977,7 +1241,18 @@ function gameReducer(
         ? st.abVariant
         : (action.abVariant ?? 'control_0_12_plus');
       const diceMode: GameState['diceMode'] = '3';
-      const fractions = action.type === 'PLAY_AGAIN' ? st.showFractions : action.fractions;
+      const isLowNumberRange = mathRangeMax === 12;
+      let fractions = action.type === 'PLAY_AGAIN' ? st.showFractions : action.fractions;
+      let fractionKinds: Fraction[] =
+        action.type === 'PLAY_AGAIN'
+          ? [...st.fractionKinds]
+          : action.fractionKinds && action.fractionKinds.length > 0
+            ? [...action.fractionKinds]
+            : [...ALL_FRACTION_KINDS];
+      if (isLowNumberRange) {
+        fractions = false;
+        fractionKinds = [];
+      }
       const showPossibleResults =
         action.type === 'PLAY_AGAIN' ? st.showPossibleResults : action.showPossibleResults;
       const showSolveExercise =
@@ -985,7 +1260,9 @@ function gameReducer(
       const timerSetting = action.type === 'PLAY_AGAIN' ? st.timerSetting : action.timerSetting;
       const timerCustomSeconds =
         action.type === 'PLAY_AGAIN' ? st.timerCustomSeconds : action.timerCustomSeconds ?? 60;
-      const deck = shuffle(generateDeck(difficulty, fractions, enabledOperators, mathRangeMax));
+      const deck = shuffle(
+        generateDeck(difficulty, fractions, enabledOperators, mathRangeMax, fractions ? fractionKinds : null),
+      );
       const { hands, remaining } = dealCards(deck, playersSeed.length, CARDS_PER_PLAYER);
       let drawPile = remaining;
       let firstDiscard: Card | undefined;
@@ -1002,7 +1279,7 @@ function gameReducer(
           ? st.botConfig
           : action.mode === 'vs-bot'
             ? {
-                difficulty: action.botDifficulty ?? 'easy',
+                difficulty: action.botDifficulty ?? 'medium',
                 playerIds: playersSeed
                   .map((p, i) => ((p as { isBot?: boolean }).isBot ? i : -1))
                   .filter((id) => id >= 0),
@@ -1026,13 +1303,21 @@ function gameReducer(
         equationSuccesses: 0,
         turnStartedAt: Date.now(),
         totalEquationResponseMs: 0,
-        showFractions: fractions, showPossibleResults, showSolveExercise,
+        showFractions: fractions,
+        fractionKinds,
+        showPossibleResults,
+        showSolveExercise,
         timerSetting, timerCustomSeconds,
         players: playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false, isBot: (p as { isBot?: boolean }).isBot ?? false })),
         drawPile, discardPile: firstDiscard ? [firstDiscard] : [],
         tournamentTable:
           action.type === 'PLAY_AGAIN'
-            ? st.tournamentTable
+            ? st.players.map((p) => ({
+                playerId: p.id,
+                playerName: p.name,
+                wins: 0,
+                losses: 0,
+              }))
             : playersSeed.map((p, i) => ({
                 playerId: i,
                 playerName: p.name,
@@ -1040,7 +1325,12 @@ function gameReducer(
                 losses: 0,
               })),
         botConfig,
+        botPendingStagedIds: null,
+        botPendingDemoActions: null,
+        botNoSolutionTicks: 0,
+        botNoSolutionDrawPending: false,
         botTickSeq: 0,
+        isTutorial: action.type === 'START_GAME' && !!action.isTutorial,
       };
     }
     case 'NEXT_TURN': {
@@ -1072,6 +1362,10 @@ function gameReducer(
         equationHandSlots: [null, null],
         equationHandPick: null,
         possibleResultsInfoCountedThisTurn: false,
+        botPendingStagedIds: null,
+        botPendingDemoActions: null,
+        botNoSolutionTicks: 0,
+        botNoSolutionDrawPending: false,
       };
     }
     case 'BEGIN_TURN': {
@@ -1104,7 +1398,18 @@ function gameReducer(
         ns = s;
       }
       const vt = generateValidTargets(dice, st.enabledOperators, st.allowNegativeTargets, st.mathRangeMax);
-      return { ...ns, validTargets: vt, phase: 'building', consecutiveIdenticalPlays: 0, message: ns.message || '' };
+      return {
+        ...ns,
+        validTargets: vt,
+        phase: 'building',
+        diceRollSeq: (st.diceRollSeq ?? 0) + 1,
+        consecutiveIdenticalPlays: 0,
+        message: ns.message || '',
+        botPendingStagedIds: null,
+        botPendingDemoActions: null,
+        botNoSolutionTicks: 0,
+        botNoSolutionDrawPending: false,
+      };
     }
     case 'CONFIRM_EQUATION': {
       if (st.phase !== 'building') return st;
@@ -1121,6 +1426,10 @@ function gameReducer(
         hasSeenSolvedHint: st.hasSeenSolvedHint || firstSolvedHint,
         equationSuccesses: st.equationSuccesses + 1,
         totalEquationResponseMs: st.turnStartedAt ? st.totalEquationResponseMs + Math.max(0, Date.now() - st.turnStartedAt) : st.totalEquationResponseMs,
+        botPendingStagedIds: null,
+        botPendingDemoActions: null,
+        botNoSolutionTicks: 0,
+        botNoSolutionDrawPending: false,
       };
     }
     case 'RECORD_EQUATION_ATTEMPT': {
@@ -1128,20 +1437,39 @@ function gameReducer(
     }
     case 'REVERT_TO_BUILDING': {
       if (st.phase !== 'solved' || st.hasPlayedCards) return st;
-      return { ...st, phase: 'building', equationResult: null, equationOpsUsed: [], lastEquationDisplay: null, stagedCards: [], message: '' };
+      return {
+        ...st,
+        phase: 'building',
+        equationResult: null,
+        equationOpsUsed: [],
+        lastEquationDisplay: null,
+        stagedCards: [],
+        message: '',
+        botPendingStagedIds: null,
+        botPendingDemoActions: null,
+        botNoSolutionTicks: 0,
+        botNoSolutionDrawPending: false,
+      };
     }
     case 'STAGE_CARD': {
       if (st.phase !== 'solved' || st.hasPlayedCards) return st;
       if (st.stagedCards.some(c => c.id === action.card.id)) return st;
       if (action.card.type !== 'number' && action.card.type !== 'operation' && action.card.type !== 'wild') return st;
       if (action.card.type === 'wild' && st.stagedCards.some(c => c.type === 'wild')) return st;
-      // Don't allow staging the card that's committed to the equation
-      if (isCardInEquationHand(st, action.card.id)) return st;
-      // Max 1 operator in staging zone
-      if (action.card.type === 'operation' && st.stagedCards.some(c => c.type === 'operation')) {
-        return { ...st, message: tf('stage.oneOpOnly') };
+      // Lift from dice-equation UI into staging (same physical card — clear slot/pick first)
+      let base: typeof st = st;
+      if (isCardInEquationHand(st, action.card.id)) {
+        const slots: [EquationHandSlot | null, EquationHandSlot | null] = [...st.equationHandSlots];
+        if (slots[0]?.card.id === action.card.id) slots[0] = null;
+        if (slots[1]?.card.id === action.card.id) slots[1] = null;
+        const equationHandPick =
+          st.equationHandPick?.card.id === action.card.id ? null : st.equationHandPick;
+        base = { ...st, equationHandSlots: slots, equationHandPick, message: '' };
       }
-      return { ...st, stagedCards: [...st.stagedCards, action.card], message: '' };
+      if (action.card.type === 'operation' && base.stagedCards.some(c => c.type === 'operation')) {
+        return { ...base, message: tf('stage.oneOpOnly') };
+      }
+      return { ...base, stagedCards: [...base.stagedCards, action.card], message: '' };
     }
     case 'UNSTAGE_CARD': {
       if (st.phase !== 'solved') return st;
@@ -1177,6 +1505,7 @@ function gameReducer(
       // TODO: add dedicated sound effect per discard count
       const moveEntry: MoveHistoryEntry = { playerIndex: st.currentPlayerIndex, cardsDiscarded: stIds.size, description: stToast };
       let stNs: GameState = { ...st, players: stNp, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: null, challengeSource: null, equationOpsUsed: [], equationHandSlots: [null, null], equationHandPick: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: st.lastEquationDisplay, message: '', moveHistory: [...st.moveHistory, moveEntry] };
+      stNs = applyCourageRewards(stNs, { equationSuccess: true, discardSuccess: true });
       stNs = checkWin(stNs);
       if (stNs.phase === 'game-over') return stNs;
       // Discard celebration is shown on TurnTransition only (not NotificationZone in GameScreen).
@@ -1209,6 +1538,7 @@ function gameReducer(
         identicalAlert: { playerName: cp.name, cardDisplay, consecutive: newConsecutive },
         message: '',
       };
+      ns = applyCourageRewards(ns, { discardSuccess: true });
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return { ...ns, identicalAlert: null };
       return ns; // Stay — modal shown, DISMISS_IDENTICAL_ALERT will call endTurnLogic
@@ -1240,6 +1570,9 @@ function gameReducer(
       console.log('[REDUCER] SELECT_EQ_OP', 'phase=', st.phase, 'card=', action.card.operation);
       if (st.phase !== 'building') return st;
       if (action.card.type !== 'operation') return st;
+      if (action.card.operation != null && !st.enabledOperators.includes(action.card.operation)) {
+        return { ...st, message: tf('equation.operatorNotInStage') };
+      }
       const placed = countEquationHandPlaced(st);
       if (placed >= 2 && !st.equationHandPick) {
         return { ...st, message: tf('equation.handSlotsFull') };
@@ -1254,6 +1587,9 @@ function gameReducer(
     }
     case 'SELECT_EQ_JOKER': {
       if (st.phase !== 'building') return st;
+      if (action.chosenOperation != null && !st.enabledOperators.includes(action.chosenOperation)) {
+        return { ...st, message: tf('equation.operatorNotInStage') };
+      }
       const placed = countEquationHandPlaced(st);
       if (placed >= 2 && !st.equationHandPick) {
         return { ...st, message: tf('equation.handSlotsFull') };
@@ -1277,6 +1613,10 @@ function gameReducer(
       console.log('[REDUCER] PLACE_EQ_OP', 'pos=', action.position, 'hasPick=', !!pick);
       if (!pick || action.position < 0 || action.position > 1) return st;
       if (pick.card.type === 'joker' && pick.jokerAs == null) return st;
+      const opToPlace = pick.card.type === 'joker' ? pick.jokerAs : pick.card.operation;
+      if (opToPlace != null && !st.enabledOperators.includes(opToPlace)) {
+        return { ...st, message: tf('equation.operatorNotInStage'), equationHandPick: null };
+      }
       const slots: [EquationHandSlot | null, EquationHandSlot | null] = [...st.equationHandSlots];
       if (slots[0]?.card.id === pick.card.id) slots[0] = null;
       if (slots[1]?.card.id === pick.card.id) slots[1] = null;
@@ -1305,7 +1645,11 @@ function gameReducer(
         const newTarget = st.pendingFractionTarget / denom;
         const cardToDiscard = { ...action.card, resolvedTarget: newTarget };
         const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-        let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true });
+        let ns = applyCourageRewards(
+          { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true },
+          { discardSuccess: true },
+        );
+        ns = checkWin(ns);
         if (ns.phase === 'game-over') return ns;
         const next = (ns.currentPlayerIndex + 1) % ns.players.length;
         const blockFracUni = action.card.fraction === '1/2' ? '½' : action.card.fraction === '1/3' ? '⅓' : action.card.fraction === '1/4' ? '¼' : action.card.fraction === '1/5' ? '⅕' : action.card.fraction;
@@ -1332,7 +1676,11 @@ function gameReducer(
       console.log('SET pendingFractionTarget:', newTarget);
       const cardToDiscard = { ...action.card, resolvedTarget: denom };
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns = checkWin({ ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true });
+      let ns = applyCourageRewards(
+        { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true },
+        { discardSuccess: true },
+      );
+      ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       const next = (ns.currentPlayerIndex + 1) % ns.players.length;
       const fracUni = action.card.fraction === '1/2' ? '½' : action.card.fraction === '1/3' ? '⅓' : action.card.fraction === '1/4' ? '¼' : action.card.fraction === '1/5' ? '⅕' : action.card.fraction;
@@ -1375,7 +1723,7 @@ function gameReducer(
       }
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
       const defMsg = tf('toast.defenseOk');
-      let ns = checkWin({
+      let ns = applyCourageRewards({
         ...st,
         players: np,
         discardPile: [...st.discardPile, cardToDiscard],
@@ -1387,7 +1735,8 @@ function gameReducer(
         lastMoveMessage: defMsg,
         message: tf('msg.defenseOk'),
         moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: defMsg }],
-      });
+      }, { discardSuccess: true });
+      ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       return endTurnLogic(ns, tf);
     }
@@ -1531,30 +1880,116 @@ function gameReducer(
       if (!current) return stWithTick;
       if (!stWithTick.botConfig.playerIds.includes(current.id)) return stWithTick;
 
-      // Nested helper: recursively drains a bot action. For confirmEquation,
-      // drains the entire plan (confirmEquation + stageCards + confirmStaged)
-      // in one atomic burst so React sees one state transition, not N.
-      // NEVER passes BOT_STEP through — the translator's recursion guard
-      // already returns null in that case, but this is a defensive note.
+      const pendingIds = stWithTick.botPendingStagedIds;
+      if (pendingIds != null && (stWithTick.phase !== 'solved' || stWithTick.hasPlayedCards)) {
+        return {
+          ...stWithTick,
+          botPendingStagedIds: null,
+          botPendingDemoActions: null,
+          botNoSolutionTicks: 0,
+          botNoSolutionDrawPending: false,
+        };
+      }
+
+      if (pendingIds != null && stWithTick.phase === 'solved' && !stWithTick.hasPlayedCards) {
+        if (pendingIds.length > 0) {
+          const cardId = pendingIds[0]!;
+          const stageTranslated = translateBotAction(stWithTick, { kind: 'stageCard', cardId });
+          if (!stageTranslated) {
+            const drawTranslated = translateBotAction(stWithTick, { kind: 'drawCard' });
+            if (!drawTranslated) return { ...stWithTick, botPendingStagedIds: null, botPendingDemoActions: null };
+            return gameReducer(
+              {
+                ...stWithTick,
+                botPendingStagedIds: null,
+                botPendingDemoActions: null,
+                botNoSolutionTicks: 0,
+                botNoSolutionDrawPending: false,
+              },
+              drawTranslated,
+              tf,
+            );
+          }
+          const staged = gameReducer(stWithTick, stageTranslated, tf);
+          return { ...staged, botPendingStagedIds: pendingIds.slice(1) };
+        }
+        const confirmStagedTranslated = translateBotAction(stWithTick, { kind: 'confirmStaged' });
+        if (!confirmStagedTranslated) {
+          return { ...stWithTick, botPendingStagedIds: null, botPendingDemoActions: null };
+        }
+        const after = gameReducer(stWithTick, confirmStagedTranslated, tf);
+        return { ...after, botPendingStagedIds: null };
+      }
+
+      if (stWithTick.botNoSolutionDrawPending) {
+        if (stWithTick.botNoSolutionTicks > 1) {
+          return { ...stWithTick, botNoSolutionTicks: stWithTick.botNoSolutionTicks - 1 };
+        }
+        const drawTranslated = translateBotAction(stWithTick, { kind: 'drawCard' });
+        if (!drawTranslated) {
+          return { ...stWithTick, botNoSolutionTicks: 0, botNoSolutionDrawPending: false };
+        }
+        const afterDraw = gameReducer(
+          {
+            ...stWithTick,
+            botPendingStagedIds: null,
+            botPendingDemoActions: null,
+            botNoSolutionTicks: 0,
+            botNoSolutionDrawPending: false,
+          },
+          drawTranslated,
+          tf,
+        );
+        if (
+          afterDraw.hasDrawnCard &&
+          afterDraw.currentPlayerIndex === stWithTick.currentPlayerIndex &&
+          afterDraw.phase !== 'game-over'
+        ) {
+          return gameReducer(afterDraw, { type: 'END_TURN' }, tf);
+        }
+        return afterDraw;
+      }
+
+      const pendingDemoActions = stWithTick.botPendingDemoActions;
+      if (pendingDemoActions != null) {
+        if (pendingDemoActions.length === 0) {
+          return { ...stWithTick, botPendingDemoActions: null };
+        }
+        const nextDemoAction = pendingDemoActions[0]!;
+        const afterDemo = applyBotActionAtomically(stWithTick, nextDemoAction);
+        const rest = pendingDemoActions.slice(1);
+        return { ...afterDemo, botPendingDemoActions: rest.length > 0 ? rest : null };
+      }
+
+      /** Single-step bot actions; confirmEquation only applies CONFIRM_EQUATION then queues staging. */
       function applyBotActionAtomically(s: GameState, a: BotAction): GameState {
-        // Single-step actions: translate and recurse once.
         if (a.kind !== 'confirmEquation') {
           const translated = translateBotAction(s, a);
           if (!translated) {
-            // Translator failed (cardId not in hand). Fall back to drawCard
-            // UNLESS we're already trying drawCard — in which case return s.
             if (a.kind === 'drawCard') return s;
             const drawTranslated = translateBotAction(s, { kind: 'drawCard' });
             if (!drawTranslated) return s;
-            return gameReducer(s, drawTranslated, tf);
+            return gameReducer(
+              {
+                ...s,
+                botPendingStagedIds: null,
+                botNoSolutionTicks: 0,
+                botNoSolutionDrawPending: false,
+              },
+              drawTranslated,
+              tf,
+            );
           }
-          const result = gameReducer(s, translated, tf);
-          // Safety: if the bot has drawn (hasDrawnCard) but is still the current
-          // player in the same phase (e.g., empty draw pile prevented endTurnLogic
-          // from firing inside DRAW_CARD), issue END_TURN to guarantee turn
-          // advancement. This covers the corner case where reshuffleDiscard cannot
-          // produce cards (discard pile has ≤1 card) and DRAW_CARD returns with
-          // hasDrawnCard:true but without calling endTurnLogic.
+          const result = gameReducer(
+            {
+              ...s,
+              botPendingStagedIds: null,
+              botNoSolutionTicks: 0,
+              botNoSolutionDrawPending: false,
+            },
+            translated,
+            tf,
+          );
           if (
             result.hasDrawnCard &&
             result.currentPlayerIndex === s.currentPlayerIndex &&
@@ -1565,53 +2000,68 @@ function gameReducer(
           return result;
         }
 
-        // confirmEquation: drain the plan in one burst.
         const confirmTranslated = translateBotAction(s, a);
         if (!confirmTranslated) {
           const drawTranslated = translateBotAction(s, { kind: 'drawCard' });
           if (!drawTranslated) return s;
-          return gameReducer(s, drawTranslated, tf);
+          return gameReducer(
+            {
+              ...s,
+              botPendingStagedIds: null,
+              botNoSolutionTicks: 0,
+              botNoSolutionDrawPending: false,
+            },
+            drawTranslated,
+            tf,
+          );
         }
-        let next = gameReducer(s, confirmTranslated, tf);
-
-        // Stage each planned card one at a time.
-        const successfullyStaged: string[] = [];
-        for (const cardId of a.stagedCardIds) {
-          const stageTranslated = translateBotAction(next, { kind: 'stageCard', cardId });
-          if (!stageTranslated) {
-            // A planned card is no longer stageable. Unstage what we already
-            // staged (orphan cleanup — this fixes the server bot's known bug),
-            // then fall back to drawCard.
-            for (const stagedId of successfullyStaged.reverse()) {
-              const unstageTranslated = translateBotAction(next, { kind: 'unstageCard', cardId: stagedId });
-              if (unstageTranslated) {
-                next = gameReducer(next, unstageTranslated, tf);
-              }
-            }
-            const drawTranslated = translateBotAction(next, { kind: 'drawCard' });
-            if (!drawTranslated) return next;
-            return gameReducer(next, drawTranslated, tf);
-          }
-          next = gameReducer(next, stageTranslated, tf);
-          successfullyStaged.push(cardId);
+        let next = gameReducer(
+          {
+            ...s,
+            botPendingStagedIds: null,
+            botNoSolutionTicks: 0,
+            botNoSolutionDrawPending: false,
+          },
+          confirmTranslated,
+          tf,
+        );
+        const ids = [...a.stagedCardIds];
+        if (ids.length === 0) {
+          const confirmStagedTranslated = translateBotAction(next, { kind: 'confirmStaged' });
+          if (!confirmStagedTranslated) return next;
+          return gameReducer(next, confirmStagedTranslated, tf);
         }
-
-        // Finally, confirmStaged.
-        const confirmStagedTranslated = translateBotAction(next, { kind: 'confirmStaged' });
-        if (!confirmStagedTranslated) return next;
-        return gameReducer(next, confirmStagedTranslated, tf);
+        return { ...next, botPendingStagedIds: ids };
       }
 
-      const action_ = decideBotAction(stWithTick, stWithTick.botConfig.difficulty);
+      const action_ = decideBotAction(stWithTick, stWithTick.botConfig.difficulty, {
+        rng:
+          typeof stWithTick.botConfig.rng === 'function'
+            ? stWithTick.botConfig.rng
+            : Math.random,
+      });
       if (!action_) {
-        // Planner produced nothing — try drawCard as last resort.
         return applyBotActionAtomically(stWithTick, { kind: 'drawCard' });
+      }
+      if (action_.kind === 'drawCard' && stWithTick.phase === 'building') {
+        return { ...stWithTick, botNoSolutionDrawPending: true, botNoSolutionTicks: 2 };
       }
       return applyBotActionAtomically(stWithTick, action_);
     }
     case 'RESET_GAME':
       AsyncStorage.removeItem('lulos_guidance_notifications');
       return { ...initialState, hasSeenIntroHint: st.hasSeenIntroHint, hasSeenSolvedHint: st.hasSeenSolvedHint, soundsEnabled: st.soundsEnabled, guidanceEnabled: st.guidanceEnabled };
+    case 'TUTORIAL_SET_HANDS': {
+      const newPlayers = st.players.map((p, i) =>
+        i < action.hands.length ? { ...p, hand: action.hands[i] } : p,
+      );
+      return {
+        ...st,
+        players: newPlayers,
+        ...(action.drawPile ? { drawPile: action.drawPile } : {}),
+        ...(action.discardPile ? { discardPile: action.discardPile } : {}),
+      };
+    }
     case 'RESET_ONLINE_EQ_UI':
       return { ...st, equationHandSlots: [null, null], equationHandPick: null, jokerModalOpen: false, selectedCards: [] };
     default: return st;
@@ -1755,6 +2205,7 @@ function GameProvider({ children }: { children: ReactNode }) {
       localState.equationResult ?? 'null',
       localState.pendingFractionTarget ?? 'null',
       localState.botTickSeq,
+      (localState.botPendingStagedIds ?? []).join(','),
     ].join('|');
 
     const now = Date.now();
@@ -1764,14 +2215,18 @@ function GameProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const delay = 900 + Math.floor(Math.random() * 700);
-    const dueAt = now + delay;
+    const diff = localState.botConfig?.difficulty ?? 'medium';
+    const { min, max } = botTeachingDelayRange(localState, diff);
+    const delay = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
+    // Slower pacing improves readability of bot teaching steps.
+    const slowedDelay = Math.round(delay * 1.2);
+    const dueAt = now + slowedDelay;
     botTimerDeadlineRef.current = { dueAt, turnSignature };
 
     const timer = setTimeout(() => {
       botTimerDeadlineRef.current = null;
       localDispatch({ type: 'BOT_STEP' });
-    }, delay);
+    }, slowedDelay);
 
     return () => {
       clearTimeout(timer);
@@ -1787,6 +2242,7 @@ function GameProvider({ children }: { children: ReactNode }) {
     localState.pendingFractionTarget,
     localState.botConfig,
     localState.botTickSeq,
+    localState.botPendingStagedIds,
     localState.players,
   ]);
   // ────────────────────────────────────────────────────────────────
@@ -1830,6 +2286,10 @@ function GameProvider({ children }: { children: ReactNode }) {
       !override || typeof myIdx !== 'number' || override.state.currentPlayerIndex === myIdx;
     if (isLocalOnlyAction) localDispatch(action);
     else if (override) {
+      if (action.type === 'RESET_GAME') {
+        override.dispatch(action);
+        return;
+      }
       if (!canActOnline) return;
       if (eqUiActions.has(action.type)) localDispatch(action);
       if (action.type === 'CONFIRM_EQUATION') localDispatch({ type: 'RESET_ONLINE_EQ_UI' });
@@ -1896,6 +2356,63 @@ const mS = StyleSheet.create({
   close: { color:'#9CA3AF', fontSize:22 },
 });
 
+const ONLINE_BOT_DIFF_KEYS: BotDifficulty[] = ['easy', 'medium', 'hard'];
+
+function OnlineBotDifficultyModal({
+  visible,
+  onClose,
+  current,
+  isHost,
+  onSelectLevel,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  current: BotDifficulty | null;
+  isHost: boolean;
+  onSelectLevel: (d: BotDifficulty) => void;
+}) {
+  const { t, isRTL } = useLocale();
+  const ta = isRTL ? 'right' : 'left';
+  if (current == null) return null;
+  const labels: Record<BotDifficulty, string> = {
+    easy: t('start.botEasy'),
+    medium: t('start.botMedium'),
+    hard: t('start.botHard'),
+  };
+  return (
+    <AppModal visible={visible} onClose={onClose} title={t('game.onlineBotDifficultyTitle')}>
+      <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 12 }}>
+        <Text style={{ color: '#9CA3AF', fontSize: 13, lineHeight: 20, textAlign: ta }}>
+          {isHost ? t('game.onlineBotDifficultyHostHint') : t('game.onlineBotDifficultyViewerHint')}
+        </Text>
+        <Text style={{ color: '#E5E7EB', fontSize: 15, fontWeight: '700', textAlign: ta }}>
+          {t('game.onlineBotDifficultyCurrent', { level: labels[current] })}
+        </Text>
+        {isHost ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+            {ONLINE_BOT_DIFF_KEYS.map((key) => (
+              <TouchableOpacity
+                key={key}
+                onPress={() => onSelectLevel(key)}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  borderWidth: 2,
+                  borderColor: current === key ? '#F97316' : 'rgba(255,255,255,0.15)',
+                  backgroundColor: current === key ? 'rgba(249,115,22,0.2)' : 'rgba(255,255,255,0.06)',
+                }}
+              >
+                <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '700' }}>{labels[key]}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>
+    </AppModal>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  RULES SCREEN — מסך כללים + טיפ של התור
 // ═══════════════════════════════════════════════════════════════
@@ -1923,18 +2440,58 @@ function getTipOfTheTurn(st: GameState, tf: (key: string, params?: MsgParams) =>
   return tf('gameTip.defaultGuide');
 }
 
-function getDeckCounts(numberRange: 'easy' | 'full', fractions: boolean, enabledOperators: Operation[] = ['+', '-', 'x', '÷']) {
-  const numCount = numberRange === 'easy' ? 52 : 104;
-  const fracCount = fractions ? 15 : 0;
-  const opCount = enabledOperators.reduce((sum, op) => sum + (op === '÷' ? 3 : 4), 0);
-  return { numCount, fracCount, opCount, jokerCount: 4, wildCount: 4 };
+function fractionCardCountFromKinds(fractions: boolean, kinds?: Fraction[] | null): number {
+  if (!fractions || !kinds || kinds.length === 0) return 0;
+  const table = new Map(DEFAULT_FRAC_DECK.map((x) => [x.frac, x.count] as const));
+  return kinds.reduce((s, f) => s + (table.get(f) ?? 0), 0);
 }
 
-function CardsCatalogContent({ numberRange, fractions, enabledOperators }: { numberRange: 'easy' | 'full'; fractions: boolean; enabledOperators?: Operation[] }) {
+function formatOpsForRulesDisplay(ops: readonly Operation[]): string {
+  const sym: Record<Operation, string> = { '+': '+', '-': '−', 'x': '×', '÷': '÷' };
+  return ops.map((o) => sym[o]).join(', ');
+}
+
+/** הקשר לחוקים לפני START_GAME — חייב כש־state === null */
+type RulesPregameContext = {
+  numberRange: 'easy' | 'full';
+  fractions: boolean;
+  fractionKinds: Fraction[];
+  difficultyStage: DifficultyStageId;
+  enabledOperators: Operation[];
+  allowNegativeTargets: boolean;
+  showPossibleResults: boolean;
+  showSolveExercise: boolean;
+};
+
+function getDeckCounts(
+  numberRange: 'easy' | 'full',
+  fractions: boolean,
+  enabledOperators: Operation[] = ['+', '-', 'x', '÷'],
+  fractionKinds?: Fraction[] | null,
+) {
+  const numCount = numberRange === 'easy' ? 52 : 104;
+  const maxNumber = numberRange === 'easy' ? 12 : 25;
+  const fracCount = fractionCardCountFromKinds(fractions, fractionKinds);
+  const opCount = enabledOperators.reduce((sum, op) => sum + (op === '÷' ? 3 : 4), 0);
+  return { numCount, fracCount, opCount, jokerCount: 4, wildCount: wildDeckCount(maxNumber, fractions) };
+}
+
+function CardsCatalogContent({
+  numberRange,
+  fractions,
+  enabledOperators,
+  fractionKinds,
+}: {
+  numberRange: 'easy' | 'full';
+  fractions: boolean;
+  enabledOperators?: Operation[];
+  fractionKinds?: Fraction[] | null;
+}) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const rangeLabel = numberRange === 'easy' ? '0–12' : '0–25';
-  const counts = getDeckCounts(numberRange, fractions, enabledOperators ?? ['+', '-']);
+  const fk = fractionKinds && fractionKinds.length > 0 ? fractionKinds : [...ALL_FRACTION_KINDS];
+  const counts = getDeckCounts(numberRange, fractions, enabledOperators ?? ['+', '-'], fk);
   const items: { title: string; body: string; count: number }[] = [
     { title: t('catalog.numberTitle', { range: rangeLabel }), body: t('catalog.numberBody', { range: rangeLabel }), count: counts.numCount },
     { title: t('catalog.opTitle'), body: t('catalog.opBody'), count: counts.opCount },
@@ -1960,13 +2517,29 @@ function CardsCatalogContent({ numberRange, fractions, enabledOperators }: { num
   );
 }
 
-function RulesContent({ state, numberRange, fractions }: { state: GameState | null; numberRange?: 'easy' | 'full'; fractions?: boolean }) {
+function RulesContent({ state, pregame }: { state: GameState | null; pregame?: RulesPregameContext | null }) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const tip = state ? getTipOfTheTurn(state, t) : t('gameTip.start');
-  const range = numberRange ?? state?.difficulty ?? 'full';
-  const frac = fractions ?? state?.showFractions ?? true;
-  const counts = getDeckCounts(range, frac, state?.enabledOperators ?? ['+', '-']);
+  const range = state?.difficulty ?? pregame?.numberRange ?? 'full';
+  const showFractions = state?.showFractions ?? pregame?.fractions ?? true;
+  const fractionKinds =
+    state?.fractionKinds ?? pregame?.fractionKinds ?? [...ALL_FRACTION_KINDS];
+  const difficultyStage = state?.difficultyStage ?? pregame?.difficultyStage ?? 'H';
+  const enabledOperators = state?.enabledOperators ?? pregame?.enabledOperators ?? (['+', '-'] as Operation[]);
+  const showPossibleResults = state?.showPossibleResults ?? pregame?.showPossibleResults ?? true;
+  const kindsForDeckCounts =
+    !showFractions ? null : (fractionKinds.length > 0 ? fractionKinds : [...ALL_FRACTION_KINDS]);
+  const counts = getDeckCounts(range, showFractions, enabledOperators, kindsForDeckCounts);
+  const hasFractionCardsInDeck =
+    showFractions && fractionKinds.length > 0 && fractionCardCountFromKinds(true, fractionKinds) > 0;
+  const rangeLabel = range === 'easy' ? '0–12' : '0–25';
+  const sessionLine = t('rules.sessionContextLine', {
+    stage: difficultyStage,
+    range: rangeLabel,
+    frac: hasFractionCardsInDeck ? t('rules.sessionWithFractions') : t('rules.sessionNoFractions'),
+    ops: formatOpsForRulesDisplay(enabledOperators),
+  });
   const cardTypeLines: { text: string; count: number; detail?: string }[] = [
     { text: t('rulesLine.numCard'), count: counts.numCount },
     { text: t('rulesLine.fracCard'), count: counts.fracCount, detail: '½×6, ⅓×4, ¼×3, ⅕×2' },
@@ -1974,7 +2547,7 @@ function RulesContent({ state, numberRange, fractions }: { state: GameState | nu
     { text: t('rulesLine.jokerCard'), count: counts.jokerCount },
     { text: t('rulesLine.wildCard'), count: counts.wildCount },
   ];
-  const cardTypesToShow = frac ? cardTypeLines : cardTypeLines.filter((_, i) => i !== 1);
+  const cardTypesToShow = showFractions ? cardTypeLines : cardTypeLines.filter((_, i) => i !== 1);
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 16 }}>
       {/* טיפ של התור */}
@@ -1982,9 +2555,18 @@ function RulesContent({ state, numberRange, fractions }: { state: GameState | nu
         <Text style={{ fontSize: 14, fontWeight: '800', color: '#4ADE80', marginBottom: 6, textAlign: ta }}>{t('rules.tipBanner')}</Text>
         <Text style={{ color: '#D1FAE5', fontSize: 13, lineHeight: 20, textAlign: ta }}>{tip}</Text>
       </View>
+      <View style={{ backgroundColor: 'rgba(30,64,175,0.35)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,197,253,0.45)', padding: 12, marginBottom: 16 }}>
+        <Text style={{ fontSize: 13, fontWeight: '800', color: '#93C5FD', marginBottom: 6, textAlign: ta }}>{t('rules.sessionContextTitle')}</Text>
+        <Text style={{ color: '#E2E8F0', fontSize: 13, lineHeight: 20, textAlign: ta }}>{sessionLine}</Text>
+      </View>
       <View style={{ backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 12, borderWidth: 2, borderColor: '#93C5FD', padding: 14, marginBottom: 16 }}>
         <Text style={{ fontSize: 15, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.newUser')}</Text>
-        <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 22, textAlign: ta }}>{t('welcome.body')}</Text>
+        <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 22, textAlign: ta }}>
+          {showPossibleResults ? t('welcome.body') : t('welcome.bodyNoPossibleResults')}
+        </Text>
+        {hasFractionCardsInDeck ? (
+          <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 22, textAlign: ta, marginTop: 10 }}>{t('welcome.fractionsLine')}</Text>
+        ) : null}
       </View>
       <View style={{ backgroundColor: '#111827', borderRadius: 12, borderWidth: 1, borderColor: '#374151', padding: 12, marginBottom: 10 }}>
         <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.goalHeading')}</Text>
@@ -1999,7 +2581,9 @@ function RulesContent({ state, numberRange, fractions }: { state: GameState | nu
       </View>
       <View style={{ backgroundColor: 'rgba(249,115,22,0.15)', borderRadius: 12, borderWidth: 2, borderColor: '#FB923C', padding: 14, marginBottom: 10 }}>
         <Text style={{ fontSize: 15, fontWeight: '800', color: '#FB923C', marginBottom: 8, textAlign: ta }}>{t('rules.challengesHeading')}</Text>
-        <Text style={{ color: '#FED7AA', fontSize: 13, lineHeight: 22, textAlign: ta, marginBottom: 6 }}>{t('start.rules.c1')}</Text>
+        {hasFractionCardsInDeck ? (
+          <Text style={{ color: '#FED7AA', fontSize: 13, lineHeight: 22, textAlign: ta, marginBottom: 6 }}>{t('start.rules.c1')}</Text>
+        ) : null}
         <Text style={{ color: '#FED7AA', fontSize: 13, lineHeight: 22, textAlign: ta, marginBottom: 6 }}>{t('start.rules.c2')}</Text>
         <Text style={{ color: '#FED7AA', fontSize: 13, lineHeight: 22, textAlign: ta }}>{t('start.rules.c3')}</Text>
       </View>
@@ -2328,8 +2912,193 @@ const opColors: Record<string, { face: string; dark: string; light: string }> = 
   'x': { face: '#34A853', dark: '#1B5E2B', light: '#36944F' },
   '-': { face: '#FBBC05', dark: '#8B6800', light: '#DC9E00' },
 };
-const opDisplay: Record<string, string> = { 'x': '×', '-': '−', '/': '÷', '+': '+' };
+// Android: Fredoka_700Bold font is missing Unicode math glyphs (× − ÷).
+// iOS renders them fine; on Android fall back to ASCII-equivalent chars.
+const opDisplay: Record<string, string> = Platform.OS === 'android'
+  ? { 'x': 'x', '-': '-', '/': '÷', '+': '+', '×': 'x', '−': '-' }
+  : { 'x': '×', '-': '−', '/': '÷', '+': '+' };
 const parallelOp: Record<string, string> = { '+': '-', '-': '+', 'x': '/', '/': 'x' };
+
+type StagedChipDisplay = {
+  cardId: string;
+  label: string;
+  bg: string;
+  border: string;
+  text: string;
+};
+
+function chipColorsForStagedCard(c: Card): { bg: string; border: string; text: string } {
+  if (c.type === 'number') {
+    const cl = getNumColors(c.value ?? 0);
+    return { bg: '#FFFFFF', border: cl.border, text: cl.face };
+  }
+  if (c.type === 'wild') {
+    return { bg: '#EDE9FE', border: '#7C3AED', text: '#5B21B6' };
+  }
+  if (c.type === 'operation') {
+    const o = c.operation ?? '+';
+    const cl = opColors[o] ?? opColors['+'];
+    return { bg: cl.face, border: cl.dark, text: '#FFFFFF' };
+  }
+  return { bg: '#F3F4F6', border: '#6B7280', text: '#111827' };
+}
+
+/** מטא־צ'יפים ליד כפתורי הנחה — צבעים כמו הקלף, לפי סדר staging. */
+function stagedSelectionChipsDisplay(
+  staged: Card[],
+  equationResult: number | null,
+  maxWild: number,
+): StagedChipDisplay[] {
+  const numbers = staged.filter(c => c.type === 'number' || c.type === 'wild');
+  const opCard = staged.find(c => c.type === 'operation') ?? null;
+  const wildVal =
+    equationResult != null && numbers.some(c => c.type === 'wild')
+      ? computeWildValueInStaged(numbers, opCard, equationResult, maxWild)
+      : null;
+  return staged.map((c) => {
+    let label: string;
+    if (c.type === 'number') label = String(c.value ?? '·');
+    else if (c.type === 'wild') label = wildVal !== null ? String(wildVal) : '?';
+    else if (c.type === 'operation') {
+      const o = c.operation ?? '+';
+      label = opDisplay[o] ?? o;
+    } else label = '…';
+    const colors = chipColorsForStagedCard(c);
+    return { cardId: c.id, label, ...colors };
+  });
+}
+
+const STAGED_CHIP_ORBIT_SIZE = 44;
+const STAGED_CHIP_ORBIT_H = 48;
+const STAGED_CHIP_ORBIT_GAP = 6;
+
+/**
+ * פריסת צ'יפים בשתי עמודות (שמאל/ימין) בלי חפיפה ביניהם ובלי חפיפה עם בלוק הכפתורים.
+ * עמודות נוספות נפתחות אופקית כשיש יותר קלפים מגובה השורה.
+ */
+function layoutStagedChipOrbitPositions(
+  cardIds: string[],
+  containerW: number,
+  anchorLeft: number,
+  anchorWidth: number,
+  orbitHeight: number,
+  chipW: number = STAGED_CHIP_ORBIT_SIZE,
+  chipH: number = STAGED_CHIP_ORBIT_H,
+  gap: number = STAGED_CHIP_ORBIT_GAP,
+): { left: number; top: number }[] {
+  const n = cardIds.length;
+  if (n === 0) return [];
+
+  const margin = 8;
+  const anchorRight = anchorLeft + anchorWidth;
+  const leftColRight = anchorLeft - margin;
+  const rightColLeft = anchorRight + margin;
+  const leftColX = Math.max(2, leftColRight - chipW);
+  const rightColX = Math.min(containerW - chipW - 2, rightColLeft);
+  const rows = Math.max(1, Math.floor((orbitHeight - 8) / (chipH + gap)));
+
+  const numLeft = Math.ceil(n / 2);
+  const numRight = Math.floor(n / 2);
+
+  const buildSide = (count: number, startX: number, dir: -1 | 1): { left: number; top: number }[] => {
+    const out: { left: number; top: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const col = Math.floor(i / rows);
+      const row = i % rows;
+      let left = startX + dir * col * (chipW + gap);
+      left = Math.max(2, Math.min(left, containerW - chipW - 2));
+      if (dir === -1 && left + chipW > leftColRight) {
+        left = Math.max(2, leftColRight - chipW);
+      }
+      if (dir === 1 && left < rightColLeft) {
+        left = Math.min(containerW - chipW - 2, rightColLeft);
+      }
+      out.push({ left, top: 4 + row * (chipH + gap) });
+    }
+    return out;
+  };
+
+  const leftPos = buildSide(numLeft, leftColX, -1);
+  const rightPos = buildSide(numRight, rightColX, 1);
+
+  const merged: { left: number; top: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = i % 2 === 0 ? leftPos[Math.floor(i / 2)] : rightPos[Math.floor(i / 2)];
+    if (p) merged.push(p);
+  }
+  return merged;
+}
+
+function StagedChipOrbitLayer({
+  chips,
+  positions,
+  stagedCards,
+  dispatch,
+  t,
+}: {
+  chips: StagedChipDisplay[];
+  positions: { left: number; top: number }[];
+  stagedCards: Card[];
+  dispatch: (a: GameAction) => void;
+  t: (key: string, params?: MsgParams) => string;
+}) {
+  if (chips.length === 0) return null;
+  return (
+    <>
+      {chips.map((chip, i) => {
+        const card = stagedCards.find((c) => c.id === chip.cardId);
+        const pos = positions[i];
+        if (!card || !pos) return null;
+        return (
+          <TouchableOpacity
+            key={chip.cardId}
+            accessibilityRole="button"
+            accessibilityLabel={t('game.unstageChipA11y', { label: chip.label })}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            activeOpacity={0.85}
+            onPress={() => dispatch({ type: 'UNSTAGE_CARD', card })}
+            style={{
+              position: 'absolute',
+              left: pos.left,
+              top: pos.top,
+              width: STAGED_CHIP_ORBIT_SIZE,
+              minHeight: STAGED_CHIP_ORBIT_SIZE,
+              paddingHorizontal: chip.label.length > 1 ? 4 : 0,
+              borderRadius: STAGED_CHIP_ORBIT_SIZE / 2,
+              backgroundColor: chip.bg,
+              borderWidth: 2,
+              borderColor: chip.border,
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1,
+              ...Platform.select({
+                ios: {
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.14,
+                  shadowRadius: 2,
+                },
+                android: { elevation: 2 },
+              }),
+            }}
+          >
+            <Text
+              style={{
+                color: chip.text,
+                fontSize: chip.label.length > 2 ? 12 : 16,
+                fontWeight: '800',
+                textAlign: 'center',
+              }}
+              numberOfLines={1}
+            >
+              {chip.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </>
+  );
+}
 
 function OperationCardComp({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
   const op = card.operation ?? '+';
@@ -2507,7 +3276,10 @@ const pileRotations = [
 function DrawPile() {
   const { t } = useLocale();
   const { state, dispatch } = useGame();
-  const canDraw = (state.phase === 'pre-roll' || state.phase === 'building') && !state.hasPlayedCards && state.pendingFractionTarget === null;
+  const canDraw =
+    (state.phase === 'pre-roll' || state.phase === 'building' || state.phase === 'solved') &&
+    !state.hasPlayedCards &&
+    state.pendingFractionTarget === null;
   const count = state.drawPile.length;
   const layers = Math.min(count, 4);
   return (
@@ -2698,15 +3470,28 @@ function ResultsSlot({
 function ResultsStripNearPile({ resultsOpen, filteredResults, onSelectEquation }: { resultsOpen: boolean; filteredResults: EquationOption[]; onSelectEquation?: (eq: EquationOption) => void }) {
   const stripSlide = useRef(new Animated.Value(0)).current;
   const stripOpacity = useRef(new Animated.Value(0)).current;
+  /** Avoid re-running entrance when `filteredResults.length` changes while strip stays open (was jumping / flickering). */
+  const stripEntranceRef = useRef({ wasOpen: false, hadItems: false });
   useEffect(() => {
-    if (resultsOpen && filteredResults.length > 0) {
-      stripSlide.setValue(20);
-      stripOpacity.setValue(0);
-      Animated.parallel([
-        Animated.timing(stripOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-        Animated.spring(stripSlide, { toValue: 0, useNativeDriver: true, tension: 90, friction: 12 }),
-      ]).start();
+    const hasItems = filteredResults.length > 0;
+    if (!resultsOpen) {
+      stripEntranceRef.current = { wasOpen: false, hadItems: false };
+      return;
     }
+    if (!hasItems) {
+      stripEntranceRef.current = { wasOpen: true, hadItems: false };
+      return;
+    }
+    const prev = stripEntranceRef.current;
+    const needEntrance = !prev.wasOpen || !prev.hadItems;
+    stripEntranceRef.current = { wasOpen: true, hadItems: true };
+    if (!needEntrance) return;
+    stripSlide.setValue(20);
+    stripOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(stripOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(stripSlide, { toValue: 0, useNativeDriver: true, tension: 90, friction: 12 }),
+    ]).start();
   }, [resultsOpen, filteredResults.length]);
   if (!resultsOpen || filteredResults.length === 0) return null;
   return (
@@ -2723,30 +3508,49 @@ function ResultsStripNearPile({ resultsOpen, filteredResults, onSelectEquation }
 }
 
 function ResultsStripBelowTable({ resultsOpen, filteredResults, onSelectEquation }: { resultsOpen: boolean; filteredResults: EquationOption[]; onSelectEquation?: (eq: EquationOption) => void }) {
+  const normalizedResults = useMemo(() => {
+    const byResult = new Map<number, EquationOption>();
+    for (const option of filteredResults) {
+      if (!byResult.has(option.result)) byResult.set(option.result, option);
+    }
+    return [...byResult.values()].sort((a, b) => a.result - b.result);
+  }, [filteredResults]);
   const stripSlide = useRef(new Animated.Value(0)).current;
   const stripOpacity = useRef(new Animated.Value(0)).current;
+  const stripEntranceRef = useRef({ wasOpen: false, hadItems: false });
   useEffect(() => {
-    if (resultsOpen && filteredResults.length > 0) {
-      stripSlide.setValue(20);
-      stripOpacity.setValue(0);
-      Animated.parallel([
-        Animated.timing(stripOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-        Animated.spring(stripSlide, { toValue: 0, useNativeDriver: true, tension: 90, friction: 12 }),
-      ]).start();
+    const hasItems = normalizedResults.length > 0;
+    if (!resultsOpen) {
+      stripEntranceRef.current = { wasOpen: false, hadItems: false };
+      return;
     }
-  }, [resultsOpen, filteredResults.length]);
+    if (!hasItems) {
+      stripEntranceRef.current = { wasOpen: true, hadItems: false };
+      return;
+    }
+    const prev = stripEntranceRef.current;
+    const needEntrance = !prev.wasOpen || !prev.hadItems;
+    stripEntranceRef.current = { wasOpen: true, hadItems: true };
+    if (!needEntrance) return;
+    stripSlide.setValue(20);
+    stripOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(stripOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(stripSlide, { toValue: 0, useNativeDriver: true, tension: 90, friction: 12 }),
+    ]).start();
+  }, [resultsOpen, normalizedResults.length]);
   useEffect(() => {
     if (!resultsOpen) return;
     // #region agent log
     fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c86de'},body:JSON.stringify({sessionId:'8c86de',runId:'run1',hypothesisId:'H2',location:'index.tsx:2156',message:'ResultsStripBelowTable rendered',data:{resultsOpen,filteredLen:filteredResults.length,filteredResults:filteredResults.map(r=>r.result).slice(0,12)},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
   }, [resultsOpen, filteredResults]);
-  if (!resultsOpen || filteredResults.length === 0) return null;
+  if (!resultsOpen || normalizedResults.length === 0) return null;
   return (
     <Animated.View style={{flexShrink:0,width:'100%',alignItems:'center',justifyContent:'center',opacity:stripOpacity,transform:[{translateY:stripSlide}]}}>
       <View style={{minHeight:MINI_H + 16,backgroundColor:'transparent',paddingVertical:10,paddingHorizontal:12,width:'100%',maxWidth:360,alignItems:'center'}}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:10,paddingHorizontal:6,alignItems:'center',justifyContent:'center'}}>
-          {filteredResults.map((t, i) => (
+          {normalizedResults.map((t, i) => (
             <View key={`${t.equation}-${t.result}-${i}`} style={{width:MINI_W + 14}}>
               <MiniResultCard value={t.result} index={i} onPress={onSelectEquation ? () => onSelectEquation(t) : undefined} />
             </View>
@@ -2907,6 +3711,32 @@ function ResultsChip({ onPress, matchCount }: { onPress: () => void; matchCount:
   );
 }
 
+/**
+ * Format an equation string for display in the SolveExerciseChip.
+ * Converts "a op1 b op2 c = r" → "(a op1 b) op2 c = r" so the evaluation
+ * order is clear. Keeps ASCII operators on Android (font issue).
+ */
+function formatEquationForDisplay(equation: string): string {
+  // iOS/web: upgrade to Unicode math glyphs. Android: keep ASCII.
+  const isAndroid = Platform.OS === 'android';
+  const norm = isAndroid
+    ? equation
+    : equation.replace(/ x /g, ' \u00d7 ').replace(/ - /g, ' \u2212 ');
+  // Match 3-term: a op b op c = r (both ASCII and Unicode operators)
+  const opPat = '[+\\-x\\u00d7\\u2212\\u00f7/]';
+  const re = new RegExp(`^(-?\\d+)\\s+(${opPat})\\s+(-?\\d+)\\s+(${opPat})\\s+(-?\\d+)\\s+=\\s+(-?\\d+)$`);
+  const match = norm.match(re);
+  if (match) {
+    const [, a, op1, b, op2, c, r] = match;
+    const highPrec = (op: string) => op === 'x' || op === '\u00d7' || op === '\u00f7' || op === '/';
+    if (highPrec(op2) && !highPrec(op1)) {
+      return `${a} ${op1} (${b} ${op2} ${c}) = ${r}`;
+    }
+    return `(${a} ${op1} ${b}) ${op2} ${c} = ${r}`;
+  }
+  return norm;
+}
+
 function SolveExerciseChip({ equation, onPress, pulseKey = 0 }: { equation: string; onPress: () => void; pulseKey?: number }) {
   const pressAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -2994,10 +3824,13 @@ function SolveExerciseChip({ equation, onPress, pulseKey = 0 }: { equation: stri
             position: 'absolute', top: 0, left: 0, right: 0, height: CHIP_H,
             alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
           }}>
-            <Text numberOfLines={3} style={{
-              color: '#FECACA', fontSize: 10, fontWeight: '900', textAlign: 'center', lineHeight: 12,
-              textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
-            }}>{equation}</Text>
+            <Text numberOfLines={3} allowFontScaling={false} style={{
+              color: '#FECACA', fontSize: 11, fontWeight: '900', textAlign: 'center', lineHeight: 13,
+              writingDirection: 'ltr',
+              ...(Platform.OS !== 'android' ? {
+                textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
+              } : {}),
+            }}>{'\u2066'}{formatEquationForDisplay(equation)}{'\u2069'}</Text>
           </View>
         </Animated.View>
       </TouchableOpacity>
@@ -3188,8 +4021,6 @@ function CelebrationFlash({ onDone }: { onDone: () => void }) {
 //  EQUATION BUILDER
 // ═══════════════════════════════════════════════════════════════
 
-const EQ_OPS: (string | null)[] = [null, '+', '-', '×', '÷'];
-
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const v = hex.replace('#', '');
   return {
@@ -3231,11 +4062,16 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const { state, dispatch } = useGame();
   const { t } = useLocale();
 
+  const eqOpChoices = useMemo(
+    () => buildEqOpDisplayCycle(state.enabledOperators),
+    [state.enabledOperators],
+  );
+
   // Dice placement: index into diceValues (0-2), or null — starts empty, player fills manually
   const [dice1, setDice1] = useState<number | null>(null);
   const [dice2, setDice2] = useState<number | null>(null);
   const [dice3, setDice3] = useState<number | null>(null);
-  // Operators: null = empty, tap-to-cycle through EQ_OPS
+  // Operators: null = empty, tap-to-cycle through allowed ops for current stage
   const [op1, setOp1] = useState<string | null>(null);
   const [op2, setOp2] = useState<string | null>(null);
   // resultsOpen removed — possible results moved to SLOT 2
@@ -3251,7 +4087,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const [showingFace, setShowingFace] = useState([true, true, true]);
 
   // Reset on new dice roll + trigger staggered drop-in → pause → flip → equation
-  const diceKey = state.dice ? `${state.dice.die1}-${state.dice.die2}-${state.dice.die3}` : '';
+  const diceKey = state.dice ? `${state.diceRollSeq}-${state.dice.die1}-${state.dice.die2}-${state.dice.die3}` : '';
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => {
     // Clear any pending timers from previous roll
@@ -3304,6 +4140,11 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     return () => { timersRef.current.forEach(clearTimeout); timersRef.current = []; };
   }, [diceKey]);
 
+  useEffect(() => {
+    setOp1((prev) => (prev != null && eqOpChoices.indexOf(prev) === -1 ? null : prev));
+    setOp2((prev) => (prev != null && eqOpChoices.indexOf(prev) === -1 ? null : prev));
+  }, [eqOpChoices]);
+
   const showBuilder = (state.phase === 'building' || state.phase === 'solved') && state.dice && state.pendingFractionTarget === null;
   const isSolved = state.phase === 'solved';
   const diceValues = state.dice ? [state.dice.die1, state.dice.die2, state.dice.die3] : [0, 0, 0];
@@ -3335,13 +4176,14 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     else setDice3(null);
   };
 
-  // Cycle operator on tap: null → + → − → × → ÷ → null
+  // Cycle operator on tap — רק אופרטורים שמותרים בשלב (כמו generateValidTargets)
   const cycleOp = (which: 1 | 2) => {
     if (!interactive) return;
     if (isSolved) return;
     const cur = which === 1 ? op1 : op2;
-    const idx = EQ_OPS.indexOf(cur);
-    const next = EQ_OPS[(idx + 1) % EQ_OPS.length];
+    const idx = eqOpChoices.indexOf(cur);
+    const safeIdx = idx === -1 ? 0 : idx;
+    const next = eqOpChoices[(safeIdx + 1) % eqOpChoices.length];
     if (which === 1) setOp1(next);
     else setOp2(next);
   };
@@ -3394,8 +4236,18 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   }
   if (finalResult !== null && (typeof finalResult !== 'number' || !Number.isFinite(finalResult))) finalResult = null;
 
+  const opsDisallowed =
+    (d1v !== null && d2v !== null && effectiveOp1 !== null && !isOperationAllowedForStage(effectiveOp1, state.enabledOperators)) ||
+    (d1v !== null &&
+      d2v !== null &&
+      d3v !== null &&
+      effectiveOp1 !== null &&
+      effectiveOp2 !== null &&
+      !isOperationAllowedForStage(effectiveOp2, state.enabledOperators));
+
   // Error states
   const hasError =
+    opsDisallowed ||
     (d1v !== null && d2v !== null && effectiveOp1 !== null && subResult === null) ||
     (d1v !== null &&
       d2v !== null &&
@@ -3447,7 +4299,8 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     if (state.equationHandPick) return;
     let display: string;
     if (d3v !== null && effectiveOp2 !== null) {
-      display = `${d1v} ${effectiveOp1} ${d2v} ${effectiveOp2} ${d3v} = ${finalResult}`;
+      // Readability: show the first pair in parentheses, then extend.
+      display = `(${d1v} ${effectiveOp1} ${d2v}) ${effectiveOp2} ${d3v} = ${finalResult}`;
     } else {
       display = `${d1v} ${effectiveOp1} ${d2v} = ${finalResult}`;
     }
@@ -3476,9 +4329,9 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const stableConfirm = useCallback(() => confirmRef.current(), []);
   useEffect(() => {
     if (onConfirmChange) {
-      onConfirmChange(ok && !isSolved ? { onConfirm: stableConfirm } : null);
+      onConfirmChange(ok && !isSolved && interactive ? { onConfirm: stableConfirm } : null);
     }
-  }, [ok, isSolved]);
+  }, [ok, isSolved, interactive, onConfirmChange, stableConfirm]);
   useEffect(() => () => onConfirmChange?.(null), []);
 
   // Notify parent about result state for rendering outside the table
@@ -3498,7 +4351,6 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     borderColor: withAlpha(timerColor, 0.72),
     backgroundColor: withAlpha(timerColor, 0.16),
   } : null;
-  const bracketColor = timerColor ?? '#FACC15';
   const equalsColor = timerColor ?? '#FFD700';
   const resultBoxDynamic = (!hasError && !ok && timerColor) ? {
     borderColor: withAlpha(timerColor, 0.82),
@@ -3550,50 +4402,68 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       // Joker: show joker card underneath with operation card tilted on top
       if (isJoker) {
         return (
-          <TouchableOpacity onPress={onPress} activeOpacity={0.7} disabled={isSolved}
-            style={{ width: 58, height: 58, alignItems: 'center', justifyContent: 'center' }}>
-            {/* Joker card underneath — 60% visible */}
-            <View style={{
-              position: 'absolute', width: 42, height: 50, borderRadius: 9,
-              backgroundColor: '#FFF', borderWidth: 2, borderColor: '#A78BFA',
-              alignItems: 'center', justifyContent: 'center',
-              transform: [{ rotate: '-8deg' }, { translateX: -4 }, { translateY: 2 }],
-            }}>
-              <Text style={{ fontSize: 16 }}>🃏</Text>
-            </View>
-            {/* Operation card on top, tilted */}
-            <View style={{
-              width: 42, height: 50, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
-              backgroundColor: '#FFF', borderWidth: 2, borderColor: (opColors[handOp] ?? opColors['+']).face,
-              transform: [{ rotate: '10deg' }, { translateX: 4 }, { translateY: -2 }],
-              ...Platform.select({
-                ios: { shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
-                android: { elevation: 4 },
-              }),
-            }}>
-              <Text style={{ fontSize: 20, fontWeight: '900', color: (opColors[handOp] ?? opColors['+']).face }}>{symDisplay}</Text>
+          <TouchableOpacity
+            onPress={onPress}
+            activeOpacity={0.7}
+            disabled={isSolved}
+            style={[eqS.opBtn, { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const }]}
+          >
+            <View style={{ width: 50, height: 50, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{
+                position: 'absolute', width: 32, height: 38, borderRadius: 8,
+                backgroundColor: '#FFF', borderWidth: 2, borderColor: '#A78BFA',
+                alignItems: 'center', justifyContent: 'center',
+                transform: [{ rotate: '-7deg' }, { translateX: -3 }, { translateY: 1 }],
+              }}>
+                <Text style={{ fontSize: 12 }}>🃏</Text>
+              </View>
+              <View style={{
+                width: 32, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+                backgroundColor: '#FFF', borderWidth: 2, borderColor: (opColors[handOp] ?? opColors['+']).face,
+                transform: [{ rotate: '7deg' }, { translateX: 3 }, { translateY: -1 }],
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
+                  android: { elevation: 3 },
+                }),
+              }}>
+                <Text style={{ fontSize: 16, fontWeight: '900', color: (opColors[handOp] ?? opColors['+']).face }}>{symDisplay}</Text>
+              </View>
             </View>
           </TouchableOpacity>
         );
       }
 
-      // Regular operation card
+      // Regular operation card — אותו תא 52×52 כמו סלוט קובייה כדי שלא ידרס את המספרים
       return (
-        <TouchableOpacity onPress={onPress} activeOpacity={0.7} disabled={isSolved}
-          style={{
-            width: 42, height: 50, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+        <TouchableOpacity
+          onPress={onPress}
+          activeOpacity={0.7}
+          disabled={isSolved}
+          style={[eqS.opBtn, { alignItems: 'center', justifyContent: 'center' }]}
+        >
+          <View style={{
+            width: 40, height: 46, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
             backgroundColor: '#FFF', borderWidth: 2, borderColor: cardBorder,
             ...Platform.select({
-              ios: { shadowColor: cardBg, shadowOpacity: 0.5, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-              android: { elevation: 4 },
+              ios: { shadowColor: cardBg, shadowOpacity: 0.45, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
+              android: { elevation: 3 },
             }),
           }}>
-          <Text style={{ fontSize: 20, fontWeight: '900', color: cardBg }}>{symDisplay}</Text>
+            <Text style={{ fontSize: 18, fontWeight: '900', color: cardBg }}>{symDisplay}</Text>
+          </View>
         </TouchableOpacity>
       );
     }
 
-    const isDivision = displayOp === '÷';
+    // Android: Fredoka_700Bold doesn't include Unicode math glyphs (×, −, ÷).
+    // Use ASCII substitutes to guarantee they render on every device.
+    const useAsciiOps = Platform.OS === 'android';
+    const normalizedDisplayOp = displayOp === 'x'
+      ? (useAsciiOps ? 'x' : '×')
+      : displayOp === '-'
+        ? (useAsciiOps ? '-' : '−')
+        : displayOp;
+    const isDivision = displayOp === '÷' || displayOp === '/';
     const divCl = opColors['/'];
     return (
       <TouchableOpacity
@@ -3613,8 +4483,8 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             <View style={{ position: 'absolute', bottom: 10, left: 23, width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF' }} />
           </View>
         ) : (
-          <Text style={[displayOp ? eqS.opBtnFilledTxt : eqS.opBtnEmptyTxt]}>
-            {displayOp || '⬦'}
+            <Text allowFontScaling={false} style={[normalizedDisplayOp ? eqS.opBtnFilledTxt : eqS.opBtnEmptyTxt]}>
+            {normalizedDisplayOp || '⬦'}
           </Text>
         )}
       </TouchableOpacity>
@@ -3667,37 +4537,49 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
         </View>
       )}
 
-      {/* ═══ Single equation row: ( d1 OP1 d2 ) OP2 d3 = result — רק המשוואה, כפתור איפוס הועבר לאיזור תוצאות אפשריות ═══ */}
-      <Animated.View style={{ flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', justifyContent: 'center', opacity: eqRowAnim, transform: [{ translateY: eqRowAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) }], maxWidth: '100%', flexShrink: 1 }}>
-        <View style={[eqS.eqRow, { maxWidth: '100%' }, eqRowDynamicStyle]}>
-          <Text style={[eqS.bracket, { color: bracketColor }]}>(</Text>
-          {renderDiceSlot(dice1, 1)}
-          {renderOpBtn(1, op1, dice1 !== null)}
-          {renderDiceSlot(dice2, 2)}
-          <Text style={[eqS.bracket, { color: bracketColor }]}>)</Text>
-          <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, !show3rd && { opacity: 0.25 }]}>
+      {/* ═══ שורת משוואה אחת: (d1·op1·d2) = תת-תוצאה · op2 · d3 — כולם באותה שורה, nowrap ═══ */}
+      <Animated.View style={{ width: '100%', maxWidth: '100%', alignItems: 'center', opacity: eqRowAnim, transform: [{ translateY: eqRowAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] }}>
+        <View style={[eqS.eqRow, eqRowDynamicStyle]}>
+          {show3rd ? <Text style={eqS.bracket} allowFontScaling={false}>(</Text> : null}
+          <View style={eqS.eqChunk}>
+            {renderDiceSlot(dice1, 1)}
+            {renderOpBtn(1, op1, dice1 !== null)}
+            {renderDiceSlot(dice2, 2)}
+          </View>
+          {show3rd ? (
+            <>
+              <Text style={eqS.bracket} allowFontScaling={false}>)</Text>
+              {/* Keep a fixed-width middle segment so the whole equation stays centered and does not jump */}
+              <Text style={[eqS.equalsSmall, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>=</Text>
+              <View style={eqS.subResultBox}>
+                <Text style={[eqS.subResultVal, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>
+                  {subResult !== null ? String(subResult) : '0'}
+                </Text>
+              </View>
+            </>
+          ) : null}
+          <View style={[eqS.eqChunk, !show3rd && { opacity: 0.25 }]}>
             {renderOpBtn(2, op2, show3rd)}
             {renderDiceSlot(dice3, 3)}
           </View>
         </View>
       </Animated.View>
-
       {/* תוצאת התרגיל — מעט למעלה, רקע צבעוני (לא שקוף) */}
       <View style={{ alignItems: 'center', marginTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={{ fontSize: 22, fontWeight: '800', color: equalsColor }}>=</Text>
           <View style={[{
-            minWidth: 56, height: 48, borderRadius: 12, borderWidth: 2,
+            minWidth: 76, height: 48, borderRadius: 12, borderWidth: 2,
             borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : '#A16207',
             backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : '#854D0E',
-            alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12,
+            alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
           }, resultBoxDynamic]}>
             {hasError ? (
-              <Text style={{ fontSize: 20, fontWeight: '900', color: '#FFF' }}>✕</Text>
+              <Text allowFontScaling={false} style={{ fontSize: 20, fontWeight: '900', color: '#FFF' }}>✕</Text>
             ) : finalResult !== null ? (
-              <Text style={{ fontSize: 26, fontWeight: '900', color: resultTextColor }}>{finalResult}</Text>
+              <Text allowFontScaling={false} numberOfLines={1} style={{ fontSize: 26, fontWeight: '900', color: resultTextColor }}>{finalResult}</Text>
             ) : (
-              <Text style={{ fontSize: 24, fontWeight: '800', color: 'rgba(255,255,255,0.4)' }}>?</Text>
+              <Text allowFontScaling={false} style={{ fontSize: 24, fontWeight: '800', color: 'rgba(255,255,255,0.4)' }}>?</Text>
             )}
           </View>
         </View>
@@ -3714,7 +4596,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   );
 });
 const eqS = StyleSheet.create({
-  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'hidden' as const },
+  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'visible' as const },
   title: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '700', textAlign: 'center' },
   diceRow: { flexDirection: 'row', gap: 12, justifyContent: 'center', direction: 'ltr' as any },
   diceBtn: { width: 56, height: 56, borderRadius: 14, backgroundColor: 'rgba(255,200,60,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,200,60,0.2)', overflow: 'hidden' },
@@ -3722,21 +4604,53 @@ const eqS = StyleSheet.create({
   diceBtnUsed: { opacity: 0.25 },
   diceBtnT: { fontSize: 26, fontWeight: '800', color: '#e8d84a' },
   diceBtnUsedT: { color: 'rgba(255,200,60,0.3)' },
-  // Equation row — סלוטים ופעולות מוגדלים לנוחות לחיצה
-  eqRow: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 6, justifyContent: 'center', alignSelf: 'center' as any, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
-  bracket: { fontSize: 36, fontWeight: '700', color: '#FACC15', marginHorizontal: 0, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  /** שורת משוואה אחת — כל הסלוטים והסוגריים באותה שורה; ללא wrap */
+  eqRow: {
+    width: 'auto',
+    maxWidth: '95%',
+    alignSelf: 'center' as any,
+    flexDirection: 'row',
+    direction: 'ltr' as any,
+    flexWrap: 'nowrap' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    columnGap: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  /** קבוצה שלמה של סלוטים+סימנים — לא נשברת באמצע */
+  eqChunk: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 6, flexShrink: 0 },
+  bracket: { fontSize: 28, fontWeight: '700', color: '#CA8A04', marginHorizontal: 0, textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  equalsSmall: { fontSize: 14, fontWeight: '800', color: 'rgba(0,0,0,0.5)', marginHorizontal: 1 },
+  subResultBox: {
+    minWidth: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  subResultVal: { fontSize: 14, fontWeight: '800', color: '#1a1a2e' },
+  hiddenMiddle: { opacity: 0 },
   // סלוטים למספרים — 52×52 לנוחות
-  slot: { width: 52, height: 52, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  slot: { width: 52, height: 52, minWidth: 52, minHeight: 52, flexShrink: 0, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const },
   slotFilled: { backgroundColor: '#FFF', borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 4 } }) },
   slotEmpty: { borderWidth: 2, borderStyle: 'dashed' as any, borderColor: 'rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.02)' },
   slotVal: { fontSize: 24, fontWeight: '800', color: '#1a1a2e' },
   slotPlaceholder: { fontSize: 20, fontWeight: '700', color: 'rgba(255,255,255,0.15)' },
   // כפתור פעולה — אותו גודל כמו סלוט מספר (52×52) וגופן כמו slotVal
-  opBtn: { width: 52, height: 52, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  opBtn: { width: 52, height: 52, minWidth: 52, minHeight: 52, flexShrink: 0, borderRadius: 12, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' as const },
   opBtnEmpty: { borderWidth: 2, borderStyle: 'dashed' as any, borderColor: '#F9A825', backgroundColor: 'transparent' },
   opBtnFilled: { backgroundColor: '#F9A825', ...Platform.select({ ios: { shadowColor: 'rgba(249,168,37,0.3)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 6 }, android: { elevation: 4 } }) },
-  opBtnEmptyTxt: { fontSize: 24, fontWeight: '800', color: '#F9A825' },
-  opBtnFilledTxt: { fontSize: 24, fontWeight: '800', color: '#1a1510' },
+  opBtnEmptyTxt: { fontSize: 26, fontWeight: '800', color: '#F9A825', textAlign: 'center' as const },
+  opBtnFilledTxt: { fontSize: 28, fontWeight: Platform.OS === 'android' ? '800' : '900', color: '#FFFFFF', textAlign: 'center' as const, includeFontPadding: false, lineHeight: 32 },
   eqEquals: { fontSize: 24, fontWeight: '800', color: '#FFD700', marginHorizontal: 2 },
   resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,215,0,0.15)', backgroundColor: 'rgba(255,215,0,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
   resultVal: { fontSize: 26, fontWeight: '800', color: '#FFD700' },
@@ -3846,7 +4760,7 @@ const FAN_DEFAULT_SPACING = 1.0;
 const PINCH_CARD_THRESHOLD = 8;
 const FAN_DRAG_START_DX = 6;
 
-function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandPendingId, defenseValidCardIds, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false }: {
+function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandPendingId, defenseValidCardIds, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false, botTeachingActive = false, botCandidateCardId = null, botTeachingDifficulty = 'medium' }: {
   cards: Card[];
   stagedCardIds: Set<string>;
   equationHandPlacedIds: Set<string>;
@@ -3856,6 +4770,9 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
   onTap: (card: Card) => void;
   onCenterCard?: (card: Card | null) => void;
   waitingMode?: boolean;
+  botTeachingActive?: boolean;
+  botCandidateCardId?: string | null;
+  botTeachingDifficulty?: BotDifficulty;
 }) {
   const count = cards.length;
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -3884,6 +4801,57 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     loop.start();
     return () => loop.stop();
   }, [waitingMode, waitingPulse]);
+  const botScanOffset = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!botTeachingActive) {
+      botScanOffset.stopAnimation();
+      botScanOffset.setValue(0);
+      return;
+    }
+    // Move cards through the fan (true scan), not just a lateral sway.
+    const maxScanSpan = Math.max(0.8, Math.min(2.6, Math.max(0, count - 1) * 0.45));
+    const baseDuration = botTeachingDifficulty === 'easy' ? 900 : 700;
+    if (botCandidateCardId) {
+      const targetIdx = cards.findIndex((c) => c.id === botCandidateCardId);
+      if (targetIdx >= 0) {
+        const centeredTarget = Math.max(
+          -maxScanSpan,
+          Math.min(maxScanSpan, targetIdx - scrollRef.current),
+        );
+        Animated.timing(botScanOffset, {
+          toValue: centeredTarget,
+          duration: 320,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.cubic),
+        }).start();
+        return;
+      }
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(botScanOffset, {
+          toValue: maxScanSpan,
+          duration: baseDuration,
+          useNativeDriver: true,
+          easing: Easing.inOut(Easing.sin),
+        }),
+        Animated.timing(botScanOffset, {
+          toValue: -maxScanSpan,
+          duration: baseDuration * 2,
+          useNativeDriver: true,
+          easing: Easing.inOut(Easing.sin),
+        }),
+        Animated.timing(botScanOffset, {
+          toValue: 0,
+          duration: baseDuration,
+          useNativeDriver: true,
+          easing: Easing.inOut(Easing.sin),
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [botTeachingActive, botTeachingDifficulty, botCandidateCardId, botScanOffset, cards, count]);
 
   const dragStartVal = useRef(0);
   const velocityRef = useRef(0);
@@ -4066,12 +5034,14 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         const isDefenseValid = defenseValidCardIds !== null && defenseValidCardIds.has(card.id);
         const isDefenseInvalid = defenseValidCardIds !== null && !defenseValidCardIds.has(card.id);
         const isForward = false;
+        const isBotCandidate = botTeachingActive && botCandidateCardId === card.id;
 
         // All interpolations from scrollX directly. When scrollX===i, card i is center.
         const ir = [i - 5, i - 3, i - 2, i - 1, i, i + 1, i + 2, i + 3, i + 5];
+        const scanScrollX = Animated.add(scrollX, botScanOffset);
 
         const maxA = FAN_MAX_ANGLE * sp;
-        const rotateStr = scrollX.interpolate({
+        const rotateStr = scanScrollX.interpolate({
           inputRange: ir,
           outputRange: [
             `${-maxA}deg`, `${-maxA}deg`,
@@ -4082,35 +5052,44 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
           ],
         });
 
-        const scaleBase = scrollX.interpolate({
+        const scaleBase = scanScrollX.interpolate({
           inputRange: [i - 3, i - 1, i, i + 1, i + 3],
           outputRange: [FAN_EDGE_SCALE, FAN_EDGE_SCALE + 0.04, FAN_CENTER_SCALE, FAN_EDGE_SCALE + 0.04, FAN_EDGE_SCALE],
           extrapolate: 'clamp',
         });
         const scale = isStaged ? Animated.multiply(scaleBase, 1.08) : scaleBase;
 
-        const translateX = scrollX.interpolate({
+        const translateX = scanScrollX.interpolate({
           inputRange: ir,
           outputRange: [-240*sp, -175*sp, -120*sp, -62*sp, 0, 62*sp, 120*sp, 175*sp, 240*sp],
         });
+        const candidateLift = isBotCandidate ? -8 : 0;
+        const candidateScaleBoost = isBotCandidate ? 1.1 : 1;
 
-        const arcY = scrollX.interpolate({
+        const arcY = scanScrollX.interpolate({
           inputRange: [i - 3, i - 2, i - 1, i, i + 1, i + 2, i + 3],
           outputRange: [50, 28, 10, 0, 10, 28, 50],
           extrapolate: 'clamp',
         });
 
-        const opacity = scrollX.interpolate({
+        const opacity = scanScrollX.interpolate({
           inputRange: [i - 4, i - 3, i, i + 3, i + 4],
           outputRange: [0.2, 0.55, 1, 0.55, 0.2],
           extrapolate: 'clamp',
         });
 
-        const glowOpacity = scrollX.interpolate({
+        const glowOpacity = scanScrollX.interpolate({
           inputRange: [i - 0.8, i - 0.25, i, i + 0.25, i + 0.8],
           outputRange: [0, 0, 1, 0, 0],
           extrapolate: 'clamp',
         });
+
+        const distFromCenter = Math.abs(i - centerIdx);
+        const zBase = (count - distFromCenter) * 10 + i;
+        const zIndex = pressedCardId === card.id ? 100000 + zBase : zBase;
+        const edgeHitSlop = distFromCenter >= 2
+          ? { top: 14, bottom: 14, left: 22, right: 22 }
+          : { top: 10, bottom: 10, left: 10, right: 10 };
 
         return (
           <Animated.View
@@ -4123,12 +5102,16 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
               height: FAN_CARD_H,
               transform: [
                 { translateX },
-                { translateY: arcY },
+                { translateY: Animated.add(arcY, candidateLift) },
                 { rotate: rotateStr },
-                { scale: pressedCardId === card.id ? Animated.multiply(scale, 1.06) : scale },
+                {
+                  scale: pressedCardId === card.id
+                    ? Animated.multiply(scale, 1.06 * candidateScaleBoost)
+                    : Animated.multiply(scale, candidateScaleBoost),
+                },
               ],
               opacity,
-              zIndex: count - Math.abs(i - centerIdx),
+              zIndex,
             }}
           >
             {/* Sphera glow — tight golden border ring with focused bloom */}
@@ -4203,6 +5186,22 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
                 }}
               />
             )}
+            {isBotCandidate && !isStaged && (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: -9,
+                  left: -9,
+                  right: -9,
+                  bottom: -9,
+                  borderRadius: 18,
+                  borderWidth: 2,
+                  borderColor: '#93C5FD',
+                  backgroundColor: 'rgba(59,130,246,0.16)',
+                }}
+              />
+            )}
             {/* Gold glow behind forwardable operation card */}
             {isForward && (
               <View style={{
@@ -4213,7 +5212,7 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
             )}
             <TouchableOpacity
               activeOpacity={0.8}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              hitSlop={edgeHitSlop}
               onPressIn={() => { if (!isDefenseInvalid && !waitingMode) setPressedCardId(card.id); }}
               onPressOut={() => setPressedCardId(null)}
               onPress={() => { setPressedCardId(null); onTap(card); }}
@@ -4300,6 +5299,16 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
   const td = state.discardPile[state.discardPile.length-1];
   const hasFracDefense = state.pendingFractionTarget !== null;
+  const botTeachingPhase = getBotTeachingPhase(state);
+  const isLocalBotTurn =
+    !useOnlineMyHand &&
+    !!state.botConfig &&
+    state.botConfig.playerIds.includes(cp.id) &&
+    botTeachingPhase !== 'done';
+  const botCandidateCardId =
+    isLocalBotTurn && (botTeachingPhase === 'pick' || botTeachingPhase === 'place')
+      ? state.botPendingStagedIds?.[0] ?? null
+      : null;
   const maxWildDefense = state.mathRangeMax;
   const wildDefensePickValues = useMemo(
     () => (hasFracDefense && state.fractionPenalty > 0 ? validWildValuesForFractionDefense(state.fractionPenalty, maxWildDefense) : []),
@@ -4505,7 +5514,20 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
         </View>
       </AppModal>
       <View style={{ width: '100%', overflow: 'visible' }} pointerEvents="box-none">
-        <SimpleHand cards={sorted} stagedCardIds={stagedIds} equationHandPlacedIds={equationHandPlacedIds} equationHandPendingId={equationHandPendingId} defenseValidCardIds={defenseValidIds} forwardCardId={forwardCardId} onTap={tap} onCenterCard={onCenterCard} waitingMode={isOnlineWaiting} />
+        <SimpleHand
+          cards={sorted}
+          stagedCardIds={stagedIds}
+          equationHandPlacedIds={equationHandPlacedIds}
+          equationHandPendingId={equationHandPendingId}
+          defenseValidCardIds={defenseValidIds}
+          forwardCardId={forwardCardId}
+          onTap={tap}
+          onCenterCard={onCenterCard}
+          waitingMode={isOnlineWaiting}
+          botTeachingActive={isLocalBotTurn}
+          botCandidateCardId={botCandidateCardId}
+          botTeachingDifficulty={state.botConfig?.difficulty ?? 'medium'}
+        />
       </View>
     </>
   );
@@ -4566,39 +5588,105 @@ function BottomControlsBar() {
     dispatch({ type: 'CONFIRM_STAGED' });
   }, [state.stagedCards.length, dispatch, playPlaceMultipleSound, soundOn]);
 
+  const BOTTOM_PLACE_BTN_W = 160;
+  const bottomRowW = BOTTOM_PLACE_BTN_W;
+  /** לפחות רוחב שורת הכפתורים + מרווח — אחרת anchor שלילי והכפתורים חופפים */
+  const bottomOrbitW = Math.max(bottomRowW + 24, Math.min(SCREEN_W - 24, 400));
+  const bottomAnchorLeft = (bottomOrbitW - bottomRowW) / 2;
+  const barChipsDisplay = useMemo(
+    () =>
+      hasStaged
+        ? stagedSelectionChipsDisplay(state.stagedCards, state.equationResult, state.mathRangeMax ?? 25)
+        : [],
+    [hasStaged, state.stagedCards, state.equationResult, state.mathRangeMax],
+  );
+  const barOrbitH = Math.max(
+    88,
+    12 + Math.ceil(barChipsDisplay.length / 2) * (STAGED_CHIP_ORBIT_H + STAGED_CHIP_ORBIT_GAP),
+  );
+  const barChipPositions = useMemo(
+    () =>
+      layoutStagedChipOrbitPositions(
+        barChipsDisplay.map((c) => c.cardId),
+        bottomOrbitW,
+        bottomAnchorLeft,
+        bottomRowW,
+        barOrbitH,
+      ),
+    [barChipsDisplay, bottomOrbitW, bottomAnchorLeft, barOrbitH],
+  );
+
   return (
     <View style={{minHeight:40,alignItems:'center',justifyContent:'center',paddingHorizontal:0}}>
       {showSolved ? (
-        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:12,width:'100%'}}>
-          {hasStaged && (
+        hasStaged ? (
+          <View
+            style={{
+              width: bottomOrbitW,
+              minHeight: barOrbitH,
+              position: 'relative',
+              alignSelf: 'center',
+            }}
+            pointerEvents="box-none"
+          >
+            <StagedChipOrbitLayer
+              chips={barChipsDisplay}
+              positions={barChipPositions}
+              stagedCards={state.stagedCards}
+              dispatch={dispatch}
+              t={t}
+            />
             <View
-              style={[
-                { flex: 1.2, alignItems: 'stretch' },
-                Platform.select({
-                  ios: {
-                    shadowColor: '#FF6B00',
-                    shadowOffset: { width: 0, height: 0 },
-                    shadowOpacity: 0.9,
-                    shadowRadius: 18,
-                  },
-                  android: { elevation: 16 },
-                }),
-              ]}
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                left: bottomAnchorLeft,
+                top: 22,
+                zIndex: 2,
+                width: bottomRowW,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
             >
-              <LulosButton
-                text={t('game.placeCards')}
-                color="orange"
-                width={140}
-                height={44}
-                fontSize={15}
-                textColor="#FFFFFF"
-                onPress={onPlaceCards}
-                style={{ alignSelf: 'stretch' }}
-              />
+              <View
+                style={[
+                  { flexShrink: 0, width: BOTTOM_PLACE_BTN_W },
+                  Platform.select({
+                    ios: {
+                      shadowColor: '#FF6B00',
+                      shadowOffset: { width: 0, height: 0 },
+                      shadowOpacity: 0.9,
+                      shadowRadius: 18,
+                    },
+                    android: { elevation: 16 },
+                  }),
+                ]}
+              >
+                <LulosButton
+                  text={t('game.placeCards')}
+                  color="orange"
+                  width={BOTTOM_PLACE_BTN_W}
+                  height={44}
+                  fontSize={15}
+                  textColor="#FFFFFF"
+                  onPress={onPlaceCards}
+                />
+              </View>
             </View>
-          )}
-          <LulosButton text={t('game.backToEquation')} color="yellow" textColor="#FFFFFF" width={160} height={44} fontSize={17} onPress={()=>dispatch({type:'REVERT_TO_BUILDING'})} style={{flex:1}} />
-        </View>
+          </View>
+        ) : (
+          <View style={{ width: '100%', alignItems: 'center' }}>
+            <LulosButton
+              text={t('game.pickCards')}
+              color="orange"
+              textColor="#FFFFFF"
+              width={160}
+              height={44}
+              fontSize={17}
+              onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })}
+            />
+          </View>
+        )
       ) : null}
     </View>
   );
@@ -4845,28 +5933,35 @@ const FUTURE_LAB_SPECS: { id: FutureLabId; detailCount: number }[] = [
   { id: 'steal', detailCount: 3 },
 ];
 
-function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () => void; onOpenSoundDemo?: () => void }) {
+function StartScreen({ onBackToChoice, onOpenSoundDemo, onHowToPlay }: { onBackToChoice?: () => void; onOpenSoundDemo?: () => void; onHowToPlay?: () => void }) {
   const { t, isRTL } = useLocale();
   const { dispatch, state: gameState } = useGame();
   const safe = useGameSafeArea();
   const [playerCount, setPlayerCount] = useState(2);
   const [numberRange, setNumberRange] = useState<'easy' | 'full'>('full');
   const [gameMode, setGameMode] = useState<'pass-and-play' | 'vs-bot'>('pass-and-play');
-  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>('easy');
-  const [difficultyStage, setDifficultyStage] = useState<DifficultyStageId>('E');
-  const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+']);
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>('medium');
+  const [botDisplayName, setBotDisplayName] = useState('');
+  const difficultyStage: DifficultyStageId = 'H';
+  const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+', '-', 'x', '÷']);
   const [allowNegativeTargets, setAllowNegativeTargets] = useState(false);
   const [abVariant, setAbVariant] = useState<AbVariant>('control_0_12_plus');
   const [fractions, setFractions] = useState(true);
+  const [fractionKinds, setFractionKinds] = useState<Fraction[]>([...ALL_FRACTION_KINDS]);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timer, setTimer] = useState<'30' | '60' | 'off' | 'custom'>('off');
   const [customTimerSeconds, setCustomTimerSeconds] = useState(60);
   const [timerCustomModalOpen, setTimerCustomModalOpen] = useState(false);
+  /** אם לא null — ביטול מודאל המשנה מחזיר לערך הזה; null = כבר היינו ב«מותאם» (רק עורכים שניות) */
+  const timerRestoreOnCancelRef = useRef<'30' | '60' | 'off' | null>(null);
   const [guidancePromptOpen, setGuidancePromptOpen] = useState(true);
   const [guidanceOn, setGuidanceOn] = useState(true); // הדרכה והסברים — משתמש חוזר יכול לכבות
+  const [previewOfferVisible, setPreviewOfferVisible] = useState(false);
+  const [previewSkipOffer, setPreviewSkipOffer] = useState(false);
+  /** ביטול פתיחה אוטומטית אם המשתמש פתח ידנית / מניעת race שמאפסת את הטיזר למסך ההצעה */
+  const previewAutoOfferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
-  const [advancedStageExpanded, setAdvancedStageExpanded] = useState<DifficultyStageId | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const [futureLabOpen, setFutureLabOpen] = useState(false);
@@ -4898,15 +5993,32 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
     { key: 'custom', label: t('lobby.timerCustom'), accessibilityLabel: t('start.timerA11y.custom') },
   ], [t]);
   // M6.5: player-count row hidden in vs-bot, bot-difficulty row hidden in pass-and-play — net row count identical.
-  const guidanceWheelIndex = (timer === 'custom' ? 9 : 8);
-  const advancedWheelIndex = (timer === 'custom' ? 10 : 9);
+  // Timer lives only in Advanced modal; last wheel rows are guidance (7) then advanced entry (8).
+  const guidanceWheelIndex = 8;
+  const advancedWheelIndex = 9;
 
   useEffect(() => {
-    const cfg = DIFFICULTY_STAGE_CONFIG[difficultyStage];
-    setNumberRange(cfg.rangeMax === 12 ? 'easy' : 'full');
-    setEnabledOperators(cfg.enabledOperators);
-    setAllowNegativeTargets(cfg.allowNegativeTargets);
-  }, [difficultyStage]);
+    if (fractions && fractionKinds.length === 0) setFractionKinds([...ALL_FRACTION_KINDS]);
+  }, [fractions, fractionKinds.length]);
+
+  useEffect(() => {
+    if (fractions && fractionKinds.length === 0) setFractionKinds([...ALL_FRACTION_KINDS]);
+  }, [fractions, fractionKinds.length]);
+
+  const toggleFractionKind = useCallback((f: Fraction) => {
+    setFractionKinds((prev) => {
+      if (!prev.includes(f)) return [...prev, f];
+      if (prev.length <= 1) return prev;
+      return prev.filter((x) => x !== f);
+    });
+  }, []);
+
+  const operatorPreset: 'plusMinus' | 'mulDiv' | 'all' = useMemo(() => {
+    const has = (op: Operation) => enabledOperators.includes(op);
+    if (has('+') && has('-') && has('x') && has('÷')) return 'all';
+    if (has('x') && has('÷') && !has('+') && !has('-')) return 'mulDiv';
+    return 'plusMinus';
+  }, [enabledOperators]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4921,11 +6033,9 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
         if (cancelled) return;
         const variant = saved === 'variant_0_15_plus' ? 'variant_0_15_plus' : 'control_0_12_plus';
         setAbVariant(variant);
-        setDifficultyStage(variant === 'variant_0_15_plus' ? 'E' : 'A');
       } catch {
         if (!cancelled) {
           setAbVariant('control_0_12_plus');
-          setDifficultyStage('A');
         }
       }
     })();
@@ -5000,13 +6110,58 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
       cancelled = true;
     };
   }, [dispatch]);
+  /** After the guidance modal closes, wait before opening another Modal (Android stacking). */
+  const scheduleGameplayPreviewOfferIfNeeded = useCallback(() => {
+    if (previewAutoOfferTimerRef.current != null) {
+      clearTimeout(previewAutoOfferTimerRef.current);
+      previewAutoOfferTimerRef.current = null;
+    }
+    InteractionManager.runAfterInteractions(() => {
+      const tid = setTimeout(() => {
+        previewAutoOfferTimerRef.current = null;
+        void readGameplayPreviewDecision().then((decision) => {
+          if (decision == null) {
+            setPreviewSkipOffer(false);
+            setPreviewOfferVisible(true);
+          }
+        });
+      }, 380);
+      previewAutoOfferTimerRef.current = tid;
+    });
+  }, []);
+
+  const openManualGameplayPreview = useCallback(() => {
+    if (previewAutoOfferTimerRef.current != null) {
+      clearTimeout(previewAutoOfferTimerRef.current);
+      previewAutoOfferTimerRef.current = null;
+    }
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => {
+        void readGameplayPreviewDecision().then((decision) => {
+          setPreviewSkipOffer(decision !== null);
+          setPreviewOfferVisible(true);
+        });
+      }, 120);
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (previewAutoOfferTimerRef.current != null) {
+      clearTimeout(previewAutoOfferTimerRef.current);
+      previewAutoOfferTimerRef.current = null;
+    }
+  }, []);
+
   const chooseGuidanceMode = useCallback((on: boolean) => {
     if (on) {
       void clearAllLulosOnboardingKeys().catch(() => {});
     }
     setGuidance(on);
     setGuidancePromptOpen(false);
-  }, [setGuidance]);
+    if (on) {
+      scheduleGameplayPreviewOfferIfNeeded();
+    }
+  }, [setGuidance, scheduleGameplayPreviewOfferIfNeeded]);
   useEffect(() => {
     void initializeSfx();
     return () => {
@@ -5037,7 +6192,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               isBot: false,
             },
             {
-              name: t('botOffline.botName'),
+              name: botDisplayName.trim() || t('botOffline.botName'),
               isBot: true,
             },
           ]
@@ -5055,6 +6210,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
       players,
       difficulty: numberRange,
       fractions,
+      fractionKinds: fractions ? fractionKinds : [...ALL_FRACTION_KINDS],
       showPossibleResults,
       showSolveExercise,
       timerSetting: timer,
@@ -5524,7 +6680,12 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
             <LulosButton text={t('lobby.backToMode')} color="blue" width={140} height={38} fontSize={11} onPress={onBackToChoice} />
           )}
         </View>
-        <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {onHowToPlay && (
+            <LulosButton text={t('tutorial.howToPlay')} color="yellow" width={100} height={38} fontSize={11} onPress={onHowToPlay} />
+          )}
+          <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
+        </View>
       </View>
       <AppModal
         visible={rulesOpen}
@@ -5544,10 +6705,27 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           padding: 0,
         }}
       >
-        <RulesContent state={null} numberRange={numberRange} fractions={fractions} />
+        <RulesContent
+          state={null}
+          pregame={{
+            numberRange,
+            fractions,
+            fractionKinds: fractions ? fractionKinds : [],
+            difficultyStage,
+            enabledOperators,
+            allowNegativeTargets,
+            showPossibleResults,
+            showSolveExercise,
+          }}
+        />
       </AppModal>
       <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title={t('start.catalogTitle')}>
-        <CardsCatalogContent numberRange={numberRange} fractions={fractions} />
+        <CardsCatalogContent
+          numberRange={numberRange}
+          fractions={fractions}
+          enabledOperators={DIFFICULTY_STAGE_CONFIG[difficultyStage].enabledOperators}
+          fractionKinds={fractionKinds}
+        />
       </AppModal>
       <AppModal
         visible={advancedSetupOpen}
@@ -5608,20 +6786,33 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               <TouchableOpacity
                 onPress={() => setAdvancedSetupOpen(false)}
                 accessibilityRole="button"
-                accessibilityLabel={t('ui.cancel')}
+                accessibilityLabel={t('start.advancedSetup.back')}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 style={{
-                  width: 44,
-                  height: 44,
+                  minHeight: 44,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
                   borderRadius: 22,
                   backgroundColor: 'rgba(15,23,42,0.5)',
                   borderWidth: 1.5,
                   borderColor: 'rgba(255,255,255,0.4)',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  maxWidth: '42%',
                 }}
               >
-                <Text style={{ color: '#FFFFFF', fontSize: 20, fontWeight: '700' }}>✕</Text>
+                <Text
+                  style={{
+                    color: '#FFFFFF',
+                    fontSize: 13,
+                    fontWeight: '800',
+                    textAlign: 'center',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  }}
+                  numberOfLines={2}
+                >
+                  {t('start.advancedSetup.back')}
+                </Text>
               </TouchableOpacity>
             </View>
           </LinearGradient>
@@ -5629,6 +6820,11 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
         boxStyle={{
           width: '100%',
           maxHeight: SCREEN_H - 56,
+          /* גובה מפורש — אחרת flex:1 על ה־ScrollView עלול לקבל 0 (במיוחד Web) והמודאל נראה «שבור» */
+          height: Math.max(
+            280,
+            SCREEN_H - ((safe.insets.top || 12) + 8) - bottomPad - 16,
+          ),
           marginTop: (safe.insets.top || 12) + 8,
           borderRadius: 0,
           backgroundColor: 'rgba(15,23,42,0.97)',
@@ -5640,135 +6836,130 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           overflow: 'hidden',
         }}
       >
+        <View style={{ flex: 1, minHeight: 0 }}>
         <ScrollView
           style={{ flex: 1, direction: isRTL ? 'rtl' : 'ltr' }}
-          contentContainerStyle={{ paddingBottom: 28, direction: isRTL ? 'rtl' : 'ltr' }}
+          contentContainerStyle={{ paddingBottom: 16, direction: isRTL ? 'rtl' : 'ltr' }}
           showsVerticalScrollIndicator
           nestedScrollEnabled
           keyboardShouldPersistTaps="handled"
         >
-          <LinearGradient
-            colors={['#0ea5e9', '#38bdf8']}
-            start={{ x: isRTL ? 1 : 0, y: 0 }}
-            end={{ x: isRTL ? 0 : 1, y: 1 }}
-            style={hsS.rowGradientOuter}
+          <Text
+            style={{
+              color: 'rgba(226,232,240,0.95)',
+              fontSize: 12,
+              lineHeight: 18,
+              fontWeight: '600',
+              textAlign: isRTL ? 'right' : 'left',
+              writingDirection: isRTL ? 'rtl' : 'ltr',
+              marginBottom: 14,
+              paddingHorizontal: 4,
+            }}
           >
-            <View style={{ paddingVertical: 14, paddingHorizontal: 10 }}>
-              <Text style={[hsS.rowLabel, { marginBottom: 6, textAlign: isRTL ? 'right' : 'left' }]}>
-                {t('start.advancedSetup.stagePicker.sectionTitle')}
+            {t('start.advancedSetup.modalLead')}
+          </Text>
+          <View style={{ alignItems: 'center', marginBottom: 12 }}>
+            <ExcellenceMeter
+              title={t('meter.excellenceTitle')}
+              value={EXCELLENCE_METER_DEMO_VALUE}
+              height={128}
+            />
+            <Text
+              style={{
+                color: 'rgba(187,247,208,0.95)',
+                fontSize: 11,
+                fontWeight: '700',
+                marginTop: 6,
+                textAlign: 'center',
+                writingDirection: isRTL ? 'rtl' : 'ltr',
+              }}
+            >
+              {t('meter.demoCaption')}
+            </Text>
+          </View>
+
+          <View style={hsS.advSection}>
+            <View style={hsS.advSectionHdr}>
+              <Text
+                style={[
+                  hsS.rowLabel,
+                  {
+                    fontSize: 15,
+                    fontWeight: '800',
+                    marginBottom: 6,
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  },
+                ]}
+              >
+                {t('start.advancedSetup.sectionPlayModeHeading')}
               </Text>
               <Text
                 style={{
-                  color: 'rgba(255,255,255,0.9)',
+                  color: 'rgba(226,232,240,0.92)',
                   fontSize: 12,
                   lineHeight: 18,
                   fontWeight: '600',
                   textAlign: isRTL ? 'right' : 'left',
-                  marginBottom: 12,
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                  marginBottom: 8,
                 }}
               >
-                {t('start.advancedSetup.stagePicker.intro')}
+                {t('start.advancedSetup.sectionPlayModeIntro')}
               </Text>
+            </View>
+            <GameModeToggleBlock gameMode={gameMode} setGameMode={setGameMode} />
+            <Text
+              style={{
+                color: 'rgba(226,232,240,0.88)',
+                fontSize: 11,
+                lineHeight: 16,
+                fontWeight: '600',
+                textAlign: isRTL ? 'right' : 'left',
+                writingDirection: isRTL ? 'rtl' : 'ltr',
+                marginBottom: 6,
+              }}
+            >
+              {t('start.advancedSetup.botLevelsHint')}
+            </Text>
+            <BotDifficultySettingsBlock
+              botDifficulty={botDifficulty}
+              setBotDifficulty={setBotDifficulty}
+              botDisplayName={botDisplayName}
+              setBotDisplayName={setBotDisplayName}
+            />
+          </View>
 
-              <View style={{ position: 'relative' }}>
-                <View style={{ opacity: ADVANCED_STAGE_PICKER_LOCKED ? 0.3 : 1 }} pointerEvents={ADVANCED_STAGE_PICKER_LOCKED ? 'none' : 'auto'}>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
-                    {STAGE_SEQUENCE.map((letter) => {
-                      const selected = difficultyStage === letter;
-                      return (
-                        <TouchableOpacity
-                          key={letter}
-                          onPress={() => {
-                            if (ADVANCED_STAGE_PICKER_LOCKED) return;
-                            setDifficultyStage(letter);
-                            setAdvancedStageExpanded((prev) => (prev === letter ? null : letter));
-                          }}
-                          activeOpacity={0.75}
-                          style={{
-                            minWidth: 44,
-                            height: 44,
-                            paddingHorizontal: 12,
-                            borderRadius: 12,
-                            borderWidth: 2,
-                            borderColor: selected ? '#FDE68A' : 'rgba(255,255,255,0.28)',
-                            backgroundColor: selected ? 'rgba(253,230,138,0.2)' : 'rgba(15,23,42,0.4)',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>{letter}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <Text
-                    style={{
-                      marginTop: 10,
-                      color: 'rgba(253,230,138,0.95)',
-                      fontSize: 12,
-                      fontWeight: '700',
-                      textAlign: 'center',
-                    }}
-                  >
-                    {t('start.advancedSetup.stagePicker.currentChoice', { stage: difficultyStage })}
-                  </Text>
-                </View>
-
-                {ADVANCED_STAGE_PICKER_LOCKED && (
-                  <View
-                    style={{
-                      ...StyleSheet.absoluteFillObject,
-                      backgroundColor: 'rgba(15,23,42,0.88)',
-                      borderRadius: 12,
-                      padding: 14,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: '#FDE68A', fontSize: 15, fontWeight: '800', textAlign: isRTL ? 'right' : 'left', marginBottom: 8 }}>
-                      {t('start.advancedSetup.paywall.title')}
-                    </Text>
-                    <Text style={{ color: 'rgba(226,232,240,0.95)', fontSize: 12, lineHeight: 18, textAlign: isRTL ? 'right' : 'left', marginBottom: 8 }}>
-                      {t('start.advancedSetup.paywall.body')}
-                    </Text>
-                    <Text style={{ color: 'rgba(148,163,184,0.95)', fontSize: 11, fontStyle: 'italic', textAlign: isRTL ? 'right' : 'left' }}>
-                      {t('start.advancedSetup.paywall.ctaPlaceholder')}
-                    </Text>
-                    <Text style={{ color: '#93C5FD', fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 10 }}>
-                      {t('start.advancedSetup.stagePicker.currentChoice', { stage: difficultyStage })}
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              <View
+          <View style={hsS.advSection}>
+            <View style={hsS.advSectionHdr}>
+              <Text
+                style={[
+                  hsS.rowLabel,
+                  {
+                    fontSize: 15,
+                    fontWeight: '800',
+                    marginBottom: 6,
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  },
+                ]}
+              >
+                {t('start.advancedSetup.sectionNumbersHeading')}
+              </Text>
+              <Text
                 style={{
-                  marginTop: 14,
-                  padding: 12,
-                  borderRadius: 12,
-                  backgroundColor: 'rgba(15,23,42,0.55)',
-                  borderWidth: 1,
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  minHeight: 72,
+                  color: 'rgba(226,232,240,0.92)',
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontWeight: '600',
+                  textAlign: isRTL ? 'right' : 'left',
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                  marginBottom: 8,
                 }}
               >
-                <Text
-                  style={{
-                    color: ADVANCED_STAGE_PICKER_LOCKED || advancedStageExpanded ? 'rgba(255,255,255,0.96)' : 'rgba(255,255,255,0.52)',
-                    fontSize: 13,
-                    lineHeight: 20,
-                    textAlign: isRTL ? 'right' : 'left',
-                    fontWeight: ADVANCED_STAGE_PICKER_LOCKED || advancedStageExpanded ? '600' : '500',
-                  }}
-                >
-                  {ADVANCED_STAGE_PICKER_LOCKED
-                    ? t(`start.advancedSetup.stage.${difficultyStage}.detail`)
-                    : advancedStageExpanded
-                      ? t(`start.advancedSetup.stage.${advancedStageExpanded}.detail`)
-                      : t('start.advancedSetup.stagePicker.detailPlaceholder')}
-                </Text>
-              </View>
+                {t('start.advancedSetup.sectionNumbersIntro')}
+              </Text>
             </View>
-          </LinearGradient>
           <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
             <View style={[hsS.row, hsS.rowRange, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.numberRange')}</Text>
@@ -5782,6 +6973,9 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               </View>
             </View>
           </LinearGradient>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {t('start.advancedSetup.hint.numberRangeRow')}
+          </Text>
           <LinearGradient colors={['#4285F4', '#8ab4f8']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
             <View style={[hsS.row, hsS.rowFractions, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.fractions')}</Text>
@@ -5798,10 +6992,120 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               </View>
             </View>
           </LinearGradient>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {t('start.advancedSetup.hint.fractionsRow')}
+          </Text>
+          {fractions && (
+            <View style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
+              <Text
+                style={{
+                  color: 'rgba(226,232,240,0.92)',
+                  fontSize: 12,
+                  fontWeight: '700',
+                  marginBottom: 8,
+                  textAlign: isRTL ? 'right' : 'left',
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                }}
+              >
+                {t('start.advancedSetup.fractionKindsTitle')}
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                {([...ALL_FRACTION_KINDS] as Fraction[]).map((fk) => {
+                  const on = fractionKinds.includes(fk);
+                  return (
+                    <TouchableOpacity
+                      key={fk}
+                      onPress={() => toggleFractionKind(fk)}
+                      activeOpacity={0.75}
+                      style={{
+                        minWidth: 52,
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        borderRadius: 10,
+                        borderWidth: 2,
+                        borderColor: on ? '#F59E0B' : 'rgba(255,255,255,0.25)',
+                        backgroundColor: on ? 'rgba(244,114,182,0.28)' : 'rgba(15,23,42,0.45)',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Text style={{ color: on ? '#FEF3C7' : '#fff', fontSize: 15, fontWeight: '900' }}>{fk}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+          <View style={{ paddingHorizontal: 10, paddingBottom: 10, gap: 8 }}>
+            <Text style={{ color: 'rgba(226,232,240,0.92)', fontSize: 12, fontWeight: '700', textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }}>
+              {t('start.advancedSetup.operatorsTitle')}
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+              {([
+                ['plusMinus', ['+', '-'] as Operation[], 'start.advancedSetup.operators.plusMinus.label', 'start.advancedSetup.operators.plusMinus.help'],
+                ['mulDiv', ['x', '÷'] as Operation[], 'start.advancedSetup.operators.mulDiv.label', 'start.advancedSetup.operators.mulDiv.help'],
+                ['all', ['+', '-', 'x', '÷'] as Operation[], 'start.advancedSetup.operators.all.label', 'start.advancedSetup.operators.all.help'],
+              ] as const).map(([key, ops, labelKey, helpKey]) => {
+                const on = operatorPreset === key;
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    onPress={() => setEnabledOperators([...ops])}
+                    activeOpacity={0.75}
+                    style={{
+                      minWidth: 92,
+                      paddingVertical: 8,
+                      paddingHorizontal: 10,
+                      borderRadius: 10,
+                      borderWidth: 2,
+                      borderColor: on ? '#FDE68A' : 'rgba(255,255,255,0.25)',
+                      backgroundColor: on ? 'rgba(253,230,138,0.18)' : 'rgba(15,23,42,0.45)',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>{t(labelKey)}</Text>
+                    <Text style={{ color: 'rgba(255,255,255,0.86)', fontSize: 11, marginTop: 2 }}>{t(helpKey)}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+          </View>
+          </View>
+
+          <View style={hsS.advSection}>
+            <View style={hsS.advSectionHdr}>
+              <Text
+                style={[
+                  hsS.rowLabel,
+                  {
+                    fontSize: 15,
+                    fontWeight: '800',
+                    marginBottom: 6,
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  },
+                ]}
+              >
+                {t('start.advancedSetup.sectionHelpersHeading')}
+              </Text>
+              <Text
+                style={{
+                  color: 'rgba(226,232,240,0.92)',
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontWeight: '600',
+                  textAlign: isRTL ? 'right' : 'left',
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                  marginBottom: 8,
+                }}
+              >
+                {t('start.advancedSetup.sectionHelpersIntro')}
+              </Text>
+            </View>
           <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowPossibleResults, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+            <View style={[hsS.rowStackToggle, hsS.rowPossibleResults]}>
               <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.possibleResults')}</Text>
-              <View style={hsS.toggleGroup}>
+              <View style={hsS.toggleGroupFull}>
                 {([
                   [true, t('lobby.show')],
                   [false, t('lobby.hide')],
@@ -5818,10 +7122,13 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               </View>
             </View>
           </LinearGradient>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {t('start.advancedSetup.hint.possibleResultsRow')}
+          </Text>
           <LinearGradient colors={['#34A853', '#81c995']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowSolveExercise, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+            <View style={[hsS.rowStackToggle, hsS.rowSolveExercise]}>
               <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.solveExercise')}</Text>
-              <View style={hsS.toggleGroup}>
+              <View style={hsS.toggleGroupFull}>
                 {([
                   [true, t('lobby.on')],
                   [false, t('lobby.off')],
@@ -5841,6 +7148,41 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               </View>
             </View>
           </LinearGradient>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {t('start.advancedSetup.hint.solveExerciseRow')}
+          </Text>
+          </View>
+
+          <View style={hsS.advSection}>
+            <View style={hsS.advSectionHdr}>
+              <Text
+                style={[
+                  hsS.rowLabel,
+                  {
+                    fontSize: 15,
+                    fontWeight: '800',
+                    marginBottom: 6,
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  },
+                ]}
+              >
+                {t('start.advancedSetup.sectionTimerHeading')}
+              </Text>
+              <Text
+                style={{
+                  color: 'rgba(226,232,240,0.92)',
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontWeight: '600',
+                  textAlign: isRTL ? 'right' : 'left',
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                  marginBottom: 8,
+                }}
+              >
+                {t('start.advancedSetup.sectionTimerIntro')}
+              </Text>
+            </View>
           <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
             <View style={[hsS.row, hsS.rowTimer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.timerRow')}</Text>
@@ -5851,8 +7193,13 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
                   snapFocus="leading"
                   scrollAfterSelect={(key) => key !== 'custom'}
                   onSelect={(key) => {
-                    if (key === 'custom') setTimerCustomModalOpen(true);
-                    else setTimer(key as '30' | '60' | 'off');
+                    if (key === 'custom') {
+                      timerRestoreOnCancelRef.current = timer === 'custom' ? null : (timer as '30' | '60' | 'off');
+                      setTimer('custom');
+                      setTimerCustomModalOpen(true);
+                    } else {
+                      setTimer(key as '30' | '60' | 'off');
+                    }
                   }}
                 />
               </View>
@@ -5860,8 +7207,8 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
           {timer === 'custom' && (
             <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-              <View style={[hsS.row, hsS.rowTimer, { marginTop: -4 }]}>
-                <Text style={[hsS.rowLabel, { fontSize: 12, color: 'rgba(255,255,255,0.85)', textAlign: isRTL ? 'right' : 'left', alignSelf: 'stretch', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+              <View style={[hsS.row, hsS.rowTimer, { marginTop: -4, flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center' }]}>
+                <Text style={[hsS.rowLabel, { flex: 1, fontSize: 12, color: 'rgba(255,255,255,0.85)', textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
                   {customTimerSeconds >= 60
                     ? t('start.customTimerMinSec', {
                         min: String(Math.floor(customTimerSeconds / 60)),
@@ -5872,7 +7219,33 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               </View>
             </LinearGradient>
           )}
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {t('start.advancedSetup.hint.timerOptions')}
+          </Text>
+          </View>
         </ScrollView>
+        <View
+          style={{
+            paddingTop: 12,
+            paddingBottom: 6,
+            borderTopWidth: 1,
+            borderTopColor: 'rgba(148,163,184,0.28)',
+            alignItems: 'center',
+          }}
+        >
+          <CasinoButton
+            text={t('start.letsPlay')}
+            width={220}
+            height={48}
+            fontSize={19}
+            onPress={() => {
+              Keyboard.dismiss();
+              startGame();
+              setAdvancedSetupOpen(false);
+            }}
+          />
+        </View>
+        </View>
       </AppModal>
       {/* קבלת פנים — רק כשההדרכה מופעלת */}
       {guidanceOn && (
@@ -5907,6 +7280,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           showsVerticalScrollIndicator={true}
           bounces={false}
           nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
           scrollEventThrottle={16}
         >
@@ -5958,37 +7332,18 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
 
           {/* M6.3: Mode toggle — pass-and-play vs vs-bot */}
           <WheelRow index={1}>
-          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowRange]}>
-            <Text style={hsS.rowLabel}>{t('start.mode')}</Text>
-            <View style={hsS.toggleGroup}>
-              {([['pass-and-play', t('start.modePassAndPlay')], ['vs-bot', t('start.modeVsBot')]] as const).map(([key, label]) => (
-                <TouchableOpacity key={key} onPress={() => { setGameMode(key); Keyboard.dismiss(); }} activeOpacity={0.7}
-                  style={[hsS.toggleBtn, gameMode === key ? hsS.toggleOn : hsS.toggleOff]}>
-                  <Text style={gameMode === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-          </LinearGradient>
+            <GameModeToggleBlock gameMode={gameMode} setGameMode={setGameMode} />
           </WheelRow>
 
           {/* M6.3: Bot difficulty toggle — only when vs-bot selected */}
           {gameMode === 'vs-bot' && (
           <WheelRow index={2}>
-          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowRange]}>
-            <Text style={hsS.rowLabel}>{t('start.botDifficulty')}</Text>
-            <View style={hsS.toggleGroup}>
-              {([['easy', t('start.botEasy')], ['hard', t('start.botHard')]] as const).map(([key, label]) => (
-                <TouchableOpacity key={key} onPress={() => setBotDifficulty(key)} activeOpacity={0.7}
-                  style={[hsS.toggleBtn, botDifficulty === key ? hsS.toggleOn : hsS.toggleOff]}>
-                  <Text style={botDifficulty === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-          </LinearGradient>
+            <BotDifficultySettingsBlock
+              botDifficulty={botDifficulty}
+              setBotDifficulty={setBotDifficulty}
+              botDisplayName={botDisplayName}
+              setBotDisplayName={setBotDisplayName}
+            />
           </WheelRow>
           )}
 
@@ -6017,21 +7372,49 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
                 [true, t('lobby.withFractions')],
                 [false, t('lobby.noFractions')],
               ] as const).map(([key, label]) => (
-                <TouchableOpacity key={String(key)} onPress={() => setFractions(key as boolean)} activeOpacity={0.7}
+                <TouchableOpacity
+                  key={String(key)}
+                  onPress={() => setFractions(key as boolean)}
+                  activeOpacity={0.7}
                   style={[hsS.toggleBtn, fractions === key ? hsS.toggleOn : hsS.toggleOff]}>
                   <Text style={fractions === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
+          {fractions && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center', paddingHorizontal: 8, paddingBottom: 10 }}>
+              {([...ALL_FRACTION_KINDS] as Fraction[]).map((fk) => {
+                const on = fractionKinds.includes(fk);
+                return (
+                  <TouchableOpacity
+                    key={fk}
+                    onPress={() => toggleFractionKind(fk)}
+                    activeOpacity={0.75}
+                    style={{
+                      minWidth: 44,
+                      paddingVertical: 6,
+                      paddingHorizontal: 8,
+                      borderRadius: 8,
+                      borderWidth: 1.5,
+                      borderColor: on ? '#F59E0B' : 'rgba(255,255,255,0.22)',
+                      backgroundColor: on ? 'rgba(244,114,182,0.28)' : 'rgba(15,23,42,0.35)',
+                    }}
+                  >
+                    <Text style={{ color: on ? '#FEF3C7' : '#fff', fontSize: 13, fontWeight: '900' }}>{fk}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
           </LinearGradient>
           </WheelRow>
 
           <WheelRow index={5}>
           <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowPossibleResults]}>
+          <View style={[hsS.rowStackToggle, hsS.rowPossibleResults]}>
             <Text style={hsS.rowLabel}>{t('lobby.possibleResults')}</Text>
-            <View style={hsS.toggleGroup}>
+            <View style={hsS.toggleGroupFull}>
               {([
                 [true, t('lobby.show')],
                 [false, t('lobby.hide')],
@@ -6052,9 +7435,9 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
 
           <WheelRow index={6}>
           <LinearGradient colors={['#34A853', '#81c995']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowSolveExercise]}>
+          <View style={[hsS.rowStackToggle, hsS.rowSolveExercise]}>
             <Text style={hsS.rowLabel}>{t('lobby.solveExercise')}</Text>
-            <View style={hsS.toggleGroup}>
+            <View style={hsS.toggleGroupFull}>
               {([
                 [true, t('lobby.on')],
                 [false, t('lobby.off')],
@@ -6077,40 +7460,39 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </WheelRow>
 
           <WheelRow index={7}>
-          <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowTimer]}>
-            <Text style={hsS.rowLabel}>{t('start.wheel.timerRow')}</Text>
-            <View style={hsS.timerWheelWrap}>
-              <HorizontalOptionWheel
-                options={timerWheelOptions}
-                selectedKey={timer}
-                snapFocus="leading"
-                scrollAfterSelect={(key) => key !== 'custom'}
-                onSelect={(key) => {
-                  if (key === 'custom') setTimerCustomModalOpen(true);
-                  else setTimer(key as '30' | '60' | 'off');
-                }}
-              />
+          <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
+            <View style={[hsS.row, hsS.rowTimer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.timerRow')}</Text>
+              <View style={hsS.timerWheelWrap}>
+                <HorizontalOptionWheel
+                  options={timerWheelOptions}
+                  selectedKey={timer}
+                  snapFocus="leading"
+                  scrollAfterSelect={(key) => key !== 'custom'}
+                  onSelect={(key) => {
+                    if (key === 'custom') {
+                      timerRestoreOnCancelRef.current = timer === 'custom' ? null : (timer as '30' | '60' | 'off');
+                      setTimer('custom');
+                      setTimerCustomModalOpen(true);
+                    } else {
+                      setTimer(key as '30' | '60' | 'off');
+                    }
+                  }}
+                />
+              </View>
             </View>
-          </View>
           </LinearGradient>
-          </WheelRow>
           {timer === 'custom' && (
-            <WheelRow index={8}>
-            <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowTimer, { marginTop: -4 }]}>
-              <Text style={[hsS.rowLabel, { fontSize: 12, color: 'rgba(255,255,255,0.85)' }]}>
-                {customTimerSeconds >= 60
-                  ? t('start.customTimerMinSec', {
-                      min: String(Math.floor(customTimerSeconds / 60)),
-                      sec: String(customTimerSeconds % 60),
-                    })
-                  : t('start.customTimerSecOnly', { sec: String(customTimerSeconds) })}
-              </Text>
-            </View>
-            </LinearGradient>
-            </WheelRow>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: '700', textAlign: 'center', marginTop: 4 }}>
+              {customTimerSeconds >= 60
+                ? t('start.customTimerMinSec', {
+                    min: String(Math.floor(customTimerSeconds / 60)),
+                    sec: String(customTimerSeconds % 60),
+                  })
+                : t('start.customTimerSecOnly', { sec: String(customTimerSeconds) })}
+            </Text>
           )}
+          </WheelRow>
 
           <WheelRow index={guidanceWheelIndex}>
           <LinearGradient colors={['#7C3AED', '#A78BFA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
@@ -6123,7 +7505,14 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
               ] as const).map(([key, label]) => (
                 <TouchableOpacity
                   key={String(key)}
-                  onPress={() => setGuidance(key)}
+                  onPress={() => {
+                    if (key === true && !guidanceOn) {
+                      setGuidance(true);
+                      scheduleGameplayPreviewOfferIfNeeded();
+                    } else {
+                      setGuidance(key);
+                    }
+                  }}
                   activeOpacity={0.7}
                   style={[hsS.toggleBtn, guidanceOn === key ? hsS.toggleOn : hsS.toggleOff]}
                 >
@@ -6143,7 +7532,10 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
             style={hsS.rowGradientOuter}
           >
           <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={`${t('start.advancedSetup.entryTitle')}, ${t('start.advancedSetup.entryOpenCta')}`}
             activeOpacity={0.88}
+            hitSlop={{ top: 16, bottom: 16, left: 12, right: 12 }}
             onPress={() => setAdvancedSetupOpen(true)}
             style={hsS.advancedEntryInner}
           >
@@ -6159,22 +7551,19 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
                 <Text style={[hsS.advancedEntryTeaser, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
                   {t('start.advancedSetup.entryRowTeaser')}
                 </Text>
-                <View style={[hsS.advancedEntryChipRow, { flexDirection: 'row' }]}>
-                  {STAGE_SEQUENCE.map((letter, i) => {
-                    const on = difficultyStage === letter;
-                    return (
-                      <View
-                        key={letter}
-                        style={[
-                          hsS.advancedStageChip,
-                          { backgroundColor: ADVANCED_ENTRY_STAGE_COLORS[i] ?? '#64748b' },
-                          on && hsS.advancedStageChipActive,
-                        ]}
-                      >
-                        <Text style={[hsS.advancedStageChipTxt, on && hsS.advancedStageChipTxtActive]}>{letter}</Text>
-                      </View>
-                    );
-                  })}
+                <View style={[hsS.advancedEntryChipRow, { flexDirection: 'row', flexWrap: 'wrap', rowGap: 6 }]}>
+                  <View style={[hsS.advancedStageChip, hsS.advancedStageChipActive]}>
+                    <Text style={[hsS.advancedStageChipTxt, hsS.advancedStageChipTxtActive]}>
+                      {t('start.advancedSetup.entryChip.operators', {
+                        value: operatorPreset === 'all' ? t('start.advancedSetup.operators.all.label') : operatorPreset === 'mulDiv' ? t('start.advancedSetup.operators.mulDiv.label') : t('start.advancedSetup.operators.plusMinus.label'),
+                      })}
+                    </Text>
+                  </View>
+                  <View style={[hsS.advancedStageChip, hsS.advancedStageChipActive]}>
+                    <Text style={[hsS.advancedStageChipTxt, hsS.advancedStageChipTxtActive]}>
+                      {t('start.advancedSetup.entryChip.fractions', { value: fractions ? t('lobby.withFractions') : t('lobby.noFractions') })}
+                    </Text>
+                  </View>
                 </View>
               </View>
               <View style={[hsS.advancedEntryCtaWrap, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
@@ -6189,36 +7578,51 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
         </Animated.ScrollView>
 
         <RNModal visible={timerCustomModalOpen} transparent animationType="fade">
-          <TouchableOpacity activeOpacity={1} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setTimerCustomModalOpen(false)}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+            onPress={() => {
+              const r = timerRestoreOnCancelRef.current;
+              if (r != null) setTimer(r);
+              setTimerCustomModalOpen(false);
+            }}
+          >
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#1F2937', borderRadius: 16, padding: 20, width: '100%', maxWidth: 320 }}>
-              <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>{t('ui.turnTimerLabel')}</Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
+              <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>{t('lobby.timerCustomHint')}</Text>
+              <View style={{ flexDirection: Platform.OS === 'android' ? 'row-reverse' : 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
                 <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
                   <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                    {Array.from({ length: 60 }, (_, i) => i).map((s) => (
-                      <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: (customTimerSeconds % 60) === s ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
+                    {Array.from({ length: 6 }, (_, i) => i).map((m) => (
+                      <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(1, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FBBC05' : '#9CA3AF' : m === 0 ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
                 <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
                   <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                    {Array.from({ length: 6 }, (_, i) => i).map((m) => (
-                      <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(10, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FBBC05' : '#9CA3AF' : m === 0 ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
+                    {Array.from({ length: 60 }, (_, i) => i).map((s) => (
+                      <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(1, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ color: (customTimerSeconds % 60) === s ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
               </View>
               <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'center' }}>
-                <TouchableOpacity onPress={() => setTimerCustomModalOpen(false)} style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                <TouchableOpacity
+                  onPress={() => {
+                    const r = timerRestoreOnCancelRef.current;
+                    if (r != null) setTimer(r);
+                    setTimerCustomModalOpen(false);
+                  }}
+                  style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}
+                >
                   <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('ui.cancel')}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => { setTimer('custom'); setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#34A853', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
+                <TouchableOpacity onPress={() => { setTimer('custom'); timerRestoreOnCancelRef.current = null; setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#34A853', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
                   <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('start.timerModalStart')}</Text>
                 </TouchableOpacity>
               </View>
@@ -6232,6 +7636,7 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
         <TouchableOpacity
           onLongPress={() => {
             void clearAllLulosOnboardingKeys().then(() => {
+              void AsyncStorage.removeItem(GAMEPLAY_PREVIEW_STORAGE_KEY);
               if (__DEV__) console.log('[DEV] Long-press: cleared all onboarding keys');
               Alert.alert(t('dev.onboardingClearedTitle'), t('dev.onboardingClearedBody'));
             });
@@ -6241,6 +7646,18 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
         >
           <Text style={{ color: 'rgba(255,255,255,0.15)', fontSize: 9, textAlign: 'center', marginTop: 6 }}>v1.0.0</Text>
         </TouchableOpacity>
+        {guidanceOn && !guidancePromptOpen && (
+          <TouchableOpacity
+            onPress={openManualGameplayPreview}
+            accessibilityRole="button"
+            accessibilityLabel={t('previewOffer.openManual')}
+            style={{ marginTop: 10, alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 10 }}
+          >
+            <Text style={{ color: 'rgba(147,197,253,0.95)', fontSize: 13, fontWeight: '700', textDecorationLine: 'underline' }}>
+              {t('previewOffer.openManual')}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
       <RNModal visible={guidancePromptOpen} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.68)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 }}>
@@ -6270,6 +7687,15 @@ function StartScreen({ onBackToChoice, onOpenSoundDemo }: { onBackToChoice?: () 
           </LinearGradient>
         </View>
       </RNModal>
+      <GameplayPreviewOffer
+        visible={previewOfferVisible}
+        skipOffer={previewSkipOffer}
+        soundsEnabled={gameState.soundsEnabled !== false}
+        onFinished={() => {
+          setPreviewOfferVisible(false);
+          setPreviewSkipOffer(false);
+        }}
+      />
     </View>
   );
 }
@@ -6279,7 +7705,7 @@ const hsS = StyleSheet.create({
     flex: 1, alignItems: 'center', justifyContent: 'center',
   },
   // Settings container
-  settings: { width: '100%', marginTop: 8 },
+  settings: { width: '96%', alignSelf: 'flex-end', marginTop: 8 },
   // Setting row — horizontal, label left, controls right; רקע קל לקריאות מעל רקע מעופף
   row: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -6289,6 +7715,28 @@ const hsS = StyleSheet.create({
     borderRadius: 10,
     marginHorizontal: 2,
     marginBottom: 4,
+  },
+  /** תווית מעל טוגלים — מונע דחיסת כפתורי הראה/הסתר ב־RTL */
+  rowStackToggle: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(10,22,40,0.9)',
+    borderRadius: 10,
+    marginHorizontal: 2,
+    marginBottom: 4,
+    gap: 8,
+  },
+  toggleGroupFull: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignSelf: 'stretch',
+    justifyContent: 'flex-start',
+    gap: 5,
+    direction: 'ltr',
   },
   // מעטפת חיצונית לגרדיאנט של שורות נבחרות
   rowGradientOuter: {
@@ -6310,7 +7758,29 @@ const hsS = StyleSheet.create({
   rowTimer: { backgroundColor: 'rgba(234,67,53,0.92)' },
   rowGuidance: { backgroundColor: 'rgba(26,115,232,0.92)' },
   /** מיכל לגלגלת טיימר — snapFocus=leading מצמיד את הצ'יפ הצהוב ליד התווית */
-  timerWheelWrap: { flex: 1, minWidth: 0, marginLeft: 4 },
+  timerWheelWrap: { flex: 1, minWidth: 0, marginStart: 4 },
+  /** קטעים במודאל «מתקדמים» */
+  advSection: {
+    marginBottom: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.28)',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(15,23,42,0.42)',
+  },
+  advSectionHdr: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 2,
+  },
+  advHint: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: 'rgba(226,232,240,0.78)',
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 10,
+  },
   rowLabel: { color: 'rgba(255,255,255,0.9)', fontSize: 14, fontWeight: '600', flexShrink: 0 },
   rowHint: { color: 'rgba(255,255,255,0.72)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
   rowSubHint: { color: 'rgba(255,255,255,0.88)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
@@ -6437,6 +7907,102 @@ const hsS = StyleSheet.create({
     marginTop: -1,
   },
 });
+
+/** שורת מצב משחק (מול בוט / במכשיר אחד) — משותף לגלגל ולמודאל מתקדמים */
+function GameModeToggleBlock({
+  gameMode,
+  setGameMode,
+}: {
+  gameMode: 'pass-and-play' | 'vs-bot';
+  setGameMode: (m: 'pass-and-play' | 'vs-bot') => void;
+}) {
+  const { t } = useLocale();
+  return (
+    <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+      <View style={[hsS.row, hsS.rowRange]}>
+        <Text style={hsS.rowLabel}>{t('start.mode')}</Text>
+        <View style={hsS.toggleGroup}>
+          {([['pass-and-play', t('start.modePassAndPlay')], ['vs-bot', t('start.modeVsBot')]] as const).map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              onPress={() => {
+                setGameMode(key);
+                Keyboard.dismiss();
+              }}
+              activeOpacity={0.7}
+              style={[hsS.toggleBtn, gameMode === key ? hsS.toggleOn : hsS.toggleOff]}
+            >
+              <Text style={gameMode === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    </LinearGradient>
+  );
+}
+
+/** רמת בוט + שם — רק במצב vs-bot; משותף לגלגל ולמודאל מתקדמים */
+function BotDifficultySettingsBlock({
+  botDifficulty,
+  setBotDifficulty,
+  botDisplayName,
+  setBotDisplayName,
+}: {
+  botDifficulty: BotDifficulty;
+  setBotDifficulty: (d: BotDifficulty) => void;
+  botDisplayName: string;
+  setBotDisplayName: (s: string) => void;
+}) {
+  const { t } = useLocale();
+  return (
+    <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+      <View style={{ paddingVertical: 10, paddingHorizontal: 4, gap: 10 }}>
+        <View style={[hsS.row, hsS.rowRange, { paddingVertical: 0, marginBottom: 0 }]}>
+          <Text style={hsS.rowLabel}>{t('start.botDifficulty')}</Text>
+          <View style={hsS.toggleGroup}>
+            {(
+              [
+                ['easy', t('start.botEasy')],
+                ['medium', t('start.botMedium')],
+                ['hard', t('start.botHard')],
+              ] as const
+            ).map(([key, label]) => (
+              <TouchableOpacity
+                key={key}
+                onPress={() => setBotDifficulty(key)}
+                activeOpacity={0.7}
+                style={[hsS.toggleBtn, botDifficulty === key ? hsS.toggleOn : hsS.toggleOff]}
+              >
+                <Text style={botDifficulty === key ? hsS.toggleOnTxt : hsS.toggleOffTxt}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+        <View style={{ alignSelf: 'stretch' }}>
+          <Text style={[hsS.rowLabel, { fontSize: 12, marginBottom: 6 }]}>{t('start.botNameLabel')}</Text>
+          <TextInput
+            value={botDisplayName}
+            onChangeText={setBotDisplayName}
+            placeholder={t('start.botNamePlaceholder')}
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            maxLength={24}
+            style={{
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.28)',
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              color: '#FFFFFF',
+              fontSize: 14,
+              fontWeight: '600',
+              backgroundColor: 'rgba(15,23,42,0.35)',
+            }}
+          />
+        </View>
+      </View>
+    </LinearGradient>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  TURN TRANSITION
@@ -6614,11 +8180,7 @@ function getVisiblePlayerChips(players: Player[], currentPlayerIndex: number, sh
 }
 
 const playerTurnChipActiveRing = {
-  borderRadius: 999,
-  padding: 4,
-  borderWidth: 2.5,
-  borderColor: '#FACC15',
-  backgroundColor: 'rgba(250,204,21,0.14)',
+  padding: 0,
 } as const;
 
 const START_TURN_TIMER_SECONDS = 15;
@@ -6798,6 +8360,15 @@ function TurnTransition() {
     !!mp?.gameOverride && typeof myPlayerIndex === 'number' && (state.currentPlayerIndex !== myPlayerIndex || isEliminatedSpectator);
   const isMyTurnOnline =
     !!mp?.gameOverride && typeof myPlayerIndex === 'number' && state.currentPlayerIndex === myPlayerIndex && !isEliminatedSpectator;
+  const isLocalBotTurn =
+    !mp?.gameOverride &&
+    !!(
+      state.botConfig &&
+      cp &&
+      state.botConfig.playerIds.includes(cp.id) &&
+      state.phase !== 'game-over'
+    );
+  const showOnlineBotDifficultyBtn = !!mp?.gameOverride && state.hostBotDifficulty != null;
   const currentIdx = state.currentPlayerIndex;
   const lastPlayerIndex = (state.currentPlayerIndex - 1 + state.players.length) % Math.max(state.players.length, 1);
   const PLAYER_BUBBLE_COLORS = ['#14532d', '#1d4ed8', '#7c2d12', '#4b5563'] as const;
@@ -6806,10 +8377,11 @@ function TurnTransition() {
   const lastPlayerBorderColor = PLAYER_BUBBLE_BORDER_COLORS[lastPlayerIndex % PLAYER_BUBBLE_BORDER_COLORS.length];
   const [tooltipCard, setTooltipCard] = useState<Card | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [onlineBotDiffOpen, setOnlineBotDiffOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
   const [handHintDismissed, setHandHintDismissed] = useState(false);
-  /** מונע לחיצת-רפאים: לחיצה על "התחל משחק" ושחרור באזור כפתור "אני מוכן" בקפיצה למסך הזה */
-  const [beginTurnEnabled, setBeginTurnEnabled] = useState(false);
+  /** כפתור "אני מוכן" חייב להיות זמין תמיד במסך מעבר תור */
+  const beginTurnEnabled = true;
   const [localStartTurnDeadlineAt, setLocalStartTurnDeadlineAt] = useState<number | null>(null);
   const startTurnTimeoutFiredRef = useRef(false);
   const [startTurnNowMs, setStartTurnNowMs] = useState(() => Date.now());
@@ -6835,11 +8407,6 @@ function TurnTransition() {
   }, []);
   const showPlayerWelcomeBubble = guidanceOn && !isOnlineSpectator && !playerWelcomeDismissed;
   useEffect(() => {
-    setBeginTurnEnabled(false);
-    const tid = setTimeout(() => setBeginTurnEnabled(true), 500);
-    return () => clearTimeout(tid);
-  }, [state.currentPlayerIndex, state.roundsPlayed]);
-  useEffect(() => {
     if (state.phase !== 'turn-transition') {
       setLocalStartTurnDeadlineAt(null);
       startTurnTimeoutFiredRef.current = false;
@@ -6850,12 +8417,12 @@ function TurnTransition() {
       startTurnTimeoutFiredRef.current = false;
       return;
     }
-    if (mp?.gameOverride) {
+    if (isLocalBotTurn) {
       setLocalStartTurnDeadlineAt(null);
       startTurnTimeoutFiredRef.current = false;
       return;
     }
-    if (showPlayerWelcomeBubble) {
+    if (mp?.gameOverride) {
       setLocalStartTurnDeadlineAt(null);
       startTurnTimeoutFiredRef.current = false;
       return;
@@ -6871,10 +8438,9 @@ function TurnTransition() {
       setLocalStartTurnDeadlineAt(null);
     }, 180);
     return () => clearInterval(id);
-  }, [state.phase, state.currentPlayerIndex, state.roundsPlayed, isOnlineSpectator, mp?.gameOverride, showPlayerWelcomeBubble, dispatch]);
-  const startTurnDeadlineAt = showPlayerWelcomeBubble
-    ? null
-    : (isMyTurnOnline ? (state.turnDeadlineAt ?? null) : localStartTurnDeadlineAt);
+  }, [state.phase, state.currentPlayerIndex, state.roundsPlayed, isOnlineSpectator, isLocalBotTurn, mp?.gameOverride, dispatch]);
+  const startTurnDeadlineAt = isLocalBotTurn ? null : (isMyTurnOnline ? (state.turnDeadlineAt ?? null) : localStartTurnDeadlineAt);
+  const showSmallTurnTimerHint = state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
   useEffect(() => {
     if (startTurnDeadlineAt == null) return;
     const id = setInterval(() => setStartTurnNowMs(Date.now()), 140);
@@ -6885,6 +8451,7 @@ function TurnTransition() {
     : Math.max(0, Math.ceil((startTurnDeadlineAt - startTurnNowMs) / 1000));
   const shouldBlinkBeginTurn = !!(
     !isOnlineSpectator &&
+    !isLocalBotTurn &&
     beginTurnEnabled &&
     state.phase === 'turn-transition' &&
     startTurnSecsLeft != null &&
@@ -6993,6 +8560,7 @@ function TurnTransition() {
         : state.timerSetting === '30'
           ? '30s'
           : null;
+  const compactPlayerScreen = state.roundsPlayed > 0;
 
   if (!cp) return null;
 
@@ -7026,37 +8594,34 @@ function TurnTransition() {
 
   // בדיקת פריסת יד (פיתוח בלבד)
   devCheckHandLayout();
-  const HEADER_PAD = 44;
+  const HEADER_PAD = 0;
   const BTN_STRIP_H = HAND_BOTTOM_OFFSET;
   return (
-    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'hidden' }} collapsable={false}>
+    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }} collapsable={false}>
       {/* רקע נפרד ממסך המשחק — מסך המשחק משתמש ב־bg.jpg; כאן מעבר כחול כדי שלא ייראה כמו אותו מסך */}
       <LinearGradient colors={[...playerScreensGradientColors]} start={{ x: 0, y: 0 }} end={{ x: 0.85, y: 1 }} style={StyleSheet.absoluteFill} />
-      <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: 0, overflow: 'hidden' }}>
-      {/* ── Header — יציאה + חוקים בצד אחד, קלפים/טיימר/שברים + עד 3 שמות שחקנים (ראשון = מוביל) בצד הנגדי ── */}
-      <View style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingVertical:6}}>
-        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:6,marginTop:-25}}>
-          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
-          <LulosButton text="חוקים" color="blue" width={72} height={32} fontSize={11} onPress={()=>setRulesOpen(true)} />
-          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} />
-        </View>
+      <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
+      {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
+      <View style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
         <View style={{flexDirection:'column',alignItems:'flex-start',gap:2,flex:1,minWidth:0}}>
-          <View style={{flexDirection:'row',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'center',marginTop:-25,alignSelf:'center'}}>
-            <View style={{backgroundColor:'rgba(234,179,8,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#FACC15'}}>
-              <Text style={{color:'#FDE68A',fontSize:11,fontWeight:'700'}}>{state.timerSetting === 'off' ? 'ללא טיימר' : state.timerSetting === 'custom' ? (state.timerCustomSeconds >= 60 ? `${Math.floor(state.timerCustomSeconds / 60)} דק' ${state.timerCustomSeconds % 60} שנ'` : `${state.timerCustomSeconds} שנ'`) : state.timerSetting === '60' ? '1 דקה' : `${state.timerSetting} שנ׳`}</Text>
+          {!compactPlayerScreen && (
+            <View style={{flexDirection:'row',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'center',marginTop:-25,alignSelf:'center'}}>
+              <View style={{backgroundColor:'rgba(234,179,8,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#FACC15'}}>
+                <Text style={{color:'#FDE68A',fontSize:11,fontWeight:'700'}}>{state.timerSetting === 'off' ? 'ללא טיימר' : state.timerSetting === 'custom' ? (state.timerCustomSeconds >= 60 ? `${Math.floor(state.timerCustomSeconds / 60)} דק' ${state.timerCustomSeconds % 60} שנ'` : `${state.timerCustomSeconds} שנ'`) : state.timerSetting === '60' ? '1 דקה' : `${state.timerSetting} שנ׳`}</Text>
+              </View>
+              {state.showSolveExercise && (
+                <View style={{backgroundColor:'rgba(168,85,247,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#A78BFA'}}>
+                  <Text style={{color:'#C4B5FD',fontSize:11,fontWeight:'700'}}>פתרון תרגיל</Text>
+                </View>
+              )}
+              {state.showFractions && (
+                <View style={{backgroundColor:'rgba(34,197,94,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#4ADE80'}}>
+                  <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'700'}}>שברים</Text>
+                </View>
+              )}
             </View>
-            {state.showSolveExercise && (
-              <View style={{backgroundColor:'rgba(168,85,247,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#A78BFA'}}>
-                <Text style={{color:'#C4B5FD',fontSize:11,fontWeight:'700'}}>פתרון תרגיל</Text>
-              </View>
-            )}
-            {state.showFractions && (
-              <View style={{backgroundColor:'rgba(34,197,94,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#4ADE80'}}>
-                <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'700'}}>שברים</Text>
-              </View>
-            )}
-          </View>
-          <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-start',marginTop:25}}>
+          )}
+          <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end',alignSelf:'flex-end',marginTop:2,marginRight:4}}>
             {displayPlayers.map((p) => {
               const isCurrent = cp?.id === p.id;
               const shortName = (p.name || 'שחקן').length > 5 ? (p.name || 'שחקן').slice(0, 4) + '…' : (p.name || 'שחקן');
@@ -7091,8 +8656,13 @@ function TurnTransition() {
             )}
           </View>
         </View>
+        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:6,marginTop:0}}>
+          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
+          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} />
+          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
+        </View>
       </View>
-      {turnTimerBannerValue && (
+      {!compactPlayerScreen && turnTimerBannerValue && (
         <View style={{ alignItems: 'center', paddingHorizontal: 12, paddingTop: 2, paddingBottom: 8 }}>
           <View style={[alertBubbleStyle.box, { paddingVertical: 6, paddingHorizontal: 12 }]}>
             <Text style={[alertBubbleStyle.body, { marginTop: 0, fontWeight: '800', textAlign: 'center' }]}>
@@ -7102,29 +8672,35 @@ function TurnTransition() {
         </View>
       )}
 
-      <AppModal visible={tournamentInfoOpen} onClose={() => setTournamentInfoOpen(false)} title="טורניר — טבלת טורניר">
-        <View style={{ gap: 8 }}>
-          <Text style={{ color: '#CBD5E1', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
-            הטבלה מתאפסת בתחילת כל משחק חדש ומציגה ניצחונות/הפסדים למשחק הנוכחי.
-          </Text>
-          <View style={{ borderWidth: 1, borderColor: 'rgba(147,197,253,0.35)', borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.35)', padding: 8 }}>
-            {(state.tournamentTable?.length ?? 0) === 0 ? (
-              <Text style={{ color: '#93C5FD', fontSize: 12, textAlign: 'center' }}>אין נתונים עדיין</Text>
-            ) : (
-              (state.tournamentTable ?? []).map((row) => (
-                <View key={row.playerId} style={{ flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5, borderTopWidth: 1, borderTopColor: 'rgba(148,163,184,0.16)' }}>
-                  <Text style={{ color: '#E2E8F0', fontSize: 12, fontWeight: '700' }}>{row.playerName || `שחקן ${row.playerId + 1}`}</Text>
-                  <Text style={{ color: '#93C5FD', fontSize: 12 }}>ניצחונות: {row.wins} | הפסדים: {row.losses}</Text>
-                </View>
-              ))
-            )}
-          </View>
-        </View>
-      </AppModal>
+      <TournamentInfoModal
+        visible={tournamentInfoOpen}
+        onClose={() => setTournamentInfoOpen(false)}
+        rows={getTournamentRowsForModal(state)}
+        gameInfo={{
+          modeLabel: state.mode === 'vs-bot' ? 'נגד בוט' : 'מסירה בין שחקנים',
+          difficultyLabel: state.difficulty === 'easy' ? 'קל' : 'מלא',
+          playersCount: state.players.length,
+          diceModeLabel: state.diceMode === '2' ? '2 קוביות' : '3 קוביות',
+        }}
+        onOpenRules={() => setRulesOpen(true)}
+        settings={{
+          mathRangeMax: state.mathRangeMax,
+          showFractions: state.showFractions,
+          fractionKinds: state.fractionKinds,
+          enabledOperators: state.enabledOperators,
+          allowNegativeTargets: state.allowNegativeTargets,
+          showPossibleResults: state.showPossibleResults,
+          showSolveExercise: state.showSolveExercise,
+          timerSetting: state.timerSetting,
+          timerCustomSeconds: state.timerCustomSeconds,
+        }}
+      />
 
       <View style={{flex:1,paddingBottom:BTN_STRIP_H + HAND_STRIP_HEIGHT}}>
       {/* ── מידע — הודעות וטולטיפ (תגיות הועברו ל־Header) ── */}
       <View style={{flex:1,minHeight:60,paddingHorizontal:24,alignItems:'center',justifyContent:'center'}}>
+        {(!compactPlayerScreen || !!state.lastMoveMessage || state.lastDiscardCount === 1) ? (
+          <>
         {!showPlayerWelcomeBubble && (
           <View style={{ height: 0 }} />
         )}
@@ -7262,6 +8838,8 @@ function TurnTransition() {
             )}
           </TouchableOpacity>
         )}
+          </>
+        ) : null}
       </View>
       </View>
       </View>
@@ -7299,13 +8877,17 @@ function TurnTransition() {
           )}
         </View>
       </View>
-      <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, minHeight: BTN_STRIP_H, paddingBottom: safe.bottom, alignItems: 'center', justifyContent: 'center', zIndex: 10, overflow: 'visible' as const }}>
+      {/* בלי pointerEvents במצב ריק — השכבה הייתה בולעת מגעים מעל המניפה (zIndex נמוך יותר) */}
+      <View
+        pointerEvents={isOnlineSpectator ? 'auto' : 'none'}
+        style={{ position: 'absolute', bottom: 0, left: 0, right: 0, minHeight: BTN_STRIP_H, paddingBottom: safe.bottom, alignItems: 'center', justifyContent: 'center', zIndex: 10, overflow: 'visible' as const }}
+      >
         {isOnlineSpectator ? (
           <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 16, fontWeight: '700', textAlign: 'center' }}>ממתין לאישור השחקן…</Text>
         ) : null}
       </View>
 
-      {!isOnlineSpectator && (
+      {!isOnlineSpectator && !isLocalBotTurn && (
         <View
           pointerEvents="box-none"
           style={{
@@ -7313,7 +8895,8 @@ function TurnTransition() {
             top: GOLD_ACTION_BUTTON_TOP,
             left: 0,
             right: 0,
-            zIndex: 25,
+            zIndex: 999,
+            ...(Platform.OS === 'android' ? { elevation: 999 } : {}),
             alignItems: 'center',
           }}
         >
@@ -7324,25 +8907,27 @@ function TurnTransition() {
                 width={220}
                 height={48}
                 fontSize={17}
-                disabled={!beginTurnEnabled}
+                disabled={false}
                 leadingContent={
                   startTurnDeadlineAt != null ? (
-                    <StartTurnCountdownCircle
-                      deadlineAt={startTurnDeadlineAt}
-                      size={Math.round(48 * 0.62)}
-                      soundEnabled={soundOn}
-                      containerStyle={{ marginBottom: 0 }}
-                      showLabel={false}
-                    />
+                    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                      <StartTurnCountdownCircle
+                        deadlineAt={startTurnDeadlineAt}
+                        size={Math.round(48 * 0.62)}
+                        soundEnabled={soundOn}
+                        containerStyle={{ marginBottom: 0 }}
+                        showLabel={false}
+                      />
+                      <Text style={{ color: '#FDE047', fontSize: 10, fontWeight: '900', marginTop: -2 }}>▼</Text>
+                    </View>
                   ) : undefined
                 }
                 onPress={() => {
-                  if (!beginTurnEnabled) return;
                   dispatch({ type: 'BEGIN_TURN' });
                 }}
               />
             </Animated.View>
-            {startTurnDeadlineAt != null && (
+            {startTurnDeadlineAt != null && showSmallTurnTimerHint && (
               <Text style={{ color: '#FDE68A', fontSize: 10, fontWeight: '600', marginTop: 8, textAlign: 'center', paddingHorizontal: 12, opacity: 0.92 }}>
                 {t('ui.turnTimerLabel')}
               </Text>
@@ -7369,11 +8954,27 @@ function TurnTransition() {
           padding: 0,
         }}
       >
-        <RulesContent state={state} numberRange={state.difficulty} fractions={state.showFractions} />
+        <RulesContent state={state} />
       </AppModal>
       <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title={t('start.catalogTitle')}>
-        <CardsCatalogContent numberRange={state.difficulty} fractions={state.showFractions} />
+        <CardsCatalogContent
+          numberRange={state.difficulty}
+          fractions={state.showFractions}
+          enabledOperators={state.enabledOperators}
+          fractionKinds={state.fractionKinds}
+        />
       </AppModal>
+
+      <OnlineBotDifficultyModal
+        visible={onlineBotDiffOpen}
+        onClose={() => setOnlineBotDiffOpen(false)}
+        current={state.hostBotDifficulty}
+        isHost={!!mp?.isHost}
+        onSelectLevel={(d) => {
+          mp?.emit('set_bot_difficulty', { difficulty: d });
+          setOnlineBotDiffOpen(false);
+        }}
+      />
 
       {cp && <PlayerNameModal initialName={cp.name} playerSlot={currentIdx + 1} onConfirm={handlePlayerNameConfirm} forceOpen={nameModalOpen} onClose={() => setNameModalOpen(false)} />}
       {showPlayerWelcomeBubble && (
@@ -7391,7 +8992,7 @@ function TurnTransition() {
             <View style={[alertBubbleStyle.box, { borderColor: 'rgba(250,204,21,0.55)' }]}>
               <Text style={alertBubbleStyle.title}>{t('ui.welcomeHowTitle')}</Text>
               <Text style={[alertBubbleStyle.body, { marginTop: 8, writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
-                {`${t('welcome.body')}${state.showFractions ? `\n${t('welcome.fractionsLine')}` : ''}\n${t('welcome.goodLuck')}`}
+                {`${state.showPossibleResults ? t('welcome.body') : t('welcome.bodyNoPossibleResults')}${state.showFractions ? `\n${t('welcome.fractionsLine')}` : ''}\n${t('welcome.goodLuck')}`}
               </Text>
               <TouchableOpacity
                 activeOpacity={0.9}
@@ -7428,7 +9029,7 @@ function PlayerSidebar({
   const { t } = useLocale();
   const { state } = useGame();
   const [showAll, setShowAll] = useState(false);
-  const [historyPlayerIndex, setHistoryPlayerIndex] = useState<number | null>(null);
+  const [historyPlayerId, setHistoryPlayerId] = useState<number | null>(null);
   const cp = state.players[state.currentPlayerIndex];
   const visible = useMemo(
     () => getVisiblePlayerChips(state.players, state.currentPlayerIndex, showAll, COLLAPSED_PLAYER_CHIP_COUNT),
@@ -7436,8 +9037,11 @@ function PlayerSidebar({
   );
   const hasMore = state.players.length > COLLAPSED_PLAYER_CHIP_COUNT && !showAll;
 
-  const historyPlayer = historyPlayerIndex != null ? state.players[historyPlayerIndex] : null;
-  const playerMoves = historyPlayerIndex != null ? state.moveHistory.filter(e => e.playerIndex === historyPlayerIndex) : [];
+  const historyPlayerIndex = historyPlayerId != null
+    ? state.players.findIndex((p) => p.id === historyPlayerId)
+    : -1;
+  const historyPlayer = historyPlayerIndex >= 0 ? state.players[historyPlayerIndex] : null;
+  const playerMoves = historyPlayerIndex >= 0 ? state.moveHistory.filter((e) => e.playerIndex === historyPlayerIndex) : [];
   const totalDiscarded = playerMoves.reduce((s, e) => s + e.cardsDiscarded, 0);
 
   return (
@@ -7455,12 +9059,12 @@ function PlayerSidebar({
                 width={72}
                 height={32}
                 fontSize={10}
-                onPress={() => setHistoryPlayerIndex(p.id)}
+                onPress={() => setHistoryPlayerId(p.id)}
               />
             );
             if (isCurrent) {
               return (
-                <View key={p.id} style={{ borderRadius: 999, padding: 2, borderWidth: 2, borderColor: '#FACC15', backgroundColor: 'rgba(250,204,21,0.12)' }}>
+                <View key={p.id}>
                   {btn}
                 </View>
               );
@@ -7501,12 +9105,17 @@ function PlayerSidebar({
           padding: 0,
         }}
       >
-        <RulesContent state={state} numberRange={state.difficulty} fractions={state.showFractions} />
+        <RulesContent state={state} />
       </AppModal>
       <AppModal visible={cardsCatalogOpen} onClose={() => setCardsCatalogOpen(false)} title={t('start.catalogTitle')}>
-        <CardsCatalogContent numberRange={state.difficulty} fractions={state.showFractions} />
+        <CardsCatalogContent
+          numberRange={state.difficulty}
+          fractions={state.showFractions}
+          enabledOperators={state.enabledOperators}
+          fractionKinds={state.fractionKinds}
+        />
       </AppModal>
-      <AppModal visible={historyPlayerIndex !== null} onClose={() => setHistoryPlayerIndex(null)} title={historyPlayer ? t('game.moveHistoryTitle', { name: historyPlayer.name }) : t('game.historyShort')}>
+      <AppModal visible={historyPlayerId !== null} onClose={() => setHistoryPlayerId(null)} title={historyPlayer ? t('game.moveHistoryTitle', { name: historyPlayer.name }) : t('game.historyShort')}>
         <View style={{ paddingVertical: 8 }}>
           {historyPlayer && (
             <>
@@ -7547,15 +9156,16 @@ const sbS = StyleSheet.create({
 // מקור 2 — GameScreen showGuidance (GUIDANCE): שלישיית קוביות וכו׳
 // ברוכים הבאים — רק בבועה במסך מעבר התור (TurnTransition), לא כאן
 // שליטה: "הדרכה והסברים" בהגדרות — כיבוי מונע הודעות onb + guidance (משתמש חוזר)
-const ONB_KEYS = ['onb_game_start', 'onb_results', 'onb_first_discard', 'onb_welcome_screen', 'onb_choose_cards', 'onb_build_equation'] as const;
+const ONB_KEYS = ['onb_game_start', 'onb_results', 'onb_first_discard', 'onb_welcome_screen', 'onb_choose_cards', 'onb_choose_cards_after_confirm', 'onb_build_equation'] as const;
 type OnbKey = typeof ONB_KEYS[number];
-const ROLL_ARROW_SEEN_KEY = 'lulos_roll_arrow_seen';
+/** חץ קטן חד־פעמי מעל מיני תוצאות — אחרי לחיצה ראשונה על «תוצאות אפשריות» */
+const RESULTS_MINI_ARROW_SEEN_KEY = 'lulos_results_mini_arrow_seen';
 /** הדרכה חד־פעמית — אחרי מעבר ל־building מהטלת קוביות */
 const BUILDING_EQUATION_HINT_KEY = 'lulos_building_equation_hint_shown';
 /** הודעת "אין לך קלף זהה" — מוצגת פעם אחת בלבד לאורך השימוש (עם איפוס onboarding) */
 const NO_IDENTICAL_HINT_SEEN_KEY = 'lulos_no_identical_hint_seen';
 
-const GUIDANCE_KEYS = ['guidance_op_challenge', 'guidance_identical', 'guidance_joker', 'guidance_triple'] as const;
+const GUIDANCE_KEYS = ['guidance_op_challenge', 'guidance_identical', 'guidance_joker', 'guidance_triple', 'guidance_wild_results'] as const;
 type GuidanceKey = typeof GUIDANCE_KEYS[number];
 
 const CARD_HINT_JOKER_SEEN_KEY = 'lulos_card_hint_joker_seen';
@@ -7569,11 +9179,10 @@ async function clearAllLulosOnboardingKeys(): Promise<void> {
     'lulos_tutorial_done',
     'lulos_tip1_done',
     'lulos_tip2_done',
-    'lulos_frac_arrow_seen',
     'lulos_ident_arrow_seen',
     'lulos_find_cards_sum_alert_seen',
     NO_IDENTICAL_HINT_SEEN_KEY,
-    ROLL_ARROW_SEEN_KEY,
+    RESULTS_MINI_ARROW_SEEN_KEY,
     BUILDING_EQUATION_HINT_KEY,
     WELCOME_PLAYER_SCREEN_KEY,
     'lulos_guidance_notifications',
@@ -7603,13 +9212,40 @@ function GameScreen() {
   const gameScreenMyIndex = (state as { myPlayerIndex?: number }).myPlayerIndex;
   const isOnlineGame = !!mpOptional?.gameOverride;
   const myPerspIdx = typeof gameScreenMyIndex === 'number' ? gameScreenMyIndex : state.currentPlayerIndex;
+  const isLocalBotTurn =
+    !isOnlineGame &&
+    !!(
+      state.botConfig &&
+      cp &&
+      state.botConfig.playerIds.includes(cp.id) &&
+      state.phase !== 'game-over'
+    );
+  const onlineBotPlayer =
+    isOnlineGame ? state.players.find((p: any) => p?.isBot) ?? null : null;
+  const showBotMissionStrip =
+    (
+      isLocalBotTurn &&
+      state.phase === 'solved' &&
+      !state.hasPlayedCards
+    ) ||
+    (
+      isOnlineGame &&
+      !!onlineBotPlayer
+    );
+  const canRenderBotMissionStrip =
+    showBotMissionStrip &&
+    state.lastEquationDisplay != null &&
+    state.equationResult != null;
   const isOnlineWaiting =
     isOnlineGame && typeof gameScreenMyIndex === 'number' && state.currentPlayerIndex !== gameScreenMyIndex;
+  const showOnlineBotDifficultyBtn = isOnlineGame && state.hostBotDifficulty != null;
   const [localGameTurnDeadlineAt, setLocalGameTurnDeadlineAt] = useState<number | null>(null);
-  const gameTurnTimeoutFiredRef = useRef(false);
   const [gameTurnNowMs, setGameTurnNowMs] = useState(() => Date.now());
+  const gameTurnTimeoutFiredRef = useRef(false);
   const [gameRulesOpen, setGameRulesOpen] = useState(false);
   const [gameCardsCatalogOpen, setGameCardsCatalogOpen] = useState(false);
+  const [onlineBotDiffOpen, setOnlineBotDiffOpen] = useState(false);
+  const [tournamentInfoOpen, setTournamentInfoOpen] = useState(false);
   /** רמזים בבועות (שבר, תוצאות, תרגיל, אין קלף זהה…) — רק אחרי הטלת קוביות ראשונה במשחק */
   const [midGameHintsUnlocked, setMidGameHintsUnlocked] = useState(false);
   const miniStripEverShownRef = useRef(false);
@@ -7722,6 +9358,9 @@ function GameScreen() {
       : state.timerSetting === '60'
         ? 60
         : 0;
+  const timerTurnKeyRef = useRef<string | null>(null);
+  const timerConfigKeyRef = useRef<string>('');
+  const showSmallTurnTimerHint = state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
   const bubbleMidRef = useRef<Audio.Sound | null>(null);
   const bubbleEndRef = useRef<Audio.Sound | null>(null);
   const gameTimerFinal7Ref = useRef<Audio.Sound | null>(null);
@@ -7730,25 +9369,43 @@ function GameScreen() {
   useEffect(() => {
     if (state.timerSetting === 'off') {
       setTimerRunning(false);
+      timerTurnKeyRef.current = null;
+      timerConfigKeyRef.current = '';
       return;
     }
     const isGameTurnPhase =
       state.phase === 'pre-roll' ||
       state.phase === 'building' ||
       state.phase === 'solved';
-    if (isGameTurnPhase && !state.hasPlayedCards) {
-      setSecsLeft(TIMER_TOTAL);
-      setTimerRunning(true);
-    } else if (!isGameTurnPhase) {
+    if (!isGameTurnPhase) {
       setTimerRunning(false);
+      if (state.phase === 'setup' || state.phase === 'game-over') {
+        timerTurnKeyRef.current = null;
+        timerConfigKeyRef.current = '';
+      }
+      return;
     }
+    if (state.hasPlayedCards) {
+      setTimerRunning(false);
+      return;
+    }
+    const turnKey = `${state.roundsPlayed}:${state.currentPlayerIndex}`;
+    const configKey = `${state.timerSetting}:${TIMER_TOTAL}`;
+    const shouldResetTimer =
+      timerTurnKeyRef.current !== turnKey ||
+      timerConfigKeyRef.current !== configKey;
+    if (shouldResetTimer) {
+      setSecsLeft(TIMER_TOTAL);
+      bubbleTickLastSecondRef.current = null;
+      timerTurnKeyRef.current = turnKey;
+      timerConfigKeyRef.current = configKey;
+    }
+    setTimerRunning(true);
   }, [state.phase, state.hasPlayedCards, state.timerSetting, TIMER_TOTAL]);
 
   // כשהטיימר מגיע ל־0: מציגים הודעה חוסמת בתחתית, אחרי 2.5 שניות — שלוף קלף ומעבר לתור הבא
   const [timerExpiredOverlay, setTimerExpiredOverlay] = useState(false);
   const timerExpiredRef = useRef(false);
-  const [rollArrowSeen, setRollArrowSeen] = useState(true);
-  const rollArrowAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!timerRunning || secsLeft <= 0) return;
     const id = setInterval(() => {
@@ -7773,9 +9430,6 @@ function GameScreen() {
     }, 2500);
     return () => clearTimeout(t);
   }, [timerExpiredOverlay, dispatch]);
-  useEffect(() => {
-    AsyncStorage.getItem(ROLL_ARROW_SEEN_KEY).then(v => setRollArrowSeen(v === 'true'));
-  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -7891,15 +9545,12 @@ function GameScreen() {
 
   // Roll button logic
   const canRoll = state.phase === 'pre-roll' && !state.hasPlayedCards && state.pendingFractionTarget === null;
+  const rollArrowAnim = useRef(new Animated.Value(0)).current;
   const noIdenticalHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleRoll = useCallback(() => {
     if (noIdenticalHintTimerRef.current) {
       clearTimeout(noIdenticalHintTimerRef.current);
       noIdenticalHintTimerRef.current = null;
-    }
-    if (!rollArrowSeen) {
-      setRollArrowSeen(true);
-      AsyncStorage.setItem(ROLL_ARROW_SEEN_KEY, 'true');
     }
     playDiceSound();
     bgDiceRef.current?.summon();
@@ -7913,7 +9564,7 @@ function GameScreen() {
         }, 420);
       }
     }
-  }, [dispatch, playDiceSound, rollArrowSeen, soundOn]);
+  }, [dispatch, playDiceSound, soundOn]);
 
   // צליל כפתור "שלוף קלף - ויתור" — button_forfeit.mp3 (ברמת GameScreen כדי לא להפר hooks)
   const drawForfeitSoundRef = useRef<Audio.Sound | null>(null);
@@ -7988,12 +9639,14 @@ function GameScreen() {
 
   const [tutLoaded, setTutLoaded] = useState(false);
 
-  // Fraction arrow — only first time ever
-  const [fracArrowSeen, setFracArrowSeen] = useState(true); // default true = hidden until loaded
-  const fracArrowX = useRef(new Animated.Value(0)).current;
-
   // "אין לך קלף זהה" — פעם אחת בלבד (נשמר ב־AsyncStorage)
   const [noIdenticalHintSeen, setNoIdenticalHintSeen] = useState(true);
+
+  // חץ חד־פעמי מעל מיני תוצאות — אחרי פתיחה ראשונה של «תוצאות אפשריות»
+  const [resultsMiniArrowSeen, setResultsMiniArrowSeen] = useState(true);
+  const [resultsMiniArrowPulse, setResultsMiniArrowPulse] = useState(false);
+  const resultsStripArrowAnim = useRef(new Animated.Value(0)).current;
+  const resultsStripArrowLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
   // Identical card arrow hint — only first time ever
   const [identArrowSeen, setIdentArrowSeen] = useState(true);
@@ -8044,13 +9697,13 @@ function GameScreen() {
       AsyncStorage.getItem('lulos_tutorial_done'),
       AsyncStorage.getItem('lulos_tip1_done'),
       AsyncStorage.getItem('lulos_tip2_done'),
-      AsyncStorage.getItem('lulos_frac_arrow_seen'),
       AsyncStorage.getItem('lulos_ident_arrow_seen'),
       AsyncStorage.getItem(NO_IDENTICAL_HINT_SEEN_KEY),
+      AsyncStorage.getItem(RESULTS_MINI_ARROW_SEEN_KEY),
       ...ONB_KEYS.map(k => AsyncStorage.getItem(k)),
       ...GUIDANCE_KEYS.map(k => AsyncStorage.getItem(k)),
     ])
-      .then(([guidance, tut, tip1, tip2, arrow, identArrow, noIdenticalHint, ...rest]) => {
+      .then(([guidance, tut, tip1, tip2, identArrow, noIdenticalHint, resultsMiniArrow, ...rest]) => {
         if (cancelled) return;
         const enabled = guidance !== 'false';
         guidanceEnabledRef.current = enabled;
@@ -8060,9 +9713,9 @@ function GameScreen() {
         void tut;
         void tip1;
         void tip2;
-        setFracArrowSeen(arrow === 'true' || guidance === 'false');
         setIdentArrowSeen(identArrow === 'true' || guidance === 'false');
         setNoIdenticalHintSeen(noIdenticalHint === 'true' || guidance === 'false');
+        setResultsMiniArrowSeen(resultsMiniArrow === 'true' || guidance === 'false');
         if (guidance === 'false') {
           ONB_KEYS.forEach(k => onbSeen.current.add(k));
           GUIDANCE_KEYS.forEach(k => guidanceSeen.current.add(k));
@@ -8076,6 +9729,7 @@ function GameScreen() {
         if (!cancelled) {
           setTutLoaded(true);
           setNoIdenticalHintSeen(false);
+          setResultsMiniArrowSeen(true);
         }
       });
     const t = setTimeout(() => {
@@ -8096,7 +9750,7 @@ function GameScreen() {
       });
     }
   }, [state.phase]);
-  /** חץ לכפתור הקוביות — מימין לכפתור */
+  /** חץ לכפתור הקוביות — מופיע ב־5 השניות האחרונות של טיימר תחילת התור */
   const showRollArrow =
     canRoll &&
     (gameTurnSecsLeft != null && gameTurnSecsLeft > 0 && gameTurnSecsLeft <= 5);
@@ -8114,8 +9768,7 @@ function GameScreen() {
       rollArrowAnim.setValue(0);
     }
     return () => { if (loop) loop.stop(); };
-  }, [showRollArrow]);
-
+  }, [showRollArrow, rollArrowAnim]);
   // Fraction hint state — all declared together before effects that use them
   const fracHintShown = useRef(false);
   useEffect(() => { if (state.phase === 'pre-roll') { fracHintShown.current = false; } }, [state.phase]);
@@ -8153,7 +9806,6 @@ function GameScreen() {
             autoDismissMs: 7000,
           },
         });
-        if (!fracArrowSeen) { setFracArrowSeen(true); AsyncStorage.setItem('lulos_frac_arrow_seen', 'true'); }
         return true; // intercepted — don't play yet
       }
 
@@ -8161,7 +9813,7 @@ function GameScreen() {
       return false;
     };
     return () => { fracTapIntercept.fn = null; };
-  }, [state.discardPile, tutLoaded, fracArrowSeen, dispatch, t]);
+  }, [state.discardPile, tutLoaded, dispatch, t]);
 
   // Possible results toggle: לחיצה ראשונה — הצגת מיני קלפים + ONB; לחיצה שנייה — הסתרה
   const toggleResultsBadges = useCallback(() => {
@@ -8192,13 +9844,82 @@ function GameScreen() {
       }
     }
     setResultsOpenState(true);
+    const shouldShowWildResultsGuidance =
+      midGameHintsUnlocked &&
+      tutLoaded &&
+      guidanceEnabledRef.current &&
+      state.guidanceEnabled !== false &&
+      hasWildForResults &&
+      wildResultsGuidanceCountRef.current < 2;
+    if (shouldShowWildResultsGuidance) {
+      wildResultsGuidanceCountRef.current += 1;
+      showGuidance(
+        'guidance_wild_results',
+        {
+          title: t('guidance.wildResultsTitle'),
+          message: t('guidance.wildResultsBody'),
+          emoji: '🟣',
+          style: 'info',
+          autoDismissMs: 9000,
+        },
+        {
+          title: t('guidance.wildResultsTitle'),
+          message: t('guidance.wildResultsBody'),
+          emoji: '🟣',
+          style: 'info',
+          autoDismissMs: 9000,
+        },
+      );
+    }
     if (!midGameHintsUnlocked || !guidanceEnabledRef.current || !tutLoaded) return;
     if (state.identicalAlert || state.pendingFractionTarget !== null) return;
     // בשימוש השלישי כבר יש הודעת תשלום עם requireAck — בלי גם onb_results (שני "הבנתי" ברצף)
     if (!shouldCountUseThisOpen || nextInfoUse !== 3) {
       showOnb('onb_results', '', '', 'לפניך מוצגות במיני קלפים את התוצאות האפשריות. אם תלחץ עליהם תוכל לגלות את התרגיל');
     }
-  }, [resultsOpen, midGameHintsUnlocked, tutLoaded, showOnb, state.identicalAlert, state.pendingFractionTarget, state.possibleResultsInfoUses, state.possibleResultsInfoCountedThisTurn, dispatch]);
+  }, [resultsOpen, midGameHintsUnlocked, tutLoaded, showOnb, state.identicalAlert, state.pendingFractionTarget, state.possibleResultsInfoUses, state.possibleResultsInfoCountedThisTurn, state.guidanceEnabled, dispatch, hasWildForResults, showGuidance, t]);
+
+  // חץ קטן (קנה מידה כמו מיני קלפים) — פעם אחת אחרי פתיחה ראשונה של תוצאות אפשריות
+  useEffect(() => {
+    if (!resultsOpen || resultsMiniArrowSeen || !tutLoaded) return;
+    if (!guidanceEnabledRef.current) return;
+    if (!(state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards)) return;
+
+    setResultsMiniArrowSeen(true);
+    void AsyncStorage.setItem(RESULTS_MINI_ARROW_SEEN_KEY, 'true');
+    setResultsMiniArrowPulse(true);
+    resultsStripArrowAnim.setValue(0);
+    resultsStripArrowLoopRef.current?.stop();
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(resultsStripArrowAnim, { toValue: 1, duration: 300, useNativeDriver: true, easing: Easing.inOut(Easing.quad) }),
+        Animated.timing(resultsStripArrowAnim, { toValue: 0, duration: 300, useNativeDriver: true, easing: Easing.inOut(Easing.quad) }),
+      ]),
+    );
+    resultsStripArrowLoopRef.current = loop;
+    loop.start();
+    const t = setTimeout(() => {
+      resultsStripArrowLoopRef.current?.stop();
+      resultsStripArrowLoopRef.current = null;
+      resultsStripArrowAnim.setValue(0);
+      setResultsMiniArrowPulse(false);
+    }, 3800);
+    return () => {
+      clearTimeout(t);
+      resultsStripArrowLoopRef.current?.stop();
+      resultsStripArrowLoopRef.current = null;
+    };
+  }, [
+    resultsOpen,
+    resultsMiniArrowSeen,
+    tutLoaded,
+    resultsStripArrowAnim,
+    state.showPossibleResults,
+    state.validTargets.length,
+    state.phase,
+    state.hasPlayedCards,
+  ]);
+
   // תרגיל נבחר להצגה באזור האפור (רק כש־showSolveExercise מופעל)
   const [selectedEquationForDisplay, setSelectedEquationForDisplay] = useState<EquationOption | null>(null);
   const [solveChipPulseKey, setSolveChipPulseKey] = useState(0);
@@ -8211,8 +9932,7 @@ function GameScreen() {
   const prevPhaseForOpChallenge = useRef(state.phase);
   const spectatorFracChallengeKeyRef = useRef('');
   useEffect(() => {
-    const fromTurnTrans = prevPhaseForOpChallenge.current === 'turn-transition' && state.phase === 'pre-roll';
-    if (fromTurnTrans && state.pendingFractionTarget !== null && !state.fractionAttackResolved) {
+    if (state.pendingFractionTarget !== null && !state.fractionAttackResolved) {
       const dedupeKey = `frac-${state.roundsPlayed}-${state.currentPlayerIndex}-${state.pendingFractionTarget}-${state.fractionPenalty}`;
       if (spectatorFracChallengeKeyRef.current !== dedupeKey) {
         spectatorFracChallengeKeyRef.current = dedupeKey;
@@ -8346,10 +10066,10 @@ function GameScreen() {
     if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
     if (state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards) {
       showOnb(
-        'onb_choose_cards',
+        'onb_choose_cards_after_confirm',
         '🎯',
-        t('onb.chooseCards.title'),
-        t('onb.chooseCards.body', { place: t('game.placeCards') }),
+        t('onb.chooseCardsAfterConfirm.title'),
+        t('onb.chooseCardsAfterConfirm.body'),
       );
     }
   }, [tutLoaded, onbBlocked, state.phase, state.equationResult, state.hasPlayedCards, t]);
@@ -8435,22 +10155,65 @@ function GameScreen() {
   );
   const filteredResultsForHand = useMemo(
     () =>
-      hasWildForResults
+      state.isTutorial
         ? state.validTargets
         : state.validTargets.filter(t => handNumberValuesForResults.has(t.result)),
-    [state.validTargets, handNumberValuesForResults, hasWildForResults],
+    [state.validTargets, handNumberValuesForResults, state.isTutorial],
+  );
+  const matchCountForHand = useMemo(
+    () => state.validTargets.filter(t => handNumberValuesForResults.has(t.result)).length,
+    [state.validTargets, handNumberValuesForResults],
+  );
+  const wildResultsGuidanceCountRef = useRef(0);
+  useEffect(() => {
+    wildResultsGuidanceCountRef.current = 0;
+  }, [state.openingDrawId]);
+  const placeNowChipsDisplay = useMemo(
+    () =>
+      state.phase === 'solved' && state.stagedCards.length > 0
+        ? stagedSelectionChipsDisplay(state.stagedCards, state.equationResult, state.mathRangeMax ?? 25)
+        : [],
+    [state.phase, state.stagedCards, state.equationResult, state.mathRangeMax],
+  );
+  const PLACE_NOW_BTN_W = 220;
+  /** רוחב מינימלי סביב הכפתור — מונע anchor שלילי וחפיפה עם צ'יפים במסכים צרים */
+  const PLACE_NOW_ORBIT_W = Math.max(PLACE_NOW_BTN_W + 32, Math.min(SCREEN_W - 16, 420));
+  const placeNowAnchorLeft = (PLACE_NOW_ORBIT_W - PLACE_NOW_BTN_W) / 2;
+  const placeOrbitH = Math.max(
+    72,
+    12 + Math.ceil(placeNowChipsDisplay.length / 2) * (STAGED_CHIP_ORBIT_H + STAGED_CHIP_ORBIT_GAP),
+  );
+  const placeNowChipPositions = useMemo(
+    () =>
+      layoutStagedChipOrbitPositions(
+        placeNowChipsDisplay.map((c) => c.cardId),
+        PLACE_NOW_ORBIT_W,
+        placeNowAnchorLeft,
+        PLACE_NOW_BTN_W,
+        placeOrbitH,
+      ),
+    [placeNowChipsDisplay, PLACE_NOW_ORBIT_W, placeNowAnchorLeft, placeOrbitH],
   );
   // AppShell לא מוסיף safe-bottom במובייל — כאן שומרים רווח עבור המניפה + אזור המחוות
-  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
+  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.SAFE_BOTTOM_PAD;
+  const topControlsTop = safe.insets.top || 6;
+  const botOverlayTopOffset = topControlsTop + 86;
   useEffect(() => {
     // #region agent log
     fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H1',location:'index.tsx:GameScreen.useEffect',message:'Hand layout constants',data:{HAND_INNER_HEIGHT,HAND_STRIP_HEIGHT,HAND_BOTTOM_OFFSET,HAND_ZONE_TOP,bottomPad,phase:state.phase,players:state.players.length},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
   }, [bottomPad, state.phase, state.players.length]);
   return (
-    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'hidden' }}>
+    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }}>
+      {/* שכבה כחולה עדינה כמו מסך השחקן — מרככת מעבר תור ↔ משחק */}
+      <LinearGradient
+        colors={[...playerScreensGradientColors]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0.85, y: 1 }}
+        style={[StyleSheet.absoluteFill, { opacity: 0.2 }]}
+      />
       {/* רקע כתום־זהוב — מכסה את כל המסך */}
-      <ImageBackground source={gameBgImg} resizeMode="cover" style={StyleSheet.absoluteFill} />
+      <ImageBackground source={gameBgImg} resizeMode="cover" style={[StyleSheet.absoluteFill, { backgroundColor: '#B06820' }]} />
 
       {/* ── Background dice layers (decorative — stays absolute) ── */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -8460,21 +10223,38 @@ function GameScreen() {
         <WalkingDice />
       </View>
       {/* תוכן מעל הרקע ── */}
-      <View style={{flex:1,paddingTop:0,paddingBottom:bottomPad}}>
-      {/* ── SLOT 1: שחקנים + חוקים בצד אחד, יציאה בצד השני ── */}
-      <View style={{flexDirection:'row',direction:'ltr' as any,alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:10,paddingTop:0,paddingBottom:4}}>
-        <View style={{ flexShrink: 0, gap: 2 }}>
-          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
-          <LulosButton text="חוקים" color="blue" width={72} height={32} fontSize={11} onPress={()=>setGameRulesOpen(true)} />
+      <View style={{flex:1,paddingTop:0,paddingBottom:bottomPad,overflow:'visible'}}>
+      {/* ── SLOT 1: שחקנים + שליטה בשורה העליונה (תמיד מעל שאר ה-UI) ── */}
+      <View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          top: topControlsTop,
+          left: 10,
+          right: 10,
+          zIndex: 40,
+          ...(Platform.OS === 'android' ? { elevation: 40 } : {}),
+          flexDirection: 'row',
+          direction: 'ltr' as any,
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          paddingBottom: 4,
+        }}
+      >
+        <View style={{ flexShrink: 0, gap: 0, marginTop: -65 }}>
+          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} style={{ marginBottom: -8 }} />
+          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={toggleSoundsInGame} />
         </View>
-        <PlayerSidebar
-          rulesOpen={gameRulesOpen}
-          setRulesOpen={setGameRulesOpen}
-          cardsCatalogOpen={gameCardsCatalogOpen}
-          setCardsCatalogOpen={setGameCardsCatalogOpen}
-          showRulesButtonInSidebar={false}
-        />
+        <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, marginLeft: 8, marginTop: -65 }}>
+          <PlayerSidebar
+            rulesOpen={gameRulesOpen}
+            setRulesOpen={setGameRulesOpen}
+            cardsCatalogOpen={gameCardsCatalogOpen}
+            setCardsCatalogOpen={setGameCardsCatalogOpen}
+            showRulesButtonInSidebar={false}
+          />
+        </View>
       </View>
       {/* ── SLOT 2: תוצאות אפשריות (הערימה ממוקמת לפי Y מוחלט) ── */}
       <View style={{flexShrink:0,flexDirection:'row',direction:'ltr' as any,alignItems:'center',justifyContent:'flex-start',flexWrap:'wrap',gap:12,paddingHorizontal:12,paddingVertical:4,zIndex:1}} />
@@ -8483,9 +10263,6 @@ function GameScreen() {
       <View style={{ position:'absolute', top:50, right:12, zIndex:3, alignItems:'center', gap:4 }}>
         <View style={{ alignItems:'center', gap:4, position:'relative', minWidth:96 }}>
           <DiscardPile />
-          {!fracArrowSeen && state.phase === 'pre-roll' && !state.pendingFractionTarget && (
-            <Animated.Text style={{position:'absolute',left:-30,top:50,fontSize:24,color:'#FFD700',transform:[{translateX:fracArrowX}]}} pointerEvents="none">→</Animated.Text>
-          )}
           {identArrowVisible && (
             <Animated.View
               style={{
@@ -8520,19 +10297,31 @@ function GameScreen() {
       </View>
       {/* כפתור תוצאות אפשריות + כפתור אדום — לצד הערימה, ממורכז לגובה הערימה ובמרחק 20px */}
       {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
-        <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8 }}>
+        <>
+          <View
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: state.showSolveExercise ? 176 : 128,
+              zIndex: 9,
+            }}
+            pointerEvents="none"
+          >
+            <ExcellenceMeter
+              value={state.courageMeterPercent}
+              pulseKey={state.courageRewardPulseId}
+              compact
+              height={82}
+            />
+          </View>
+          <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <ResultsSlot
             onToggle={toggleResultsBadges}
             filteredResults={filteredResultsForHand}
-            matchCount={
-              hasWildForResults
-                ? state.validTargets.length
-                : state.validTargets.filter(t =>
-                    cp?.hand.some(c => c.type === 'number' && c.value === t.result),
-                  ).length
-            }
+            matchCount={matchCountForHand}
           />
-        </View>
+          </View>
+        </>
       )}
 
       {/* ── SLOT 3: שולחן ירוק + תרגיל + טיימר (מוקאפ תרגיל הועבר ליד תוצאות אפשריות) ── */}
@@ -8563,7 +10352,7 @@ function GameScreen() {
       </View>
 
       {/* מניפה: מלא את המסך; ללא bottom שלילי — תואם AppShell בלי paddingBottom תחתון */}
-      <View style={[StyleSheet.absoluteFillObject, { zIndex: 4 }]} pointerEvents="box-none">
+      <View style={[StyleSheet.absoluteFillObject, { zIndex: isLocalBotTurn ? 52 : 4 }]} pointerEvents="box-none">
         <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
           <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
             <PlayerHand onCenterCard={setCenterCard} onFractionTapForOnb={onFractionTapForOnb} />
@@ -8605,28 +10394,60 @@ function GameScreen() {
             >
               ⏱ {secsLeft ?? 0}
             </Text>
-            <Text
-              style={{
-                color: '#FDE68A',
-                fontSize: 10,
-                fontWeight: '600',
-                marginTop: 8,
-                textAlign: 'center',
-                paddingHorizontal: 12,
-                opacity: 0.92,
-                maxWidth: 340,
-                lineHeight: 15,
-              }}
-            >
-              {t('ui.turnTimerLabel')}
-            </Text>
+            {showSmallTurnTimerHint ? (
+              <Text
+                style={{
+                  color: '#FDE68A',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginTop: 8,
+                  textAlign: 'center',
+                  paddingHorizontal: 12,
+                  opacity: 0.92,
+                  maxWidth: 340,
+                  lineHeight: 15,
+                }}
+              >
+                {t('ui.turnTimerLabel')}
+              </Text>
+            ) : null}
           </View>
         </View>
       )}
 
       {/* מיני תוצאות — מעט מתחת לטיימר פתיל, מעל קו המניפה */}
-      {(state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || (state.phase === 'solved' && state.stagedCards.length === 0)) && !state.hasPlayedCards) ? (
-        <View style={{ position: 'absolute', top: 455, left: 0, right: 0, height: 50, zIndex: 30, alignItems: 'center', justifyContent: 'center' }} pointerEvents="box-none">
+      {(state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards) ? (
+        <View style={{ position: 'absolute', top: 455, left: 0, right: 0, minHeight: 50, zIndex: 30, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }} pointerEvents="box-none">
+          {resultsMiniArrowPulse ? (
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                top: -34,
+                alignItems: 'center',
+                zIndex: 32,
+                opacity: resultsStripArrowAnim.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+                transform: [
+                  { translateY: resultsStripArrowAnim.interpolate({ inputRange: [0, 1], outputRange: [1, -5] }) },
+                  { scale: resultsStripArrowAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.9, 1.06, 0.9] }) },
+                ],
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 18,
+                  lineHeight: 20,
+                  color: '#FDE047',
+                  fontWeight: '900',
+                  textShadowColor: 'rgba(0,0,0,0.88)',
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 4,
+                }}
+              >
+                ▼
+              </Text>
+            </Animated.View>
+          ) : null}
           <ResultsStripBelowTable
             resultsOpen={resultsOpen}
             filteredResults={filteredResultsForHand}
@@ -8677,32 +10498,63 @@ function GameScreen() {
             position: 'absolute',
             left: 0,
             right: 0,
-            top: 500,
+            top: 460,
             zIndex: 30,
             alignItems: 'center',
           }}
-          pointerEvents="auto"
+          pointerEvents="box-none"
         >
           <View
-            style={Platform.select({
-              ios: {
-                shadowColor: '#FF9100',
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: 0.92,
-                shadowRadius: 20,
-              },
-              android: { elevation: 18 },
-            })}
+            style={{
+              width: PLACE_NOW_ORBIT_W,
+              height: placeOrbitH,
+              position: 'relative',
+              alignSelf: 'center',
+            }}
+            pointerEvents="box-none"
           >
-            <LulosButton
-              text={t('game.placeCardsNow')}
-              color="orange"
-              width={220}
-              height={54}
-              fontSize={20}
-              textColor="#FFFFFF"
-              onPress={() => dispatch({ type: 'CONFIRM_STAGED' })}
+            <StagedChipOrbitLayer
+              chips={placeNowChipsDisplay}
+              positions={placeNowChipPositions}
+              stagedCards={state.stagedCards}
+              dispatch={dispatch}
+              t={t}
             />
+            <View
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                left: placeNowAnchorLeft,
+                top: 9,
+                width: PLACE_NOW_BTN_W,
+                height: 54,
+                zIndex: 2,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <View
+                style={Platform.select({
+                  ios: {
+                    shadowColor: '#FF9100',
+                    shadowOffset: { width: 0, height: 0 },
+                    shadowOpacity: 0.92,
+                    shadowRadius: 20,
+                  },
+                  android: { elevation: 18 },
+                })}
+              >
+                <LulosButton
+                  text={t('game.placeCards')}
+                  color="orange"
+                  width={PLACE_NOW_BTN_W}
+                  height={54}
+                  fontSize={20}
+                  textColor="#FFFFFF"
+                  onPress={() => dispatch({ type: 'CONFIRM_STAGED' })}
+                />
+              </View>
+            </View>
           </View>
         </View>
       )}
@@ -8741,11 +10593,8 @@ function GameScreen() {
               </ScrollView>
               {/* איפוס התרגיל — שורה קבועה מתחת ל-ScrollView */}
               <View style={{flexShrink:0,minHeight:52,alignItems:'center',justifyContent:'center',gap:8,paddingTop:6,flexDirection:'row',flexWrap:'wrap',transform:[{translateY:40}]}}>
-                {/* איפוס התרגיל — רק ב-building או ב-solved בלי קלפים מונחים (לא רלוונטי אחרי בחירה) */}
+                {/* איפוס התרגיל — רק ב-building */}
                 {bl && !state.hasPlayedCards && state.dice && state.pendingFractionTarget === null && (
-                  <LulosButton text={t('game.resetEquation')} color="blue" width={120} height={38} fontSize={14} onPress={() => eqBuilderRef.current?.resetAll()} />
-                )}
-                {so && !hasStaged && !state.hasPlayedCards && state.dice && state.pendingFractionTarget === null && (
                   <LulosButton text={t('game.resetEquation')} color="blue" width={120} height={38} fontSize={14} onPress={() => eqBuilderRef.current?.resetAll()} />
                 )}
               </View>
@@ -8774,6 +10623,60 @@ function GameScreen() {
         <View style={{ position: 'absolute', top: GOLD_ACTION_BUTTON_TOP, left: 0, right: 0, zIndex: 25, alignItems: 'center' }} pointerEvents="box-none">
           <View style={{ position: 'relative', alignItems: 'center', overflow: 'visible' }}>
             <GoldDiceButton onPress={handleRoll} width={160} size={58} />
+            <View
+              style={{
+                position: 'absolute',
+                left: -70,
+                top: 0,
+              }}
+              pointerEvents="none"
+            >
+              <StartTurnCountdownCircle
+                deadlineAt={gameTurnDeadlineAt}
+                size={50}
+                soundEnabled={soundOn}
+                showLabel={false}
+              />
+            </View>
+            {gameTurnDeadlineAt != null && showSmallTurnTimerHint && (
+              <Text
+                style={{
+                  marginTop: 6,
+                  color: '#FDE68A',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  textAlign: 'center',
+                  paddingHorizontal: 12,
+                  opacity: 0.92,
+                  maxWidth: 300,
+                  lineHeight: 14,
+                  writingDirection: isRTL ? 'rtl' : 'ltr',
+                }}
+              >
+                {t('ui.turnTimerLabel')}
+              </Text>
+            )}
+            {state.timerSetting !== 'off' && timerRunning && secsLeft > 0 && (
+              <View
+                pointerEvents="none"
+                style={{
+                  marginTop: 6,
+                  minWidth: 126,
+                  borderRadius: 999,
+                  paddingHorizontal: 12,
+                  paddingVertical: 4,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: secsLeft <= 5 ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.86)',
+                  borderWidth: 1,
+                  borderColor: secsLeft <= 5 ? 'rgba(254,202,202,0.9)' : 'rgba(147,197,253,0.7)',
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '900' }}>
+                  ⏱ {secsLeft}ש׳
+                </Text>
+              </View>
+            )}
             {showRollArrow && (
               <Animated.View
                 pointerEvents="none"
@@ -8830,8 +10733,8 @@ function GameScreen() {
         </View>
       )}
 
-      {/* חזרה לתרגיל — Y=460, מעל יד/mדריך רשת; עטיפת מילוי כדי למנוע ירושת קונטקסט מיקום שגוי */}
-      {state.phase === 'solved' && !state.hasPlayedCards && (
+      {/* בחר קלפים — מופיע לפני בחירת קלף; אחרי בחירה יופיע "בחרתי" */}
+      {state.phase === 'solved' && !state.hasPlayedCards && state.stagedCards.length === 0 && (
         <View
           style={[
             StyleSheet.absoluteFillObject,
@@ -8845,8 +10748,8 @@ function GameScreen() {
             pointerEvents="box-none"
           >
             <LulosButton
-              text={t('game.backToEquation')}
-              color="yellow"
+              text={t('game.pickCards')}
+              color="orange"
               textColor="#FFFFFF"
               width={160}
               height={44}
@@ -8857,7 +10760,51 @@ function GameScreen() {
         </View>
       )}
 
-      <BotThinkingOverlay />
+      {canRenderBotMissionStrip ? (
+        <BotMissionStrip
+          display={state.lastEquationDisplay!}
+          result={state.equationResult!}
+          botName={onlineBotPlayer?.name ?? cp?.name ?? t('botOffline.botName')}
+          teachLine={isOnlineGame ? (state.lastMoveMessage ?? null) : null}
+        />
+      ) : null}
+
+      <OnlineBotDifficultyModal
+        visible={onlineBotDiffOpen}
+        onClose={() => setOnlineBotDiffOpen(false)}
+        current={state.hostBotDifficulty}
+        isHost={!!mpOptional?.isHost}
+        onSelectLevel={(d) => {
+          mpOptional?.emit('set_bot_difficulty', { difficulty: d });
+          setOnlineBotDiffOpen(false);
+        }}
+      />
+
+      <TournamentInfoModal
+        visible={tournamentInfoOpen}
+        onClose={() => setTournamentInfoOpen(false)}
+        rows={getTournamentRowsForModal(state)}
+        gameInfo={{
+          modeLabel: state.mode === 'vs-bot' ? 'נגד בוט' : 'מסירה בין שחקנים',
+          difficultyLabel: state.difficulty === 'easy' ? 'קל' : 'מלא',
+          playersCount: state.players.length,
+          diceModeLabel: state.diceMode === '2' ? '2 קוביות' : '3 קוביות',
+        }}
+        onOpenRules={() => setGameRulesOpen(true)}
+        settings={{
+          mathRangeMax: state.mathRangeMax,
+          showFractions: state.showFractions,
+          fractionKinds: state.fractionKinds,
+          enabledOperators: state.enabledOperators,
+          allowNegativeTargets: state.allowNegativeTargets,
+          showPossibleResults: state.showPossibleResults,
+          showSolveExercise: state.showSolveExercise,
+          timerSetting: state.timerSetting,
+          timerCustomSeconds: state.timerCustomSeconds,
+        }}
+      />
+
+      <BotThinkingOverlay topOffset={botOverlayTopOffset} />
 
     </View>
   );
@@ -8900,7 +10847,7 @@ function GameOver() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  BOT THINKING OVERLAY — absorbs touches during bot turn (M5.7)
+//  BOT TURN UI — משימה בראש המסך + עמעום מעל השולחן בלבד (המניפה נשארת בולטת)
 // ═══════════════════════════════════════════════════════════════
 const botOverlayStyles = StyleSheet.create({
   botThinkingOverlay: {
@@ -8908,33 +10855,464 @@ const botOverlayStyles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.15)',
+    backgroundColor: 'transparent',
     alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 999,
+    justifyContent: 'flex-start',
+    zIndex: 34,
   },
   botThinkingText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
     fontWeight: '700',
-    backgroundColor: 'rgba(17,24,39,0.85)',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 24,
+    backgroundColor: 'rgba(17,24,39,0.64)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    marginTop: 4,
   },
+  coachCard: {
+    marginTop: 8,
+    width: '92%',
+    maxWidth: 430,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(129,140,248,0.5)',
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  coachTitle: {
+    color: '#C7D2FE',
+    fontSize: 14,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  coachBody: {
+    marginTop: 6,
+    color: '#E2E8F0',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  stepsRow: {
+    marginTop: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  stepChip: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  stepChipDone: {
+    backgroundColor: 'rgba(16,185,129,0.18)',
+    borderColor: 'rgba(52,211,153,0.5)',
+  },
+  stepChipNow: {
+    backgroundColor: 'rgba(59,130,246,0.24)',
+    borderColor: 'rgba(147,197,253,0.75)',
+  },
+  stepChipLater: {
+    backgroundColor: 'rgba(51,65,85,0.45)',
+    borderColor: 'rgba(148,163,184,0.35)',
+  },
+  stepChipTextDone: { color: '#A7F3D0', fontSize: 10, fontWeight: '800' },
+  stepChipTextNow: { color: '#DBEAFE', fontSize: 10, fontWeight: '900' },
+  stepChipTextLater: { color: '#CBD5E1', fontSize: 10, fontWeight: '700' },
 });
 
-function BotThinkingOverlay() {
+function getBotTurnTeachingState(state: GameState): {
+  currentStep: 0 | 1 | 2 | 3;
+  titleKey: string;
+  bodyKey: string;
+} {
+  if (state.botNoSolutionDrawPending) {
+    return {
+      currentStep: 2,
+      titleKey: 'botOffline.step.noSolutionTitle',
+      bodyKey: 'botOffline.step.noSolutionBody',
+    };
+  }
+  if (state.phase === 'turn-transition') {
+    return {
+      currentStep: 0,
+      titleKey: 'botOffline.step.startTitle',
+      bodyKey: 'botOffline.step.startBody',
+    };
+  }
+  if (state.pendingFractionTarget !== null) {
+    return {
+      currentStep: 1,
+      titleKey: 'botOffline.step.defenseTitle',
+      bodyKey: 'botOffline.step.defenseBody',
+    };
+  }
+  if (state.phase === 'pre-roll' || state.phase === 'roll-dice') {
+    return {
+      currentStep: 1,
+      titleKey: 'botOffline.step.rollTitle',
+      bodyKey: 'botOffline.step.rollBody',
+    };
+  }
+  if (state.phase === 'building') {
+    if (state.dice) {
+      return {
+        currentStep: 2,
+        titleKey: 'botOffline.step.diceResultTitle',
+        bodyKey: 'botOffline.step.diceResultBody',
+      };
+    }
+    return {
+      currentStep: 2,
+      titleKey: 'botOffline.step.buildTitle',
+      bodyKey: 'botOffline.step.buildBody',
+    };
+  }
+  if (state.phase === 'solved' && !state.hasPlayedCards) {
+    if (state.stagedCards.length === 0) {
+      return {
+        currentStep: 3,
+        titleKey: 'botOffline.step.equationTitle',
+        bodyKey: 'botOffline.step.equationBody',
+      };
+    }
+    return {
+      currentStep: 3,
+      titleKey: 'botOffline.step.fillTitle',
+      bodyKey: 'botOffline.step.fillBody',
+    };
+  }
+  return {
+    currentStep: 3,
+    titleKey: 'botOffline.step.playTitle',
+    bodyKey: 'botOffline.step.playBody',
+  };
+}
+
+type BotTeachingPhase = 'preview' | 'consider' | 'pick' | 'place' | 'confirm' | 'done';
+
+function getBotTeachingPhase(state: GameState): BotTeachingPhase {
+  if (state.phase === 'turn-transition') return 'preview';
+  if (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building') return 'consider';
+  if (state.phase === 'solved' && !state.hasPlayedCards) {
+    const pending = state.botPendingStagedIds ?? [];
+    if (pending.length > 0) return state.stagedCards.length === 0 ? 'pick' : 'place';
+    return 'confirm';
+  }
+  return 'done';
+}
+
+function botTeachingDelayRange(state: GameState, difficulty: BotDifficulty): { min: number; max: number } {
+  if (state.botNoSolutionDrawPending) {
+    if (difficulty === 'easy') return { min: 2400, max: 2800 };
+    if (difficulty === 'medium') return { min: 2200, max: 2600 };
+    return { min: 2100, max: 2500 };
+  }
+  if (state.phase === 'solved' && !state.hasPlayedCards) {
+    if ((state.botPendingStagedIds?.length ?? 0) > 0) {
+      if (difficulty === 'easy') return { min: 1900, max: 2500 };
+      if (difficulty === 'medium') return { min: 1650, max: 2200 };
+      return { min: 1500, max: 2000 };
+    }
+    if (difficulty === 'easy') return { min: 2100, max: 2600 };
+    if (difficulty === 'medium') return { min: 1800, max: 2300 };
+    return { min: 1700, max: 2100 };
+  }
+  if (state.phase === 'building') {
+    if (difficulty === 'easy') return { min: 2000, max: 2500 };
+    if (difficulty === 'medium') return { min: 1750, max: 2200 };
+    return { min: 1600, max: 2050 };
+  }
+  return botStepDelayRange(difficulty);
+}
+
+function BotMissionStrip(
+  { display, result, botName, teachLine = null }:
+  { display: string; result: number; botName: string; teachLine?: string | null }
+) {
+  const { t, isRTL } = useLocale();
+  const insets = useSafeAreaInsets();
+  const learnLines = [
+    t('game.botLearn.step1', { name: botName }),
+    t('game.botLearn.step2', { eq: display }),
+    t('game.botLearn.step3', { n: String(result) }),
+  ];
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        left: 10,
+        right: 10,
+        top: (insets.top || 12) + 4,
+        zIndex: 100,
+        alignItems: 'center',
+      }}
+      pointerEvents="none"
+    >
+      <View
+        style={[
+          alertBubbleStyle.box,
+          {
+            maxWidth: 420,
+            width: '100%',
+            paddingVertical: 12,
+            paddingHorizontal: 14,
+            borderColor: 'rgba(129,140,248,0.6)',
+            backgroundColor: 'rgba(30,27,75,0.96)',
+          },
+        ]}
+      >
+        <Text style={{ color: '#93C5FD', fontSize: 11, fontWeight: '800', textAlign: 'center', marginBottom: 4 }}>
+          {t('botOffline.thinking')}
+        </Text>
+        <Text
+          style={[
+            alertBubbleStyle.title,
+            { textAlign: 'center', fontSize: 14, color: '#C7D2FE', writingDirection: isRTL ? 'rtl' : 'ltr' },
+          ]}
+        >
+          {t('game.botEquationRevealTitle', { name: botName })}
+        </Text>
+        <Text
+          style={{
+            marginTop: 6,
+            fontSize: 20,
+            fontWeight: '800',
+            color: '#F8FAFC',
+            textAlign: 'center',
+            writingDirection: 'ltr',
+            direction: 'ltr',
+          }}
+        >
+          {'\u2066'}
+          {display}
+          {'\u2069'}
+        </Text>
+        <Text
+          style={{
+            marginTop: 4,
+            fontSize: 18,
+            fontWeight: '800',
+            color: '#A5B4FC',
+            textAlign: 'center',
+            writingDirection: isRTL ? 'rtl' : 'ltr',
+          }}
+        >
+          {t('game.botEquationRevealResult', { n: String(result) })}
+        </Text>
+        {!!teachLine && (
+          <Text
+            style={{
+              marginTop: 8,
+              fontSize: 12,
+              fontWeight: '700',
+              color: '#BFDBFE',
+              textAlign: 'center',
+              writingDirection: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
+            {teachLine}
+          </Text>
+        )}
+        <View style={{ marginTop: 10, gap: 3 }}>
+          {learnLines.map((line, idx) => (
+            <Text
+              key={`bot-learn-${idx}`}
+              style={{
+                color: '#DBEAFE',
+                fontSize: 11,
+                fontWeight: '700',
+                textAlign: isRTL ? 'right' : 'left',
+                writingDirection: isRTL ? 'rtl' : 'ltr',
+              }}
+            >
+              {`${idx + 1}. ${line}`}
+            </Text>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
   const { state } = useGame();
-  const { t } = useLocale();
+  const { t, isRTL } = useLocale();
+  const insets = useSafeAreaInsets();
   if (!state.botConfig) return null;
   const current = state.players[state.currentPlayerIndex];
   if (!current || !state.botConfig.playerIds.includes(current.id)) return null;
   if (state.phase === 'game-over') return null;
+  const handReserve =
+    HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + Math.max(insets.bottom, 12);
+  const showMission =
+    state.phase === 'solved' &&
+    !state.hasPlayedCards &&
+    state.lastEquationDisplay != null &&
+    state.equationResult != null;
+  const teaching = getBotTurnTeachingState(state);
+  const teachingLabel = t(teaching.titleKey, { name: current.name });
+  const showDiceSummary =
+    state.phase === 'building' &&
+    state.dice != null &&
+    !state.botNoSolutionDrawPending;
+  const parseEqNumbers = (display: string): number[] => {
+    const lhs = display.split('=')[0] ?? display;
+    const nums = lhs.match(/\d+/g);
+    if (!nums) return [];
+    return nums.map((n) => Number(n));
+  };
+  const missionNumbers = showMission ? parseEqNumbers(state.lastEquationDisplay!) : [];
+  const stagedNums = state.stagedCards.filter((card) => card.type === 'number').map((card) => card.value ?? 0);
+  const stagedWildCount = state.stagedCards.filter((card) => card.type === 'wild').length;
+  const matchedCounts = new Map<number, number>();
+  for (const val of stagedNums) matchedCounts.set(val, (matchedCounts.get(val) ?? 0) + 1);
+  let consumedWild = 0;
+  const missionMatch = missionNumbers.map((num) => {
+    const have = matchedCounts.get(num) ?? 0;
+    if (have > 0) {
+      matchedCounts.set(num, have - 1);
+      return true;
+    }
+    if (consumedWild < stagedWildCount) {
+      consumedWild += 1;
+      return true;
+    }
+    return false;
+  });
+  const progress = missionNumbers.length === 0
+    ? 0
+    : Math.min(
+      missionNumbers.length,
+      missionMatch.filter(Boolean).length + Math.max(0, stagedWildCount - consumedWild),
+    );
+  const progressText = showMission
+    ? `${progress}/${missionNumbers.length}`
+    : null;
   return (
-    <View pointerEvents="box-only" style={botOverlayStyles.botThinkingOverlay}>
-      <Text style={botOverlayStyles.botThinkingText}>{t('botOffline.thinking')}</Text>
+    <View pointerEvents="box-none" style={[botOverlayStyles.botThinkingOverlay, { top: topOffset, bottom: handReserve }]}>
+      <Text style={[botOverlayStyles.botThinkingText, { writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+        {teachingLabel}
+      </Text>
+      {showDiceSummary ? (
+        <View
+          style={{
+            marginTop: 6,
+            width: '92%',
+            maxWidth: 420,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: 'rgba(147,197,253,0.55)',
+            backgroundColor: 'rgba(15,23,42,0.82)',
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        >
+          <Text
+            style={{
+              color: '#DBEAFE',
+              fontSize: 11,
+              fontWeight: '800',
+              textAlign: 'center',
+              writingDirection: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
+            {t('previewDemo.dicePoolLabel')}
+          </Text>
+          <Text
+            style={{
+              marginTop: 2,
+              color: '#F8FAFC',
+              fontSize: 18,
+              fontWeight: '900',
+              textAlign: 'center',
+              writingDirection: 'ltr',
+              direction: 'ltr',
+            }}
+          >
+            {`\u2066${state.dice!.die1} · ${state.dice!.die2} · ${state.dice!.die3}\u2069`}
+          </Text>
+        </View>
+      ) : null}
+      {showMission ? (
+        <View
+          style={{
+            marginTop: 6,
+            width: '92%',
+            maxWidth: 420,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: 'rgba(147,197,253,0.55)',
+            backgroundColor: 'rgba(15,23,42,0.82)',
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        >
+          <Text
+            style={{
+              color: '#DBEAFE',
+              fontSize: 11,
+              fontWeight: '800',
+              textAlign: 'center',
+              writingDirection: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
+            {t('game.botEquationRevealTitle', { name: current.name })}
+          </Text>
+          <Text
+            style={{
+              marginTop: 3,
+              color: '#F8FAFC',
+              fontSize: 17,
+              fontWeight: '900',
+              textAlign: 'center',
+              writingDirection: 'ltr',
+              direction: 'ltr',
+            }}
+          >
+            {'\u2066'}
+            {state.lastEquationDisplay}
+            {'\u2069'}
+          </Text>
+          <Text
+            style={{
+              marginTop: 2,
+              color: '#BFDBFE',
+              fontSize: 12,
+              fontWeight: '800',
+              textAlign: 'center',
+              writingDirection: isRTL ? 'rtl' : 'ltr',
+            }}
+          >
+            {`${t('game.botEquationRevealResult', { n: String(state.equationResult) })}  •  ${progressText}`}
+          </Text>
+          <View style={{ marginTop: 7, flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 6 }}>
+            {missionNumbers.map((num, idx) => (
+              <View
+                key={`mission-${idx}-${num}`}
+                style={{
+                  minWidth: 30,
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
+                  borderRadius: 9,
+                  borderWidth: 1,
+                  borderColor: missionMatch[idx] ? 'rgba(52,211,153,0.8)' : 'rgba(148,163,184,0.6)',
+                  backgroundColor: missionMatch[idx] ? 'rgba(16,185,129,0.24)' : 'rgba(51,65,85,0.5)',
+                }}
+              >
+                <Text style={{ color: '#E2E8F0', fontSize: 12, fontWeight: '800', textAlign: 'center' }}>
+                  {num}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -9052,6 +11430,7 @@ function NotificationZone() {
     notif.id === 'onb-onb_results' ||
     notif.id.startsWith('guidance-results-info-fee') ||
     (notif.title != null && RESULTS_POSSIBLE_TITLES.has(String(notif.title)));
+  const isWildResultsPurple = notif.id.includes('wild_results');
   const isNewUserNotif =
     notif.id.startsWith('onb-') ||
     notif.id.startsWith('guidance-') ||
@@ -9086,12 +11465,20 @@ function NotificationZone() {
           alignItems: 'center',
           gap: 12,
           maxWidth: '100%',
-          backgroundColor: isResultsNotifGreen ? 'rgba(22,163,74,0.92)' : alertBubbleStyle.box.backgroundColor,
-          borderColor: isResultsNotifGreen ? 'rgba(74,222,128,0.95)' : alertBubbleStyle.box.borderColor,
-          borderWidth: isResultsNotifGreen ? 3 : alertBubbleStyle.box.borderWidth,
-          shadowColor: isResultsNotifGreen ? '#14532D' : '#000',
-          shadowOpacity: isResultsNotifGreen ? 0.5 : 0.4,
-          shadowRadius: isResultsNotifGreen ? 14 : 12,
+          backgroundColor: isWildResultsPurple
+            ? 'rgba(109,40,217,0.94)'
+            : isResultsNotifGreen
+              ? 'rgba(22,163,74,0.92)'
+              : alertBubbleStyle.box.backgroundColor,
+          borderColor: isWildResultsPurple
+            ? 'rgba(216,180,254,0.95)'
+            : isResultsNotifGreen
+              ? 'rgba(74,222,128,0.95)'
+              : alertBubbleStyle.box.borderColor,
+          borderWidth: isWildResultsPurple || isResultsNotifGreen ? 3 : alertBubbleStyle.box.borderWidth,
+          shadowColor: isWildResultsPurple ? '#4C1D95' : isResultsNotifGreen ? '#14532D' : '#000',
+          shadowOpacity: isWildResultsPurple || isResultsNotifGreen ? 0.5 : 0.4,
+          shadowRadius: isWildResultsPurple || isResultsNotifGreen ? 14 : 12,
         }]}>
           {isResultsNotifGreen && (
             <>
@@ -9103,7 +11490,7 @@ function NotificationZone() {
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
             {notif.emoji ? <Text style={{ fontSize: 26 }}>{notif.emoji}</Text> : null}
             <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
-              <Text style={[alertBubbleStyle.title, { marginBottom: displayBody ? 4 : 0, color: isResultsNotifGreen ? '#F0FDF4' : alertBubbleStyle.title.color, textShadowColor: isResultsNotifGreen ? 'rgba(0,0,0,0.35)' : 'transparent', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: isResultsNotifGreen ? 2 : 0 }]}>{displayTitle}</Text>
+              <Text style={[alertBubbleStyle.title, { marginBottom: displayBody ? 4 : 0, color: (isResultsNotifGreen || isWildResultsPurple) ? '#F0FDF4' : alertBubbleStyle.title.color, textShadowColor: (isResultsNotifGreen || isWildResultsPurple) ? 'rgba(0,0,0,0.35)' : 'transparent', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: (isResultsNotifGreen || isWildResultsPurple) ? 2 : 0 }]}>{displayTitle}</Text>
               {!!displayBody && (
                 <ScrollView
                   style={{ maxHeight: notifBodyMaxH, alignSelf: 'stretch' }}
@@ -9112,7 +11499,7 @@ function NotificationZone() {
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
                 >
-                  <Text style={[alertBubbleStyle.body, { color: isResultsNotifGreen ? '#F0FDF4' : alertBubbleStyle.body.color, fontWeight: isResultsNotifGreen ? '700' : alertBubbleStyle.body.fontWeight }]}>{displayBody}</Text>
+                  <Text style={[alertBubbleStyle.body, { color: (isResultsNotifGreen || isWildResultsPurple) ? '#F0FDF4' : alertBubbleStyle.body.color, fontWeight: (isResultsNotifGreen || isWildResultsPurple) ? '700' : alertBubbleStyle.body.fontWeight }]}>{displayBody}</Text>
                 </ScrollView>
               )}
             </View>
@@ -9143,11 +11530,19 @@ function PlayerWaitingScreen({
   currentTurnName,
   waitingStatusText,
   onBack,
+  lastMoveMessage,
+  pendingFractionTarget,
+  lastMoveBubbleBg,
+  lastMoveBubbleBorder,
 }: {
   myHand: Card[];
   currentTurnName: string;
   waitingStatusText: string;
   onBack: () => void;
+  lastMoveMessage: string | null;
+  pendingFractionTarget: number | null;
+  lastMoveBubbleBg: string;
+  lastMoveBubbleBorder: string;
 }) {
   const safe = useGameSafeArea();
   const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
@@ -9167,6 +11562,13 @@ function PlayerWaitingScreen({
           </View>
           <LulosButton text="חזרה לצפייה" color="blue" width={120} height={32} fontSize={11} onPress={onBack} />
         </View>
+        {!!lastMoveMessage && pendingFractionTarget === null && (
+          <View style={{ paddingHorizontal: 16, marginBottom: 8, alignItems: 'center' }}>
+            <View style={[alertBubbleStyle.box, { maxWidth: 340, width: '100%', backgroundColor: lastMoveBubbleBg, borderColor: lastMoveBubbleBorder }]}>
+              <Text style={[alertBubbleStyle.title, { textAlign: 'center', writingDirection: 'rtl' }]}>{lastMoveMessage}</Text>
+            </View>
+          </View>
+        )}
         <View style={{ flex: 1, minHeight: 60, paddingHorizontal: 24, alignItems: 'center', justifyContent: 'center' }}>
           <View style={{ backgroundColor: 'rgba(122,140,165,0.2)', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(147,197,253,0.45)', paddingHorizontal: 12, paddingVertical: 6 }}>
             <Text style={{ color: '#DBEAFE', fontSize: 12, fontWeight: '800', textAlign: 'center' }}>מניפה במצב המתנה</Text>
@@ -9199,6 +11601,7 @@ function PlayerWaitingScreen({
 function OnlineGameWrapper() {
   const { state } = useGame();
   const mp = useMultiplayerOptional();
+  const { t } = useLocale();
   const safe = useGameSafeArea();
   const myPlayerIndex = (state as any).myPlayerIndex ?? 0;
   const myPlayerState = state.players[myPlayerIndex] as any;
@@ -9222,6 +11625,13 @@ function OnlineGameWrapper() {
     return () => clearTimeout(t);
   }, [mp?.toast, mp]);
 
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!mp?.disconnectChoice) return;
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [mp?.disconnectChoice]);
+
   const myHand = state.players[myPlayerIndex]?.hand ?? [];
   const currentTurnLobbyPlayer = mp?.players?.find((p) => p.name === currentTurnName);
   const waitingStatusText = !mp?.connected
@@ -9230,55 +11640,152 @@ function OnlineGameWrapper() {
       ? `מחכים ל-${currentTurnName} (חיבור איטי)`
       : `מחכים ל-${currentTurnName}...`;
 
-  if (viewMode === 'player') {
-    return (
-      <PlayerWaitingScreen
-        myHand={myHand}
-        currentTurnName={currentTurnName}
-        waitingStatusText={waitingStatusText}
-        onBack={() => setViewMode('game')}
-      />
-    );
-  }
+  const lastPlayerIndex =
+    (state.currentPlayerIndex - 1 + state.players.length) % Math.max(state.players.length, 1);
+  const ONLINE_WAIT_BUBBLE_COLORS = ['#14532d', '#1d4ed8', '#7c2d12', '#4b5563'] as const;
+  const ONLINE_WAIT_BUBBLE_BORDERS = [
+    'rgba(74,222,128,0.7)',
+    'rgba(129,140,248,0.7)',
+    'rgba(248,113,113,0.7)',
+    'rgba(156,163,175,0.7)',
+  ] as const;
+  const lastMoveBubbleBg = ONLINE_WAIT_BUBBLE_COLORS[lastPlayerIndex % ONLINE_WAIT_BUBBLE_COLORS.length];
+  const lastMoveBubbleBorder = ONLINE_WAIT_BUBBLE_BORDERS[lastPlayerIndex % ONLINE_WAIT_BUBBLE_BORDERS.length];
+  const lastMoveForWaiting = state.lastMoveMessage;
+
+  const toastOverlay =
+    mp?.toast != null && mp.toast !== '' ? (
+      <View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          left: 12,
+          right: 12,
+          top: (safe.insets.top ?? 0) + 52,
+          zIndex: 150,
+          alignItems: 'center',
+        }}
+      >
+        <View style={{ backgroundColor: 'rgba(15,23,42,0.92)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(56,189,248,0.45)', maxWidth: 400 }}>
+          <Text style={{ color: '#E0F2FE', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{mp.toast}</Text>
+        </View>
+      </View>
+    ) : null;
+
+  const reconnectOverlay =
+    mp?.reconnectNotice != null && mp.reconnectNotice !== '' ? (
+      <View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          left: 12,
+          right: 12,
+          top: (safe.insets.top ?? 0) + 8,
+          zIndex: 151,
+          alignItems: 'center',
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: 'rgba(120,53,15,0.94)',
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: 'rgba(251,191,36,0.55)',
+            maxWidth: 420,
+          }}
+        >
+          <Text style={{ color: '#FEF3C7', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>{mp.reconnectNotice}</Text>
+        </View>
+      </View>
+    ) : null;
+
+  const eliminatedBanner = isEliminatedSpectator ? (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: 12,
+        right: 12,
+        top: (safe.insets.top ?? 0) + 104,
+        zIndex: 149,
+        alignItems: 'center',
+      }}
+    >
+      <View style={{ backgroundColor: 'rgba(127,29,29,0.92)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(248,113,113,0.6)', maxWidth: 420 }}>
+        <Text style={{ color: '#FECACA', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>הודחת אחרי 3 אי-תגובות. מצב צפייה בלבד עד סוף המשחק.</Text>
+      </View>
+    </View>
+  ) : null;
+
+  const disconnectChoice = mp?.disconnectChoice ?? null;
+  const remainingMs = disconnectChoice ? disconnectChoice.deadlineAt - nowMs : 0;
+  const waitingReconnect = disconnectChoice != null && remainingMs > 0;
+  const countdownSec = waitingReconnect ? Math.ceil(remainingMs / 1000) : 0;
+  const disconnectChoiceModal =
+    disconnectChoice ? (
+      <AppModal
+        visible
+        onClose={() => {
+          if (!waitingReconnect) mp?.clearDisconnectChoice?.();
+        }}
+        title={waitingReconnect ? 'שחקן התנתק' : 'שחקן עזב'}
+      >
+        <View style={{ gap: 14 }}>
+          <Text style={{ color: '#E5E7EB', fontSize: 15, fontWeight: '700', textAlign: 'center', lineHeight: 22 }}>
+            {waitingReconnect
+              ? `${disconnectChoice.playerName} מנותק כרגע. ממתינים לחזרה (${countdownSec} שניות).`
+              : `${disconnectChoice.playerName} לא חזר בזמן. רוצים להמשיך מול בוט?`}
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <LulosButton
+              text={t('lobby.startBotGame')}
+              color="green"
+              width={160}
+              height={44}
+              onPress={() => {
+                if (!waitingReconnect) void mp?.continueVsBot?.();
+              }}
+            />
+            <LulosButton
+              text={t('lobby.leaveRoom')}
+              color="yellow"
+              width={160}
+              height={44}
+              onPress={() => mp?.leaveRoom?.()}
+            />
+          </View>
+          {waitingReconnect && (
+            <Text style={{ color: '#9CA3AF', fontSize: 12, textAlign: 'center' }}>
+              המעבר לבוט ייפתח כשהטיימר יסתיים.
+            </Text>
+          )}
+        </View>
+      </AppModal>
+    ) : null;
 
   return (
     <View style={{ flex: 1 }}>
-      <GameScreen />
-      {mp?.toast ? (
-        <View
-          pointerEvents="box-none"
-          style={{
-            position: 'absolute',
-            left: 12,
-            right: 12,
-            top: (safe.insets.top ?? 0) + 52,
-            zIndex: 150,
-            alignItems: 'center',
-          }}
-        >
-          <View style={{ backgroundColor: 'rgba(15,23,42,0.92)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(56,189,248,0.45)', maxWidth: 400 }}>
-            <Text style={{ color: '#E0F2FE', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{mp.toast}</Text>
-          </View>
-        </View>
-      ) : null}
-      {isEliminatedSpectator ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: 12,
-            right: 12,
-            top: (safe.insets.top ?? 0) + 104,
-            zIndex: 149,
-            alignItems: 'center',
-          }}
-        >
-          <View style={{ backgroundColor: 'rgba(127,29,29,0.92)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(248,113,113,0.6)', maxWidth: 420 }}>
-            <Text style={{ color: '#FECACA', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>הודחת אחרי 3 אי-תגובות. מצב צפייה בלבד עד סוף המשחק.</Text>
-          </View>
-        </View>
-      ) : null}
-      {!isMyTurn && (
+      {viewMode === 'player' ? (
+        <PlayerWaitingScreen
+          myHand={myHand}
+          currentTurnName={currentTurnName}
+          waitingStatusText={waitingStatusText}
+          onBack={() => setViewMode('game')}
+          lastMoveMessage={lastMoveForWaiting}
+          pendingFractionTarget={state.pendingFractionTarget}
+          lastMoveBubbleBg={lastMoveBubbleBg}
+          lastMoveBubbleBorder={lastMoveBubbleBorder}
+        />
+      ) : (
+        <GameScreen />
+      )}
+      {reconnectOverlay}
+      {toastOverlay}
+      {eliminatedBanner}
+      {disconnectChoiceModal}
+      {!isMyTurn && viewMode === 'game' && (
         <TouchableOpacity
           onPress={() => setViewMode('player')}
           style={{
@@ -9322,7 +11829,8 @@ function GameRouter() {
   const mp = useMultiplayerOptional();
   const { state, dispatch } = useGame();
   const insets = useSafeAreaInsets();
-  const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'sound-demo'>('choose');
+  const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'sound-demo' | 'tutorial'>('choose');
+  // showTutorial removed — replaced by playMode === 'tutorial'
   const welcomeMusicRef = useRef<Audio.Sound | null>(null);
   const soundOn = state.soundsEnabled !== false;
   const [salindaVolume, setSalindaVolume] = useState(0.14);
@@ -9347,6 +11855,14 @@ function GameRouter() {
     const { roomCode } = parseJoinParamsFromUrl();
     if (roomCode) setPlayMode('online');
   }, [playMode]);
+
+  // Auto-show tutorial on first visit to the local start screen
+  useEffect(() => {
+    if (playMode !== 'local' || state.phase !== 'setup') return;
+    AsyncStorage.getItem('salinda_tutorial_seen_v1').then((val) => {
+      if (val !== 'true') setPlayMode('tutorial');
+    });
+  }, [playMode, state.phase]);
 
   useEffect(() => {
     let mounted = true;
@@ -9520,11 +12036,12 @@ function GameRouter() {
       />
     );
   } else if (playMode === 'local') {
-    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onOpenSoundDemo={() => setPlayMode('sound-demo')} />;
+    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onOpenSoundDemo={() => setPlayMode('sound-demo')} onHowToPlay={() => setPlayMode('tutorial')} />;
     else {
       switch (state.phase) {
         case 'turn-transition': screen = <TurnTransition />; break;
         case 'pre-roll':
+        case 'roll-dice':
         case 'building':
         case 'solved':
           screen = <GameScreen />;
@@ -9533,8 +12050,44 @@ function GameRouter() {
           screen = <GameOver />;
           break;
         default:
-          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onOpenSoundDemo={() => setPlayMode('sound-demo')} />;
+          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onOpenSoundDemo={() => setPlayMode('sound-demo')} onHowToPlay={() => setPlayMode('tutorial')} />;
       }
+    }
+  } else if (playMode === 'tutorial') {
+    // Tutorial mode: render the same game screens as local mode but with tutorial overlay
+    if (state.phase === 'setup') {
+      // Auto-start a vs-bot game for the tutorial
+      screen = (
+        <TutorialGameScreen
+          onExit={() => { dispatch({ type: 'RESET_GAME' }); setPlayMode('local'); }}
+          gameDispatch={dispatch}
+          gameState={state}
+        />
+      );
+    } else {
+      // Render the real game screens with tutorial overlay on top
+      let gameScreen: React.ReactNode;
+      switch (state.phase) {
+        case 'turn-transition': gameScreen = <TurnTransition />; break;
+        case 'pre-roll':
+        case 'roll-dice':
+        case 'building':
+        case 'solved':
+          gameScreen = <GameScreen />;
+          break;
+        case 'game-over': gameScreen = <GameOver />; break;
+        default: gameScreen = null;
+      }
+      screen = (
+        <View style={{ flex: 1 }}>
+          {gameScreen}
+          <TutorialGameScreen
+            onExit={() => { dispatch({ type: 'RESET_GAME' }); setPlayMode('local'); }}
+            gameDispatch={dispatch}
+            gameState={state}
+          />
+        </View>
+      );
     }
   } else if (playMode === 'sound-demo') {
     screen = <SoundDemoScreen onBack={() => setPlayMode('local')} />;
@@ -9547,6 +12100,7 @@ function GameRouter() {
         case 'setup': screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} />; break;
         case 'turn-transition': screen = <TurnTransition />; break;
         case 'pre-roll':
+        case 'roll-dice':
         case 'building':
         case 'solved':
           screen = <OnlineGameWrapper />;
@@ -9560,7 +12114,7 @@ function GameRouter() {
     }
   }
 
-  const showGlobalMute = !(playMode === 'local' && (state.phase === 'pre-roll' || state.phase === 'building' || state.phase === 'solved'));
+  const showGlobalMute = !(playMode === 'local' && (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building' || state.phase === 'solved'));
   const salindaRatio = Math.max(0, Math.min(1, salindaVolume / 0.4));
   const salindaFillPx = Math.round(SALINDA_TRACK_H * salindaRatio);
   const salindaThumbBottom = Math.round(Math.max(0, Math.min(SALINDA_TRACK_H - 9, SALINDA_TRACK_H * salindaRatio - 9)));

@@ -16,8 +16,13 @@ describe('BotThinkingOverlay (M5.7)', () => {
     expect(mod).toBeDefined();
   });
 
-  // Full runtime render test is deferred to M7 manual verification.
-  // Testing GameScreen requires spinning up the full GameProvider + LocaleProvider
-  // + setting currentPlayerIndex to a bot + a specific phase, which is
-  // disproportionate for a 20-line component.
+  it('bot thinking overlay blocks touches during bot turn', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path');
+    const indexPath = path.resolve(__dirname, '../../../index.tsx');
+    const source = fs.readFileSync(indexPath, 'utf8') as string;
+    expect(source.includes('pointerEvents="box-only" style={[botOverlayStyles.botThinkingOverlay')).toBe(true);
+  });
 });

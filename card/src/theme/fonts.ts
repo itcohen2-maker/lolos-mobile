@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 
 const HEBREW_TEXT_RE = /[\u0590-\u05FF]/;
+const MATH_SYMBOL_RE = /[×÷−]/;
 
 const HEBREW_FONT_FAMILY =
   Platform.OS === 'web'
@@ -15,6 +16,13 @@ export function hasHebrewText(text: string | null | undefined): boolean {
   return Boolean(text && HEBREW_TEXT_RE.test(text));
 }
 
+export function hasMathSymbols(text: string | null | undefined): boolean {
+  return Boolean(text && MATH_SYMBOL_RE.test(text));
+}
+
 export function displayFontFamily(text: string | null | undefined): string | undefined {
-  return hasHebrewText(text) ? HEBREW_FONT_FAMILY : 'Fredoka_700Bold';
+  if (hasHebrewText(text) || hasMathSymbols(text)) {
+    return HEBREW_FONT_FAMILY;
+  }
+  return 'Fredoka_700Bold';
 }

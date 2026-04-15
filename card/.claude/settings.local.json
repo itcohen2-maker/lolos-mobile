@@ -41,7 +41,10 @@
       "WebSearch",
       "WebFetch(domain:www.devas.life)",
       "Bash(start:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(kill %1)",
+      "Bash(wait)",
+      "Bash(adb logcat:*)"
     ]
   }
 }

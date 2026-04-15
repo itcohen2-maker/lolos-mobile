@@ -2,9 +2,11 @@
 // server/src/roomManager.ts - Room create/join/leave/reconnect
 // ============================================================
 
+import { randomInt } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { AppLocale, LobbyStatus, Player, ServerGameState } from '../../shared/types';
 import type { LocalizedMessage } from '../../shared/i18n';
+import { sanitizePlayerName } from '../../shared/validation';
 
 export interface Room {
   code: string;
@@ -17,21 +19,34 @@ export interface Room {
   botOfferTimer?: ReturnType<typeof setTimeout> | null;
   botActionTimer?: ReturnType<typeof setTimeout> | null;
   turnTimer?: ReturnType<typeof setTimeout> | null;
+  disconnectDeadlineAt: number | null;
+  disconnectedPlayerId: string | null;
+  disconnectTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 const rooms = new Map<string, Room>();
 const socketToRoom = new Map<string, { roomCode: string; playerId: string }>();
 
+const CODE_CHARS = '0123456789';
+const CODE_LENGTH = 4;
+
 function generateRoomCode(): string {
   let code: string;
   do {
-    code = String(Math.floor(1000 + Math.random() * 9000));
+    code = '';
+    for (let i = 0; i < CODE_LENGTH; i++) {
+      code += CODE_CHARS[randomInt(0, CODE_CHARS.length)];
+    }
   } while (rooms.has(code));
   return code;
 }
 
 function localizedBotName(locale: AppLocale): string {
   return locale === 'he' ? 'בוט' : 'Bot';
+}
+
+function sanitizeBotDisplayName(raw: unknown): string | undefined {
+  return sanitizePlayerName(raw) ?? undefined;
 }
 
 function clearRoomTimers(room: Room): void {
@@ -47,7 +62,13 @@ function clearRoomTimers(room: Room): void {
     clearTimeout(room.botActionTimer);
     room.botActionTimer = undefined;
   }
+  if (room.disconnectTimer) {
+    clearTimeout(room.disconnectTimer);
+    room.disconnectTimer = undefined;
+  }
 }
+
+export const DISCONNECT_GRACE_MS = 2 * 60 * 1000;
 
 export function createRoom(
   playerName: string,
@@ -77,6 +98,8 @@ export function createRoom(
     lastActivity: Date.now(),
     lobbyStatus: 'waiting_for_player',
     botOfferAt: null,
+    disconnectDeadlineAt: null,
+    disconnectedPlayerId: null,
   };
   rooms.set(code, room);
   socketToRoom.set(socketId, { roomCode: code, playerId });
@@ -139,6 +162,9 @@ export function leaveRoom(socketId: string): { room: Room; playerId: string; pla
   if (room.state) {
     player.isConnected = false;
     room.lastActivity = Date.now();
+    if (!player.isBot) {
+      room.disconnectedPlayerId = player.id;
+    }
   } else {
     room.players = room.players.filter((candidate) => candidate.id !== info.playerId);
     if (player.isHost && room.players.length > 0) {
@@ -150,6 +176,8 @@ export function leaveRoom(socketId: string): { room: Room; playerId: string; pla
     } else {
       room.lobbyStatus = 'waiting_for_player';
       room.botOfferAt = null;
+      room.disconnectDeadlineAt = null;
+      room.disconnectedPlayerId = null;
     }
   }
 
@@ -177,6 +205,41 @@ export function reconnectPlayer(
   return { room, player };
 }
 
+export function setDisconnectGraceTimer(
+  room: Room,
+  disconnectedPlayerId: string,
+  onExpire: (room: Room, disconnectedPlayerId: string) => void,
+): number {
+  clearDisconnectGraceTimer(room);
+  const deadlineAt = Date.now() + DISCONNECT_GRACE_MS;
+  room.disconnectedPlayerId = disconnectedPlayerId;
+  room.disconnectDeadlineAt = deadlineAt;
+  room.disconnectTimer = setTimeout(() => {
+    room.disconnectTimer = undefined;
+    const targetPlayerId = room.disconnectedPlayerId ?? disconnectedPlayerId;
+    room.disconnectDeadlineAt = null;
+    onExpire(room, targetPlayerId);
+  }, DISCONNECT_GRACE_MS);
+  return deadlineAt;
+}
+
+export function clearDisconnectGraceTimer(room: Room): void {
+  if (room.disconnectTimer) {
+    clearTimeout(room.disconnectTimer);
+    room.disconnectTimer = undefined;
+  }
+  room.disconnectDeadlineAt = null;
+  room.disconnectedPlayerId = null;
+}
+
+export function shouldStartDisconnectGrace(room: Room, disconnectedPlayerId: string): boolean {
+  if (!room.state) return false;
+  const humans = room.players.filter((player) => !player.isBot);
+  const disconnected = humans.find((player) => player.id === disconnectedPlayerId);
+  if (!disconnected || disconnected.isConnected) return false;
+  return humans.some((player) => player.id !== disconnectedPlayerId && player.isConnected);
+}
+
 export function getRoom(roomCode: string): Room | undefined {
   return rooms.get(roomCode);
 }
@@ -202,13 +265,14 @@ export function hasBot(room: Room): boolean {
   return room.players.some((player) => player.isBot);
 }
 
-export function addBotPlayer(room: Room, locale: AppLocale = 'he'): Player {
+export function addBotPlayer(room: Room, locale: AppLocale = 'he', rawDisplayName?: unknown): Player {
   const existingBot = room.players.find((player) => player.isBot);
   if (existingBot) return existingBot;
 
+  const customName = sanitizeBotDisplayName(rawDisplayName);
   const bot: Player = {
     id: uuidv4(),
-    name: localizedBotName(locale),
+    name: customName ?? localizedBotName(locale),
     hand: [],
     calledLolos: false,
     isConnected: true,

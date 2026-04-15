@@ -16,13 +16,13 @@ type SfxState = {
 };
 
 const SOURCES: Record<SfxKey, number> = {
-  tap: require('../../assets/sounds/sfx_tap_soft.wav'),
-  success: require('../../assets/sounds/sfx_success_soft.wav'),
-  combo: require('../../assets/sounds/sfx_combo_soft.wav'),
-  errorSoft: require('../../assets/sounds/sfx_error_soft.wav'),
-  start: require('../../assets/sounds/sfx_start_soft.wav'),
-  complete: require('../../assets/sounds/sfx_complete_soft.wav'),
-  transition: require('../../assets/sounds/sfx_transition_soft.wav'),
+  tap: require('../../assets/sounds/sfx_ui_tap.wav'),
+  success: require('../../assets/sounds/sfx_ui_success.wav'),
+  combo: require('../../assets/sounds/sfx_ui_combo.wav'),
+  errorSoft: require('../../assets/sounds/sfx_ui_error_soft.wav'),
+  start: require('../../assets/sounds/sfx_ui_start.wav'),
+  complete: require('../../assets/sounds/sfx_ui_complete.wav'),
+  transition: require('../../assets/sounds/sfx_ui_transition.wav'),
 };
 
 const REGISTRY: Record<SfxKey, SfxState> = {
@@ -170,8 +170,8 @@ export async function disposeSfx(): Promise<void> {
       }
       try {
         await sound.unloadAsync();
-      } catch {
-        // ignore unload failures
+      } catch (err) {
+        if (__DEV__) console.warn('[sfx] unload failed', key, err);
       }
     })
   );

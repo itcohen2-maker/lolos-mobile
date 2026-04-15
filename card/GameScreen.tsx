@@ -1168,7 +1168,7 @@ const eqHub = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.02)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)',
   },
-  bracket: { fontSize: 34, fontWeight: '300', color: 'rgba(255,200,60,0.3)' },
+  bracket: { fontSize: 34, fontWeight: '600', color: 'rgba(255,220,120,0.82)' },
   opBtn: {
     width: 36, height: 36, borderRadius: 10,
     alignItems: 'center', justifyContent: 'center',

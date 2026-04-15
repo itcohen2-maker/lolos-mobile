@@ -167,26 +167,12 @@ test('M4.5.2 — pre-roll defense: bot defends fraction attack; turn eventually 
 });
 
 // ---------------------------------------------------------------------------
-// M4.5.3 — Building with plan: entire plan drains in ONE BOT_STEP dispatch
+// M4.5.3 — Building with plan: confirmEquation first, then stages + confirm across BOT_STEPs
 // ---------------------------------------------------------------------------
 
-// SKIPPED until M5.4 wires BOT_STEP reducer case. Unskip via M4.5.6.
-test('M4.5.3 — building phase: plan drains atomically in a single BOT_STEP (applyBotActionAtomically)', () => {
-  // NOTE: Skipped until M5.4.
-  //
-  // This is the test that verifies the "drain in one tick" requirement from
-  // the architectural review (design spec §0.5.1). The server bot reference
-  // (section 5, handleBotBuilding) shows confirmEquation → stageCard × N →
-  // confirmStaged executed as a tight synchronous burst. The local bot must do
-  // the same — the applyBotActionAtomically helper in gameReducer must complete
-  // the entire burst before returning the new state. If the bot re-plans between
-  // stages, mid-equation plan switches could produce illegal staged card sets.
-
-  // Fixture: bot is already in 'building' phase (dice already rolled, equation
-  // already computed by the bot in a prior tick, validTargets populated).
-  // The bot has cards that sum to a valid target.
-  const card5  = { id: 'p1', type: 'number' as const, value: 5 };
-  const card7  = { id: 'p2', type: 'number' as const, value: 7 };
+test('M4.5.3 — building phase: bot completes plan over multiple BOT_STEP dispatches', () => {
+  const card5 = { id: 'p1', type: 'number' as const, value: 5 };
+  const card7 = { id: 'p2', type: 'number' as const, value: 7 };
 
   const startState: GameState = {
     ...initialState,
@@ -194,7 +180,6 @@ test('M4.5.3 — building phase: plan drains atomically in a single BOT_STEP (ap
     currentPlayerIndex: 1,
     dice: [5, 7, 3] as unknown as GameState['dice'],
     validTargets: [
-      // A valid target the bot's cards can solve: 5 + 7 = 12
       { result: 12, equation: '5 + 7', operations: ['+'] },
     ] as unknown as GameState['validTargets'],
     players: [
@@ -215,29 +200,68 @@ test('M4.5.3 — building phase: plan drains atomically in a single BOT_STEP (ap
     ],
     discardPile: [{ id: 'd1', type: 'number' as const, value: 12 }],
     botConfig: { difficulty: 'hard' as const, playerIds: [1] },
+    botPendingStagedIds: null,
     botTickSeq: 0,
     enabledOperators: ['+'],
   } as unknown as GameState;
 
   const initialBotHandSize = startState.players[1].hand.length;
+  let state = startState;
+  for (let i = 0; i < 12; i++) {
+    state = gameReducer(state, { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1], tf);
+    if (state.phase === 'turn-transition' || state.phase === 'game-over') break;
+    if (state.hasPlayedCards && state.phase !== 'building') break;
+  }
 
-  // Dispatch exactly ONE BOT_STEP.
-  const afterOneStep = gameReducer(startState, { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1], tf);
+  expect(state.phase).not.toBe('building');
+  expect(state.players[1].hand.length).toBeLessThan(initialBotHandSize);
+  expect(state.discardPile.length).toBeGreaterThan(startState.discardPile.length);
+  expect(state.botPendingStagedIds).toBeNull();
+});
 
-  // botTickSeq must have incremented.
-  expect((afterOneStep as unknown as { botTickSeq: number }).botTickSeq).toBe(1);
+test('M4.5.3b — building phase exposes staged queue before final confirm', () => {
+  const card5 = { id: 'q1', type: 'number' as const, value: 5 };
+  const card7 = { id: 'q2', type: 'number' as const, value: 7 };
 
-  // The phase must have advanced out of 'building' after ONE dispatch.
-  // If the plan drained atomically, the bot went through solved → turn-transition
-  // or directly to turn-transition in a single reducer call.
-  expect(afterOneStep.phase).not.toBe('building');
+  const startState: GameState = {
+    ...initialState,
+    phase: 'building' as const,
+    currentPlayerIndex: 1,
+    dice: [5, 7, 3] as unknown as GameState['dice'],
+    validTargets: [
+      { result: 12, equation: '5 + 7', operations: ['+'] },
+    ] as unknown as GameState['validTargets'],
+    players: [
+      {
+        id: 0,
+        name: 'Human',
+        hand: [],
+        calledLolos: false,
+        isBot: false,
+      },
+      {
+        id: 1,
+        name: 'Bot',
+        hand: [card5, card7],
+        calledLolos: false,
+        isBot: true,
+      },
+    ],
+    discardPile: [{ id: 'd2', type: 'number' as const, value: 12 }],
+    botConfig: { difficulty: 'easy' as const, playerIds: [1] },
+    botPendingStagedIds: null,
+    botTickSeq: 0,
+    enabledOperators: ['+'],
+  } as unknown as GameState;
 
-  // The bot's hand must be smaller (cards were staged and committed).
-  const afterBotHandSize = afterOneStep.players[1].hand.length;
-  expect(afterBotHandSize).toBeLessThan(initialBotHandSize);
-
-  // The discard pile must have grown (staged cards were committed to the pile).
-  expect(afterOneStep.discardPile.length).toBeGreaterThan(startState.discardPile.length);
+  const afterConfirm = gameReducer(
+    startState,
+    { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
+    tf,
+  );
+  expect(afterConfirm.phase).toBe('solved');
+  expect(afterConfirm.botPendingStagedIds).not.toBeNull();
+  expect((afterConfirm.botPendingStagedIds ?? []).length).toBeGreaterThan(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -325,16 +349,26 @@ test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard ove
   //
   // Starting in 'building' (not 'pre-roll') bypasses ROLL_DICE, which would
   // regenerate validTargets from random dice and make the fixture non-deterministic.
-  // With explicit validTargets, buildBotStagedPlan picks deterministically:
-  //   Easy (minimizer): score 2 → [5,7]   → cardsDiscarded = 2
-  //   Hard (maximizer): score 3 → [3,4,5] → cardsDiscarded = 3
+  // With explicit validTargets, Hard still picks the maximizer plan.
+  // Easy uses random plans — this test injects a seeded rng so each pick matches
+  // the first enumerated valid plan (2 cards), keeping easyDiscards < hardDiscards stable.
   //
   // We run 5 BOT_STEP cycles (one per controlled building-phase turn), each time
   // resetting the phase back to 'building' with the same hand and validTargets so
   // the comparator choice is stable across all turns. The cardsDiscarded sum over
   // those 5 entries must satisfy easyDiscards < hardDiscards.
 
-  const makeBuildingState = (difficulty: 'easy' | 'hard'): GameState => ({
+  const makeBuildingState = (difficulty: 'easy' | 'hard'): GameState => {
+    /** Blunder branch (rng < 0.2) then pick first suboptimal plan → 2-card solves, stable vs Hard's 3-card. */
+    const easyRng = (() => {
+      let n = 0;
+      return () => {
+        const v = n % 2 === 0 ? 0.1 : 0;
+        n += 1;
+        return v;
+      };
+    })();
+    return {
     ...initialState,
     // Start directly in building phase so the bot never calls ROLL_DICE.
     // This keeps validTargets under test control for all 5 turns.
@@ -367,7 +401,11 @@ test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard ove
         isBot: true,
       },
     ],
-    botConfig: { difficulty, playerIds: [1] },
+    botConfig:
+      difficulty === 'easy'
+        ? { difficulty: 'easy', playerIds: [1], rng: easyRng }
+        : { difficulty, playerIds: [1] },
+    botPendingStagedIds: null,
     botTickSeq: 0,
     enabledOperators: ['+'],
     // Two subsets both sum to 12, giving minimizer and maximizer different picks.
@@ -375,7 +413,8 @@ test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard ove
       { result: 12, equation: '5 + 7',     operations: ['+'] },
       { result: 12, equation: '3 + 4 + 5', operations: ['+', '+'] },
     ] as unknown as GameState['validTargets'],
-  } as unknown as GameState);
+  } as unknown as GameState;
+  };
 
   /**
    * Run exactly `turns` controlled bot turns. Each turn:
@@ -395,14 +434,18 @@ test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard ove
 
     for (let t = 0; t < turns; t++) {
       const histBefore = state.moveHistory.length;
-      const prev = (state as unknown as { botTickSeq: number }).botTickSeq;
-
-      state = gameReducer(
-        state,
-        { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
-        tf,
-      );
-      expect((state as unknown as { botTickSeq: number }).botTickSeq).toBeGreaterThan(prev);
+      let inner = 0;
+      while (state.moveHistory.length === histBefore && inner < 40) {
+        const prevTick = (state as unknown as { botTickSeq: number }).botTickSeq;
+        state = gameReducer(
+          state,
+          { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],
+          tf,
+        );
+        expect((state as unknown as { botTickSeq: number }).botTickSeq).toBeGreaterThan(prevTick);
+        inner++;
+      }
+      expect(state.moveHistory.length).toBeGreaterThan(histBefore);
 
       const added = state.moveHistory.slice(histBefore);
       collectedEntries.push(...added);
@@ -427,6 +470,6 @@ test('M4.5.5 — Profile 3: Easy bot discards strictly fewer cards than Hard ove
   const easyDiscards = easyEntries.reduce((sum, e) => sum + (e.cardsDiscarded ?? 0), 0);
   const hardDiscards = hardEntries.reduce((sum, e) => sum + (e.cardsDiscarded ?? 0), 0);
 
-  // The key Profile 3 assertion: Easy (minimizer) < Hard (maximizer).
+  // Easy (seeded) discards fewer cards per turn than Hard (maximizer).
   expect(easyDiscards).toBeLessThan(hardDiscards);
 });

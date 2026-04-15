@@ -4,6 +4,11 @@
 
 import type { Card, DiceResult, EquationOption, Fraction, Operation } from '../../shared/types';
 
+/** Platform-safe replacement for node:crypto randomInt (works in RN + Node). */
+function randomInt(min: number, maxExclusive: number): number {
+  return min + Math.floor(Math.random() * (maxExclusive - min));
+}
+
 // ── Arithmetic ──
 
 export function applyOperation(a: number, op: Operation | string, b: number): number | null {
@@ -70,9 +75,9 @@ export function getCurrentResult(
 
 export function rollDice(): DiceResult {
   return {
-    die1: Math.floor(Math.random() * 6) + 1,
-    die2: Math.floor(Math.random() * 6) + 1,
-    die3: Math.floor(Math.random() * 6) + 1,
+    die1: randomInt(1, 7),
+    die2: randomInt(1, 7),
+    die3: randomInt(1, 7),
   };
 }
 

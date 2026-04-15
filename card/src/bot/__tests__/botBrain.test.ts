@@ -267,6 +267,35 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'drawCard' });
   });
 
+  test('building plan follows equation numbers (not just same target)', () => {
+    resetCardSeq();
+    const card7 = makeCard('number', 7);
+    const card3 = makeCard('number', 3);
+    const card4 = makeCard('number', 4);
+    const opCard = makeCard('operation', undefined, undefined, '+');
+    const botPlayer = makePlayer(0, 'Bot', [opCard, card7, card3, card4]);
+
+    const state = makeFixtureState({
+      phase: 'building',
+      players: [botPlayer],
+      currentPlayerIndex: 0,
+      validTargets: [{ equation: '3+4', result: 7 }],
+      enabledOperators: ['+'],
+      mathRangeMax: 25,
+      discardPile: [makeCard('number', 7)],
+    });
+
+    const rng = () => 0;
+    const result = decideBotAction(state, 'easy', { rng });
+
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe('confirmEquation');
+    const action = result as { kind: 'confirmEquation'; stagedCardIds: ReadonlyArray<string> };
+    expect(action.stagedCardIds).toContain(card3.id);
+    expect(action.stagedCardIds).toContain(card4.id);
+    expect(action.stagedCardIds).not.toContain(card7.id);
+  });
+
   test('game-over returns null', () => {
     const botPlayer = makePlayer(0, 'Bot', []);
     const state = makeFixtureState({
@@ -280,7 +309,7 @@ describe('decideBotAction', () => {
     expect(result).toBeNull();
   });
 
-  test('Profile 3: Easy picks smaller plan than Hard (card-count comparator flip)', () => {
+  test('Profile 3: Hard maximizes staged cards; Easy (seeded RNG) picks first enumerated plan', () => {
     resetCardSeq();
     const card1 = makeCard('number', 1);
     const card2 = makeCard('number', 2);
@@ -307,7 +336,13 @@ describe('decideBotAction', () => {
     });
 
     const hardResult = decideBotAction(baseState, 'hard');
-    const easyResult = decideBotAction(baseState, 'easy');
+    /** Skip blunder branch, then pick first enumerated plan (deterministic). */
+    let easyRngCalls = 0;
+    const easyRng = () => {
+      easyRngCalls += 1;
+      return easyRngCalls === 1 ? 0.5 : 0;
+    };
+    const easyResult = decideBotAction(baseState, 'easy', { rng: easyRng });
 
     // Both must produce a plan (not null, not drawCard)
     expect(hardResult).not.toBeNull();
@@ -320,13 +355,10 @@ describe('decideBotAction', () => {
 
     // Hard maximizes card count → 4 cards staged
     expect(hardAction.stagedCardIds).toHaveLength(4);
-    // Easy minimizes card count → 1 card staged
+    // Easy with seeded RNG now follows equationDisplay numbers.
+    // For target=3 equation '3', this is the single-card [3] plan.
     expect(easyAction.stagedCardIds).toHaveLength(1);
-
-    // Core assertion: Easy discards fewer cards per equation than Hard
     expect(easyAction.stagedCardIds.length).toBeLessThan(hardAction.stagedCardIds.length);
-
-    // Easy staged the single card3 (value=3 satisfies target=3)
     expect(easyAction.stagedCardIds).toContain(card3.id);
 
     // Hard staged all four number cards (1+2+3+4=10 satisfies target=10)

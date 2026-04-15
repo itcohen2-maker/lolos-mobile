@@ -24,7 +24,10 @@ export function HtmlCanvasEmbed({
 
   if (Platform.OS === 'web') {
     return (
-      <View style={[styles.webRoot, borderRadius != null && { borderRadius, overflow: 'hidden' }, style]}>
+      <View
+        pointerEvents="none"
+        style={[styles.webRoot, borderRadius != null && { borderRadius, overflow: 'hidden' }, style]}
+      >
         <iframe
           title=""
           srcDoc={html}

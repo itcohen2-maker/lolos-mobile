@@ -1,5 +1,5 @@
 // Client-side bot brain.
-// Pure function: decideBotAction(state, difficulty) → BotAction | null.
+// Pure function: decideBotAction(state, difficulty, opts?) → BotAction | null.
 // Port of server/src/socketHandlers.ts lines 313-458 retargeted to the
 // local reducer's types and helpers.
 //
@@ -18,6 +18,21 @@ import {
   fractionDenominator,
 } from '../../index';
 import type { BotAction, BotDifficulty } from './types';
+import { pickBotStagedPlan } from '../../shared/botPlan';
+
+export type DecideBotActionOptions = {
+  /** Defaults to Math.random; tests may inject a sequence. */
+  rng?: () => number;
+};
+
+function resolveBotRng(state: GameState, opts?: DecideBotActionOptions): () => number {
+  if (opts?.rng) return opts.rng;
+  const bc = state.botConfig;
+  if (bc && typeof (bc as { rng?: () => number }).rng === 'function') {
+    return (bc as { rng: () => number }).rng;
+  }
+  return Math.random;
+}
 
 /**
  * Pick at most one operation/joker card to commit to the equation.
@@ -60,15 +75,12 @@ function deriveEquationOps(
 }
 
 /**
- * Brute-force subset enumerator. For each valid target × each subset of
- * (number + wild) cards, check if validateStagedCards accepts it.
- *
- * Profile 3 Easy flip: difficulty === 'easy' minimizes card count;
- * difficulty === 'hard' maximizes (server bot default).
+ * Brute-force subset enumerator + difficulty pick (shared with server).
  */
 function buildBotStagedPlan(
   state: GameState,
   difficulty: BotDifficulty,
+  rng: () => number,
 ): {
   target: number;
   equationDisplay: string;
@@ -81,53 +93,15 @@ function buildBotStagedPlan(
   );
   const equationCommits = buildBotCommits(state);
   const maxWild = state.mathRangeMax ?? 25;
-
-  let bestPlan: {
-    target: number;
-    equationDisplay: string;
-    stagedCardIds: string[];
-    equationCommits: EquationCommitPayload[];
-    score: number;
-  } | null = null;
-
-  const totalMasks = 1 << candidates.length;
-  for (const option of state.validTargets) {
-    for (let mask = 1; mask < totalMasks; mask++) {
-      const stagedCards: Card[] = [];
-      let wildCount = 0;
-      for (let index = 0; index < candidates.length; index++) {
-        if ((mask & (1 << index)) === 0) continue;
-        const card = candidates[index];
-        if (card.type === 'wild') wildCount++;
-        stagedCards.push(card);
-      }
-      if (wildCount > 1) continue;
-      if (!validateStagedCards(stagedCards, null, option.result, maxWild)) continue;
-      const score = stagedCards.length + equationCommits.length;
-      const better =
-        !bestPlan ||
-        (difficulty === 'easy'
-          ? score < bestPlan.score
-          : score > bestPlan.score);
-      if (better) {
-        bestPlan = {
-          target: option.result,
-          equationDisplay: option.equation,
-          stagedCardIds: stagedCards.map((c) => c.id),
-          equationCommits,
-          score,
-        };
-      }
-    }
-  }
-
-  if (!bestPlan) return null;
-  return {
-    target: bestPlan.target,
-    equationDisplay: bestPlan.equationDisplay,
-    stagedCardIds: bestPlan.stagedCardIds,
-    equationCommits: bestPlan.equationCommits,
-  };
+  return pickBotStagedPlan(
+    state.validTargets,
+    candidates,
+    equationCommits,
+    maxWild,
+    validateStagedCards,
+    difficulty,
+    { rng },
+  );
 }
 
 /**
@@ -196,8 +170,9 @@ function handleBotPreRoll(state: GameState): BotAction {
 function handleBotBuilding(
   state: GameState,
   difficulty: BotDifficulty,
+  rng: () => number,
 ): BotAction {
-  const plan = buildBotStagedPlan(state, difficulty);
+  const plan = buildBotStagedPlan(state, difficulty, rng);
   if (!plan) {
     return { kind: 'drawCard' };
   }
@@ -219,7 +194,9 @@ function handleBotBuilding(
 export function decideBotAction(
   state: GameState,
   difficulty: BotDifficulty,
+  opts?: DecideBotActionOptions,
 ): BotAction | null {
+  const rng = resolveBotRng(state, opts);
   switch (state.phase) {
     case 'setup':
       return null;
@@ -232,7 +209,7 @@ export function decideBotAction(
       }
       return handleBotPreRoll(state);
     case 'building':
-      return handleBotBuilding(state, difficulty);
+      return handleBotBuilding(state, difficulty, rng);
     case 'solved':
       return { kind: 'drawCard' };
     case 'game-over':
