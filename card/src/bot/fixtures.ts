@@ -117,6 +117,7 @@ export interface GameState {
   botPendingDemoActions?: unknown[] | null;
   botNoSolutionTicks?: number;
   botNoSolutionDrawPending?: boolean;
+  botDicePausePending?: boolean;
   botTickSeq?: number;
 }
 
@@ -186,6 +187,7 @@ const baseline: GameState = {
   botPendingDemoActions: null,
   botNoSolutionTicks: 0,
   botNoSolutionDrawPending: false,
+  botDicePausePending: false,
   botTickSeq: 0,
 };
 

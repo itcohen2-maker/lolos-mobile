@@ -466,8 +466,13 @@ function handleBotBuilding(io: IOServer, room: Room, state: ServerGameState): vo
 
   const diff: BotDifficulty = state.hostGameSettings.botDifficulty ?? 'medium';
   const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
-  const candidates = hand.filter((card) => card.type === 'number' || card.type === 'wild');
   const equationCommits = buildBotCommits(state);
+  const commitIds = new Set(equationCommits.map((c) => c.cardId));
+  const candidates = hand.filter(
+    (card) =>
+      (card.type === 'number' || card.type === 'wild' || card.type === 'operation') &&
+      !commitIds.has(card.id),
+  );
   const picked = pickBotStagedPlan(
     state.validTargets,
     candidates,

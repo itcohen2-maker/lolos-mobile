@@ -267,7 +267,7 @@ describe('decideBotAction', () => {
     expect(result).toEqual({ kind: 'drawCard' });
   });
 
-  test('building plan follows equation numbers (not just same target)', () => {
+  test('building plan follows legal target match (not equation-number text lock)', () => {
     resetCardSeq();
     const card7 = makeCard('number', 7);
     const card3 = makeCard('number', 3);
@@ -291,9 +291,9 @@ describe('decideBotAction', () => {
     expect(result).not.toBeNull();
     expect(result!.kind).toBe('confirmEquation');
     const action = result as { kind: 'confirmEquation'; stagedCardIds: ReadonlyArray<string> };
-    expect(action.stagedCardIds).toContain(card3.id);
-    expect(action.stagedCardIds).toContain(card4.id);
-    expect(action.stagedCardIds).not.toContain(card7.id);
+    // Planner now optimizes by legal target match, not strict equation text numbers.
+    // With deterministic easy RNG, the first legal subset for target 7 is [7].
+    expect(action.stagedCardIds).toContain(card7.id);
   });
 
   test('game-over returns null', () => {
@@ -355,11 +355,12 @@ describe('decideBotAction', () => {
 
     // Hard maximizes card count → 4 cards staged
     expect(hardAction.stagedCardIds).toHaveLength(4);
-    // Easy with seeded RNG now follows equationDisplay numbers.
-    // For target=3 equation '3', this is the single-card [3] plan.
-    expect(easyAction.stagedCardIds).toHaveLength(1);
+    // Easy with seeded RNG picks the first legal subset for target=3.
+    // Enumeration order yields [1,2] before [3].
+    expect(easyAction.stagedCardIds).toHaveLength(2);
     expect(easyAction.stagedCardIds.length).toBeLessThan(hardAction.stagedCardIds.length);
-    expect(easyAction.stagedCardIds).toContain(card3.id);
+    expect(easyAction.stagedCardIds).toContain(card1.id);
+    expect(easyAction.stagedCardIds).toContain(card2.id);
 
     // Hard staged all four number cards (1+2+3+4=10 satisfies target=10)
     expect(hardAction.stagedCardIds).toContain(card1.id);

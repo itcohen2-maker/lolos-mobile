@@ -355,8 +355,8 @@ export const he: Record<string, string> = {
   'local.openingDrawBody': 'הגרלה: {{name}} מתחיל/ה ראשון/ה',
   'local.fractionBlockToast': '⚔️ {{name}} חסם עם שבר {{fraction}} — האתגר עובר אליך!',
   'local.fractionBlockMsg': '{{name}} חסם עם שבר — האתגר עובר הלאה!',
-  'local.fractionAttackToast': '⚔️ {{name}} תקף אותך עם שבר {{fraction}}!',
-  'local.fractionAttackMsg': '{{name}} תקף עם שבר!',
+  'local.fractionAttackToast': '⚔️ {{name}} איתגר אותך בקלף שבר {{fraction}}!',
+  'local.fractionAttackMsg': '{{name}} איתגר אותך בקלף שבר!',
   'local.callLolosDeclared': '{{name}} הכריז/ה על סיום!',
   'local.possibleResultsUseCount': 'תוצאות אפשריות: שימוש {{n}}/3 ללא תשלום.',
   'local.possibleResultsPaidNoDeck': 'הופעל תשלום על קניית מידע, אבל אין קלפים זמינים בערימה לשליפה.',
@@ -521,12 +521,12 @@ export const he: Record<string, string> = {
   'fraction.counterHint': 'שבר נגדי מותר כהגנה — האתגר עובר לשחקן הבא.',
   'fraction.counterHintDetail':
     'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלפי עונש. ג\'וקר לא מגין מול שבר.',
-  'notification.fractionAttack.titleSelf': '⚔️ אותגרת בשבר',
+  'notification.fractionAttack.titleSelf': 'אותגרת בקלף שבר',
   'notification.fractionAttack.bodySelf':
-    'יעד חדש לתור: {{target}}. עונש אם לא מגנים: שליפת {{penalty}} קלפים.\n\nאפשרויות:\n• מספר שמתחלק ב־{{penalty}} (או פרא עם ערך כזה)\n• שבר נגדי — מפצל שוב את היעד והאתגר עובר לשחקן הבא\n• שליפת {{penalty}} קלפים — סיום האתגר\n\nג\'וקר לא מגן מול אתגר שבר.',
+    'הגנה:\n• שים קלף שבר והתור יעבור לשחקן הבא\n• או שים מספר שמתחלק ב־{{penalty}} ומתאים לשבר\n\nהמספר הפעיל באתגר: {{target}}',
   'notification.fractionAttack.titleWatch': '⚔️ אתגר שבר פעיל',
   'notification.fractionAttack.bodyWatch':
-    'תורו/ה של {{name}}. יעד {{target}}, עונש {{penalty}} קלפים אם לא מגנים. אפשר הגנה במספר/פרא מתאימים, שבר נגדי (האתגר ממשיך), או שליפה.',
+    '{{name}} אותגר/ה בקלף שבר.\nהגנה: שבר שמעביר תור, או מספר שמתחלק ב־{{penalty}}.\nהמספר הפעיל: {{target}}',
   'equation.twoDiceOnly': 'אפשר לסיים עם 2 קוביות בלבד',
   'game.almostDone': '🏁 כמעט סיימתי!',
   'wildModal.mustDivide': 'הערך חייב להתחלק ב־{{pen}} (בטווח 1–{{max}}).',
@@ -695,24 +695,24 @@ export const he: Record<string, string> = {
   'start.advancedSetup.sectionTimerIntro':
     'אפשר להגביל בזמן את בניית המשוואה בתור. כבוי — בלי לחץ של ספירה לאחור.',
   'start.advancedSetup.stage.A.detail':
-    'קלפי מספרים 0–12. חיבור וחיסור ביחד; תוצאות מהקוביות בלי שלילי.',
+    'קלפי מספרים 0–12. חיבור וחיסור ביחד.',
   'start.advancedSetup.stage.B.detail':
-    'קלפי מספרים 0–12. חיבור וחיסור; מותרות תוצאות שליליות מהקוביות.',
+    'קלפי מספרים 0–12. חיבור וחיסור.',
   'start.advancedSetup.stage.C.detail':
-    'קלפי מספרים 0–25. חיבור וחיסור; תוצאות תקפות בלי שלילי.',
+    'קלפי מספרים 0–25. חיבור וחיסור.',
   'start.advancedSetup.stage.D.detail':
-    'קלפי מספרים 0–25. חיבור וחיסור; מותרות תוצאות שליליות מהקוביות.',
+    'קלפי מספרים 0–25. חיבור וחיסור.',
   'start.advancedSetup.stage.E.detail':
-    'קלפי מספרים 0–12. כפל וחילוק ביחד; תוצאות מהקוביות בלי שלילי.',
+    'קלפי מספרים 0–12. כפל וחילוק ביחד.',
   'start.advancedSetup.stage.F.detail':
-    'קלפי מספרים 0–12. כפל וחילוק; מותרות תוצאות שליליות מהקוביות.',
+    'קלפי מספרים 0–12. כפל וחילוק.',
   'start.advancedSetup.stage.G.detail':
-    'קלפי מספרים 0–25. כפל וחילוק; תוצאות תקפות בלי שלילי.',
+    'קלפי מספרים 0–25. כפל וחילוק.',
   'start.advancedSetup.stage.H.detail':
-    'קלפי מספרים 0–25. כפל וחילוק; מותרות תוצאות שליליות מהקוביות.',
+    'קלפי מספרים 0–25. כפל וחילוק.',
   'start.wheel.beginnerStage': 'רמת תרגול',
   'start.wheel.beginnerStageHelp':
-    'בחירת רמת התרגול מגדירה אילו סימנים פעילים, טווח המספרים, והאם תוצאות שליליות מותרות מהקוביות. השורה מתחת מסכמת את הבחירה.',
+    'בחירת רמת התרגול מגדירה אילו סימנים פעילים וטווח המספרים. השורה מתחת מסכמת את הבחירה.',
   'start.wheel.operators': 'סימנים במשחק',
   'start.wheel.timerRow': 'טיימר',
   'start.wheel.guidanceRow': 'הדרכה והסברים',
@@ -864,7 +864,7 @@ export const he: Record<string, string> = {
   'botOffline.step.rollTitle': '{{name}} בודק מה כדאי לעשות לפני גלגול',
   'botOffline.step.rollBody': 'הבוט מחפש קלף זהה או שבר התקפי. אם אין מהלך חזק, הוא מגלגל קוביות.',
   'botOffline.step.diceResultTitle': '{{name}} רואה את תוצאת הקוביות',
-  'botOffline.step.diceResultBody': 'אלה המספרים שהתקבלו בקוביות. עכשיו הבוט עובר לבניית תרגיל.',
+  'botOffline.step.diceResultBody': 'יצא לנו המספרים האלה. אני מנסה ליצור תרגילים.',
   'botOffline.step.buildTitle': '{{name}} בונה פתרון מהקוביות',
   'botOffline.step.buildBody': 'הבוט בוחר יעד חוקי מהרשימה ובונה תרגיל שמתאים ליד שלו.',
   'botOffline.step.equationTitle': 'המשוואה של {{name}} מוכנה',
@@ -875,6 +875,8 @@ export const he: Record<string, string> = {
   'botOffline.step.noSolutionBody': 'אין התאמה חוקית כרגע בין הקוביות ליד, לכן הבוט שולף קלף וממשיך.',
   'botOffline.step.playTitle': '{{name}} מניח קלפים על הערימה',
   'botOffline.step.playBody': 'אחרי שהתרגיל אושר, הבוט משחק קלפים לערך היעד ומסיים את התור.',
+  'botOffline.fractionAttackExplain': '{{x}} מתחלק ב־{{y}}',
+  'botOffline.fractionAttackChallenged': 'איתגרתי אותך',
 
   // ── Tutorial ──
   'tutorial.diceTitle': '!בואו נלמד לשחק',

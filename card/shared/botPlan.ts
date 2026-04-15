@@ -23,37 +23,6 @@ export type PickBotPlanOptions = {
 const EASY_BLUNDER_CHANCE = 0.2;
 const MEDIUM_RANDOM_BRANCH = 0.5;
 
-function parseEquationNumbers(equationDisplay: string): number[] {
-  const lhs = equationDisplay.split('=')[0] ?? equationDisplay;
-  const matches = lhs.match(/\d+/g);
-  if (!matches) return [];
-  return matches.map((raw) => Number(raw));
-}
-
-function stageMatchesEquationNumbers(stagedCards: Card[], equationNumbers: number[]): boolean {
-  if (equationNumbers.length === 0) return true;
-  const stagedNumbers = stagedCards.filter((card) => card.type === 'number');
-  const wildCount = stagedCards.filter((card) => card.type === 'wild').length;
-  if (stagedNumbers.length + wildCount !== equationNumbers.length) return false;
-
-  const countByValue = new Map<number, number>();
-  for (const card of stagedNumbers) {
-    const value = card.value ?? 0;
-    countByValue.set(value, (countByValue.get(value) ?? 0) + 1);
-  }
-
-  let uncovered = 0;
-  for (const expected of equationNumbers) {
-    const count = countByValue.get(expected) ?? 0;
-    if (count > 0) {
-      countByValue.set(expected, count - 1);
-    } else {
-      uncovered += 1;
-    }
-  }
-  return uncovered <= wildCount;
-}
-
 function pickFromPlans(
   plans: InternalPlan[],
   difficulty: BotDifficulty,
@@ -130,24 +99,31 @@ export function pickBotStagedPlan(
   const plans: InternalPlan[] = [];
   const totalMasks = 1 << candidates.length;
   for (const option of validTargets) {
-    const equationNumbers = parseEquationNumbers(option.equation);
     for (let mask = 1; mask < totalMasks; mask++) {
       const stagedCards: Card[] = [];
       let wildCount = 0;
+      let operationCount = 0;
       for (let index = 0; index < candidates.length; index++) {
         if ((mask & (1 << index)) === 0) continue;
         const card = candidates[index]!;
         if (card.type === 'wild') wildCount++;
+        if (card.type === 'operation') operationCount++;
         stagedCards.push(card);
       }
       if (wildCount > 1) continue;
-      if (!stageMatchesEquationNumbers(stagedCards, equationNumbers)) continue;
-      if (!validateStagedCards(stagedCards, null, option.result, maxWild)) continue;
+      if (operationCount > 1) continue;
+      const numberCards = stagedCards.filter(
+        (card) => card.type === 'number' || card.type === 'wild',
+      );
+      if (numberCards.length === 0) continue;
+      const opCard = stagedCards.find((card) => card.type === 'operation') ?? null;
+      if (!validateStagedCards(numberCards, opCard, option.result, maxWild)) continue;
       const score = stagedCards.length + equationCommits.length;
       plans.push({
         target: option.result,
         equationDisplay: option.equation,
-        stagedCardIds: stagedCards.map((c) => c.id),
+        // Stage only numbers/wilds in solved phase; operation cards belong to equation commits.
+        stagedCardIds: numberCards.map((c) => c.id),
         equationCommits,
         score,
       });

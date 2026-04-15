@@ -214,8 +214,10 @@ interface GameState {
   consecutiveIdenticalPlays: number;
   courageMeterPercent: number;
   courageMeterStep: number;
+  /** @deprecated נשמר לתאימות; חוק רצף השלכות בוטל */
   courageDiscardSuccessStreak: number;
   courageRewardPulseId: number;
+  courageCoins: number;
   identicalAlert: { playerName: string; cardDisplay: string; consecutive: number } | null;
   jokerModalOpen: boolean;
   /** משבצות 0/1 — קלפים מהיד בתרגיל הקוביות */
@@ -286,6 +288,8 @@ interface GameState {
   botNoSolutionTicks: number;
   /** דגל להצגת הודעת "אין פתרון, אני שולף קלף". */
   botNoSolutionDrawPending: boolean;
+  /** עצירה לימודית אחרי הטלת קוביות לפני ניסיון בניית תרגיל. */
+  botDicePausePending: boolean;
   /** Monotonic counter incremented on every BOT_STEP dispatch. Used by bot clock useEffect dep array
    *  to guarantee re-scheduling on no-op ticks. Prevents "frozen bot" bugs. See spec §0.5.2. */
   botTickSeq: number;
@@ -447,9 +451,6 @@ function TournamentInfoModal({
           </Text>
           <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
             {`סימנים פעילים: ${safeEnabledOperators.join(' ') || 'אין'}`}
-          </Text>
-          <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
-            {`תוצאות מהקוביות: ${settings.allowNegativeTargets ? 'עם שלילי' : 'בלי שלילי'}`}
           </Text>
           <Text style={{ color: '#DCFCE7', fontSize: 12, textAlign: 'right', lineHeight: 18 }}>
             {`תוצאות אפשריות: ${settings.showPossibleResults ? 'מופעל' : 'כבוי'}`}
@@ -685,6 +686,25 @@ function countEquationHandPlaced(state: GameState): number {
   return (state.equationHandSlots[0] ? 1 : 0) + (state.equationHandSlots[1] ? 1 : 0);
 }
 
+function deriveEquationHandSlotsFromCommits(
+  state: GameState,
+  commits?: EquationCommitPayload[],
+): [EquationHandSlot | null, EquationHandSlot | null] {
+  const slots: [EquationHandSlot | null, EquationHandSlot | null] = [null, null];
+  if (!commits || commits.length === 0) return slots;
+  const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
+  for (const commit of commits) {
+    if (commit.position !== 0 && commit.position !== 1) continue;
+    const card = hand.find((c) => c.id === commit.cardId);
+    if (!card) continue;
+    slots[commit.position] = {
+      card,
+      jokerAs: card.type === 'joker' ? (commit.jokerAs ?? null) : null,
+    };
+  }
+  return slots;
+}
+
 function isCardInEquationHand(state: GameState, cardId: string): boolean {
   if (state.equationHandPick?.card.id === cardId) return true;
   return state.equationHandSlots.some((s) => s?.card.id === cardId);
@@ -715,6 +735,24 @@ function displayOrOperationToToken(s: string | Operation | null): Operation | nu
   if (s === '×' || s === '*') return 'x';
   if (s === '+' || s === '-' || s === 'x' || s === '÷') return s;
   return null;
+}
+
+function parseEquationDisplayForUi(
+  equationDisplay: string | null | undefined,
+): { numbers: number[]; operators: Operation[]; parensRight: boolean } | null {
+  if (!equationDisplay) return null;
+  const lhs = equationDisplay.split('=')[0] ?? equationDisplay;
+  const numbersRaw = lhs.match(/\d+/g);
+  if (!numbersRaw || numbersRaw.length < 2) return null;
+  const numbers = numbersRaw.map((n) => Number(n));
+  const opRaw = lhs.match(/[+\-x÷*/×]/g) ?? [];
+  const operators = opRaw
+    .map((op) => displayOrOperationToToken(op))
+    .filter((op): op is Operation => op != null)
+    .slice(0, 2);
+  const compact = lhs.replace(/\s+/g, '');
+  const parensRight = /^\d+[+\-x÷*/×]\(.*\)$/.test(compact);
+  return { numbers, operators, parensRight };
 }
 
 function isOperationAllowedForStage(s: string | Operation | null, allowed: readonly Operation[]): boolean {
@@ -828,10 +866,19 @@ function generateValidTargets(
   for (const [a, b, c] of perms) {
     for (const op1 of allowedOps) {
       for (const op2 of allowedOps) {
-        const lr = evalThreeTerms(a, op1, b, op2, c);
-        if (lr !== null && (allowNegativeTargets || lr >= 0) && Number.isInteger(lr)) {
-          const eq2 = `${a} ${op1} ${b} ${op2} ${c} = ${lr}`;
-          if (!seen.has(`${lr}:${eq2}`)) { seen.add(`${lr}:${eq2}`); results.push({ equation: eq2, result: lr }); }
+        // Left-grouped: (a op1 b) op2 c
+        const leftInner = applyOperation(a, op1, b);
+        const leftRes = leftInner === null ? null : applyOperation(leftInner, op2, c);
+        if (leftRes !== null && (allowNegativeTargets || leftRes >= 0) && Number.isInteger(leftRes)) {
+          const eqL = `(${a} ${op1} ${b}) ${op2} ${c} = ${leftRes}`;
+          if (!seen.has(`${leftRes}:${eqL}`)) { seen.add(`${leftRes}:${eqL}`); results.push({ equation: eqL, result: leftRes }); }
+        }
+        // Right-grouped: a op1 (b op2 c)
+        const rightInner = applyOperation(b, op2, c);
+        const rightRes = rightInner === null ? null : applyOperation(a, op1, rightInner);
+        if (rightRes !== null && (allowNegativeTargets || rightRes >= 0) && Number.isInteger(rightRes)) {
+          const eqR = `${a} ${op1} (${b} ${op2} ${c}) = ${rightRes}`;
+          if (!seen.has(`${rightRes}:${eqR}`)) { seen.add(`${rightRes}:${eqR}`); results.push({ equation: eqR, result: rightRes }); }
         }
       }
     }
@@ -1048,7 +1095,7 @@ const initialState: GameState = {
   equationOpsUsed: [], activeOperation: null, challengeSource: null, activeFraction: null, pendingFractionTarget: null,
   fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
   consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationHandSlots: [null, null], equationHandPick: null,
-  courageMeterPercent: 0, courageMeterStep: 0, courageDiscardSuccessStreak: 0, courageRewardPulseId: 0,
+  courageMeterPercent: 0, courageMeterStep: 0, courageDiscardSuccessStreak: 0, courageRewardPulseId: 0, courageCoins: 0,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
   difficulty: 'full', diceMode: '3', showFractions: true, fractionKinds: [...ALL_FRACTION_KINDS],
   showPossibleResults: true, showSolveExercise: true,
@@ -1072,6 +1119,7 @@ const initialState: GameState = {
   botPendingDemoActions: null,
   botNoSolutionTicks: 0,
   botNoSolutionDrawPending: false,
+  botDicePausePending: false,
   botTickSeq: 0,
   isTutorial: false,
 };
@@ -1165,6 +1213,7 @@ function endTurnLogic(st: GameState, tf: (key: string, params?: MsgParams) => st
     botPendingDemoActions: null,
     botNoSolutionTicks: 0,
     botNoSolutionDrawPending: false,
+    botDicePausePending: false,
   };
 }
 
@@ -1182,32 +1231,20 @@ function clampCourageStep(step: number): number {
 function applyCourageStepReward(st: GameState): GameState {
   const nextStep = clampCourageStep((st.courageMeterStep ?? 0) + 1);
   if (nextStep === (st.courageMeterStep ?? 0)) return st;
+  const nextPercent = COURAGE_STEP_TO_PERCENT[nextStep];
+  const isFull = nextPercent >= 100;
   return {
     ...st,
-    courageMeterStep: nextStep,
-    courageMeterPercent: COURAGE_STEP_TO_PERCENT[nextStep],
+    courageMeterStep: isFull ? 0 : nextStep,
+    courageMeterPercent: isFull ? 0 : nextPercent,
+    courageDiscardSuccessStreak: 0,
     courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
+    courageCoins: (st.courageCoins ?? 0) + (isFull ? 5 : 0),
   };
 }
 
-function applyCourageRewards(
-  st: GameState,
-  options: { equationSuccess?: boolean; discardSuccess?: boolean },
-): GameState {
-  let next = st;
-  if (options.equationSuccess) {
-    next = applyCourageStepReward(next);
-  }
-  if (options.discardSuccess) {
-    const currentStreak = next.courageDiscardSuccessStreak ?? 0;
-    const incremented = currentStreak + 1;
-    if (incremented >= 2) {
-      next = applyCourageStepReward({ ...next, courageDiscardSuccessStreak: 0 });
-    } else {
-      next = { ...next, courageDiscardSuccessStreak: incremented };
-    }
-  }
-  return next;
+function applyCourageEquationReward(st: GameState): GameState {
+  return applyCourageStepReward(st);
 }
 
 function gameReducer(
@@ -1312,12 +1349,7 @@ function gameReducer(
         drawPile, discardPile: firstDiscard ? [firstDiscard] : [],
         tournamentTable:
           action.type === 'PLAY_AGAIN'
-            ? st.players.map((p) => ({
-                playerId: p.id,
-                playerName: p.name,
-                wins: 0,
-                losses: 0,
-              }))
+            ? st.tournamentTable.map((row) => ({ ...row }))
             : playersSeed.map((p, i) => ({
                 playerId: i,
                 playerName: p.name,
@@ -1329,6 +1361,7 @@ function gameReducer(
         botPendingDemoActions: null,
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
+        botDicePausePending: false,
         botTickSeq: 0,
         isTutorial: action.type === 'START_GAME' && !!action.isTutorial,
       };
@@ -1366,6 +1399,7 @@ function gameReducer(
         botPendingDemoActions: null,
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
+        botDicePausePending: false,
       };
     }
     case 'BEGIN_TURN': {
@@ -1398,6 +1432,8 @@ function gameReducer(
         ns = s;
       }
       const vt = generateValidTargets(dice, st.enabledOperators, st.allowNegativeTargets, st.mathRangeMax);
+      const currentIsBot =
+        !!st.botConfig && st.botConfig.playerIds.includes(st.players[st.currentPlayerIndex]?.id ?? -1);
       return {
         ...ns,
         validTargets: vt,
@@ -1409,17 +1445,21 @@ function gameReducer(
         botPendingDemoActions: null,
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
+        botDicePausePending: currentIsBot,
       };
     }
     case 'CONFIRM_EQUATION': {
       if (st.phase !== 'building') return st;
       const isNewUser = st.guidanceEnabled !== false;
       const firstSolvedHint = isNewUser && !st.hasSeenSolvedHint;
+      const equationHandSlots = deriveEquationHandSlotsFromCommits(st, action.equationCommits);
       return {
         ...st,
         phase: 'solved',
         equationResult: action.result,
         equationOpsUsed: action.equationOps,
+        equationHandSlots,
+        equationHandPick: null,
         lastEquationDisplay: action.equationDisplay,
         stagedCards: [],
         message: firstSolvedHint ? tf('local.solvedEquationPickCards') : '',
@@ -1430,6 +1470,7 @@ function gameReducer(
         botPendingDemoActions: null,
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
+        botDicePausePending: false,
       };
     }
     case 'RECORD_EQUATION_ATTEMPT': {
@@ -1449,6 +1490,7 @@ function gameReducer(
         botPendingDemoActions: null,
         botNoSolutionTicks: 0,
         botNoSolutionDrawPending: false,
+        botDicePausePending: false,
       };
     }
     case 'STAGE_CARD': {
@@ -1505,7 +1547,7 @@ function gameReducer(
       // TODO: add dedicated sound effect per discard count
       const moveEntry: MoveHistoryEntry = { playerIndex: st.currentPlayerIndex, cardsDiscarded: stIds.size, description: stToast };
       let stNs: GameState = { ...st, players: stNp, discardPile: stDiscard, stagedCards: [], selectedCards: [], consecutiveIdenticalPlays: 0, hasPlayedCards: true, lastCardValue: lastCardVal, activeOperation: null, challengeSource: null, equationOpsUsed: [], equationHandSlots: [null, null], equationHandPick: null, lastMoveMessage: stToast, lastDiscardCount: stIds.size, lastEquationDisplay: st.lastEquationDisplay, message: '', moveHistory: [...st.moveHistory, moveEntry] };
-      stNs = applyCourageRewards(stNs, { equationSuccess: true, discardSuccess: true });
+      stNs = applyCourageEquationReward(stNs);
       stNs = checkWin(stNs);
       if (stNs.phase === 'game-over') return stNs;
       // Discard celebration is shown on TurnTransition only (not NotificationZone in GameScreen).
@@ -1538,7 +1580,6 @@ function gameReducer(
         identicalAlert: { playerName: cp.name, cardDisplay, consecutive: newConsecutive },
         message: '',
       };
-      ns = applyCourageRewards(ns, { discardSuccess: true });
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return { ...ns, identicalAlert: null };
       return ns; // Stay — modal shown, DISMISS_IDENTICAL_ALERT will call endTurnLogic
@@ -1645,10 +1686,7 @@ function gameReducer(
         const newTarget = st.pendingFractionTarget / denom;
         const cardToDiscard = { ...action.card, resolvedTarget: newTarget };
         const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-        let ns = applyCourageRewards(
-          { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true },
-          { discardSuccess: true },
-        );
+        let ns = { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true };
         ns = checkWin(ns);
         if (ns.phase === 'game-over') return ns;
         const next = (ns.currentPlayerIndex + 1) % ns.players.length;
@@ -1676,10 +1714,7 @@ function gameReducer(
       console.log('SET pendingFractionTarget:', newTarget);
       const cardToDiscard = { ...action.card, resolvedTarget: denom };
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns = applyCourageRewards(
-        { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true },
-        { discardSuccess: true },
-      );
+      let ns = { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true };
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       const next = (ns.currentPlayerIndex + 1) % ns.players.length;
@@ -1723,7 +1758,7 @@ function gameReducer(
       }
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
       const defMsg = tf('toast.defenseOk');
-      let ns = applyCourageRewards({
+      let ns = {
         ...st,
         players: np,
         discardPile: [...st.discardPile, cardToDiscard],
@@ -1735,7 +1770,7 @@ function gameReducer(
         lastMoveMessage: defMsg,
         message: tf('msg.defenseOk'),
         moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: defMsg }],
-      }, { discardSuccess: true });
+      };
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       return endTurnLogic(ns, tf);
@@ -1888,7 +1923,12 @@ function gameReducer(
           botPendingDemoActions: null,
           botNoSolutionTicks: 0,
           botNoSolutionDrawPending: false,
+          botDicePausePending: false,
         };
+      }
+
+      if (stWithTick.phase === 'building' && stWithTick.botDicePausePending) {
+        return { ...stWithTick, botDicePausePending: false };
       }
 
       if (pendingIds != null && stWithTick.phase === 'solved' && !stWithTick.hasPlayedCards) {
@@ -1905,6 +1945,7 @@ function gameReducer(
                 botPendingDemoActions: null,
                 botNoSolutionTicks: 0,
                 botNoSolutionDrawPending: false,
+                botDicePausePending: false,
               },
               drawTranslated,
               tf,
@@ -1936,6 +1977,7 @@ function gameReducer(
             botPendingDemoActions: null,
             botNoSolutionTicks: 0,
             botNoSolutionDrawPending: false,
+            botDicePausePending: false,
           },
           drawTranslated,
           tf,
@@ -1975,6 +2017,7 @@ function gameReducer(
                 botPendingStagedIds: null,
                 botNoSolutionTicks: 0,
                 botNoSolutionDrawPending: false,
+                botDicePausePending: false,
               },
               drawTranslated,
               tf,
@@ -1986,6 +2029,7 @@ function gameReducer(
               botPendingStagedIds: null,
               botNoSolutionTicks: 0,
               botNoSolutionDrawPending: false,
+              botDicePausePending: false,
             },
             translated,
             tf,
@@ -2010,6 +2054,7 @@ function gameReducer(
               botPendingStagedIds: null,
               botNoSolutionTicks: 0,
               botNoSolutionDrawPending: false,
+              botDicePausePending: false,
             },
             drawTranslated,
             tf,
@@ -2021,6 +2066,7 @@ function gameReducer(
             botPendingStagedIds: null,
             botNoSolutionTicks: 0,
             botNoSolutionDrawPending: false,
+            botDicePausePending: false,
           },
           confirmTranslated,
           tf,
@@ -2043,8 +2089,41 @@ function gameReducer(
       if (!action_) {
         return applyBotActionAtomically(stWithTick, { kind: 'drawCard' });
       }
+      if (action_.kind === 'playFractionAttack' || action_.kind === 'playFractionBlock') {
+        const cpHand = stWithTick.players[stWithTick.currentPlayerIndex]?.hand ?? [];
+        const fractionCard = cpHand.find((c) => c.id === action_.cardId && c.type === 'fraction') ?? null;
+        const denom = fractionCard?.fraction ? fractionDenominator(fractionCard.fraction) : stWithTick.fractionPenalty;
+        const topDiscard = stWithTick.discardPile[stWithTick.discardPile.length - 1] ?? null;
+        const topVisibleValue =
+          topDiscard?.resolvedTarget ??
+          topDiscard?.resolvedValue ??
+          (topDiscard?.type === 'number' ? (topDiscard.value ?? null) : null);
+        const divideX = topVisibleValue ?? stWithTick.pendingFractionTarget ?? denom;
+        const fractionPlayBubble: Notification = {
+          id: `frac-bot-play-${Date.now()}`,
+          title: tf('fraction.challengeToastTitle'),
+          message: tf('botOffline.fractionAttackChallenged'),
+          body: tf('botOffline.fractionAttackExplain', {
+            x: String(divideX),
+            y: String(Math.max(1, denom)),
+          }),
+          emoji: '⚔️',
+          style: 'warning',
+          autoDismissMs: 5200,
+        };
+        const baseNotifications = stWithTick.notifications.filter((n) => !n.id.startsWith('frac-'));
+        return applyBotActionAtomically(
+          { ...stWithTick, notifications: [...baseNotifications, fractionPlayBubble] },
+          action_,
+        );
+      }
       if (action_.kind === 'drawCard' && stWithTick.phase === 'building') {
-        return { ...stWithTick, botNoSolutionDrawPending: true, botNoSolutionTicks: 2 };
+        return {
+          ...stWithTick,
+          botNoSolutionDrawPending: true,
+          botNoSolutionTicks: 2,
+          botDicePausePending: false,
+        };
       }
       return applyBotActionAtomically(stWithTick, action_);
     }
@@ -2204,6 +2283,7 @@ function GameProvider({ children }: { children: ReactNode }) {
       localState.stagedCards.length,
       localState.equationResult ?? 'null',
       localState.pendingFractionTarget ?? 'null',
+      localState.botDicePausePending ? '1' : '0',
       localState.botTickSeq,
       (localState.botPendingStagedIds ?? []).join(','),
     ].join('|');
@@ -2219,7 +2299,7 @@ function GameProvider({ children }: { children: ReactNode }) {
     const { min, max } = botTeachingDelayRange(localState, diff);
     const delay = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
     // Slower pacing improves readability of bot teaching steps.
-    const slowedDelay = Math.round(delay * 1.2);
+    const slowedDelay = localState.botDicePausePending ? delay : Math.round(delay * 1.4);
     const dueAt = now + slowedDelay;
     botTimerDeadlineRef.current = { dueAt, turnSignature };
 
@@ -2240,6 +2320,7 @@ function GameProvider({ children }: { children: ReactNode }) {
     localState.stagedCards.length,
     localState.equationResult,
     localState.pendingFractionTarget,
+    localState.botDicePausePending,
     localState.botConfig,
     localState.botTickSeq,
     localState.botPendingStagedIds,
@@ -3042,6 +3123,25 @@ function StagedChipOrbitLayer({
   dispatch: (a: GameAction) => void;
   t: (key: string, params?: MsgParams) => string;
 }) {
+  const animByIdRef = useRef<Record<string, Animated.Value>>({});
+  useEffect(() => {
+    const active = new Set(chips.map((chip) => chip.cardId));
+    for (const chip of chips) {
+      if (!animByIdRef.current[chip.cardId]) {
+        const v = new Animated.Value(0);
+        animByIdRef.current[chip.cardId] = v;
+        Animated.timing(v, {
+          toValue: 1,
+          duration: 170,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.quad),
+        }).start();
+      }
+    }
+    for (const id of Object.keys(animByIdRef.current)) {
+      if (!active.has(id)) delete animByIdRef.current[id];
+    }
+  }, [chips]);
   if (chips.length === 0) return null;
   return (
     <>
@@ -3049,18 +3149,38 @@ function StagedChipOrbitLayer({
         const card = stagedCards.find((c) => c.id === chip.cardId);
         const pos = positions[i];
         if (!card || !pos) return null;
+        const anim = animByIdRef.current[chip.cardId] ?? new Animated.Value(1);
         return (
-          <TouchableOpacity
+          <Animated.View
             key={chip.cardId}
-            accessibilityRole="button"
-            accessibilityLabel={t('game.unstageChipA11y', { label: chip.label })}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            activeOpacity={0.85}
-            onPress={() => dispatch({ type: 'UNSTAGE_CARD', card })}
             style={{
               position: 'absolute',
               left: pos.left,
               top: pos.top,
+              opacity: anim,
+              transform: [
+                {
+                  translateY: anim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [8, 0],
+                  }),
+                },
+                {
+                  scale: anim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.9, 1],
+                  }),
+                },
+              ],
+            }}
+          >
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={t('game.unstageChipA11y', { label: chip.label })}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              activeOpacity={0.85}
+              onPress={() => dispatch({ type: 'UNSTAGE_CARD', card })}
+              style={{
               width: STAGED_CHIP_ORBIT_SIZE,
               minHeight: STAGED_CHIP_ORBIT_SIZE,
               paddingHorizontal: chip.label.length > 1 ? 4 : 0,
@@ -3081,19 +3201,20 @@ function StagedChipOrbitLayer({
                 android: { elevation: 2 },
               }),
             }}
-          >
-            <Text
-              style={{
-                color: chip.text,
-                fontSize: chip.label.length > 2 ? 12 : 16,
-                fontWeight: '800',
-                textAlign: 'center',
-              }}
-              numberOfLines={1}
             >
-              {chip.label}
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={{
+                  color: chip.text,
+                  fontSize: chip.label.length > 2 ? 12 : 16,
+                  fontWeight: '800',
+                  textAlign: 'center',
+                }}
+                numberOfLines={1}
+              >
+                {chip.label}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
         );
       })}
     </>
@@ -4074,6 +4195,8 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   // Operators: null = empty, tap-to-cycle through allowed ops for current stage
   const [op1, setOp1] = useState<string | null>(null);
   const [op2, setOp2] = useState<string | null>(null);
+  // Parentheses mode: false = (d1 op1 d2) op2 d3  |  true = d1 op1 (d2 op2 d3)
+  const [parensRight, setParensRight] = useState<boolean>(false);
   // resultsOpen removed — possible results moved to SLOT 2
 
   // Result animation
@@ -4096,6 +4219,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
     setDice1(null); setDice2(null); setDice3(null);
     setOp1(null); setOp2(null);
+    setParensRight(false);
     resultFade.setValue(0);
     if (diceKey) {
       // Reset all animations
@@ -4197,6 +4321,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     if (hasEquationHand) dispatch({ type: 'CLEAR_EQ_HAND' });
     setDice1(null); setDice2(null); setDice3(null);
     setOp1(null); setOp2(null);
+    setParensRight(false);
     resultFade.setValue(0);
   }, [interactive, state.phase, hasEquationHand, dispatch]);
   useImperativeHandle(ref, () => ({ resetAll }), [resetAll]);
@@ -4205,6 +4330,79 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const d1v = dice1 !== null ? diceValues[dice1] : null;
   const d2v = dice2 !== null ? diceValues[dice2] : null;
   const d3v = dice3 !== null ? diceValues[dice3] : null;
+  const isBotEquationAutofillTurn = (() => {
+    const cp = state.players[state.currentPlayerIndex];
+    if (!cp || state.phase !== 'solved' || state.hasPlayedCards) return false;
+    const localBot = !!state.botConfig && state.botConfig.playerIds.includes(cp.id);
+    const onlineBot = !!(cp as { isBot?: boolean }).isBot;
+    return localBot || onlineBot;
+  })();
+  const botAutofillKeyRef = useRef<string | null>(null);
+  const botAutofillTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    botAutofillTimersRef.current.forEach(clearTimeout);
+    botAutofillTimersRef.current = [];
+    if (!isBotEquationAutofillTurn) {
+      botAutofillKeyRef.current = null;
+      return;
+    }
+    const parsed = parseEquationDisplayForUi(state.lastEquationDisplay);
+    if (!parsed) return;
+    const runKey = `${state.currentPlayerIndex}|${state.lastEquationDisplay}|${state.equationResult ?? 'x'}`;
+    if (botAutofillKeyRef.current === runKey) return;
+    const used = [false, false, false];
+    const pickIndexForValue = (value: number): number | null => {
+      let idx = diceValues.findIndex((v, i) => v === value && !used[i]);
+      if (idx === -1) idx = diceValues.findIndex((v) => v === value);
+      if (idx === -1) return null;
+      used[idx] = true;
+      return idx;
+    };
+    const idx0 = pickIndexForValue(parsed.numbers[0] ?? Number.NaN);
+    const idx1 = pickIndexForValue(parsed.numbers[1] ?? Number.NaN);
+    const idx2 =
+      parsed.numbers.length >= 3
+        ? pickIndexForValue(parsed.numbers[2] ?? Number.NaN)
+        : null;
+    if (idx0 !== null && idx1 !== null) {
+      botAutofillKeyRef.current = runKey;
+      const playFillTone = () => {
+        if (state.soundsEnabled === false) return;
+        void playSfx('tap', { cooldownMs: 0, volumeOverride: 0.24 });
+      };
+      const queueStep = (delayMs: number, fn: () => void) => {
+        const t = setTimeout(() => {
+          fn();
+          playFillTone();
+        }, delayMs);
+        botAutofillTimersRef.current.push(t);
+      };
+      setParensRight(parsed.parensRight);
+      queueStep(80, () => setDice1(idx0));
+      queueStep(250, () => setDice2(idx1));
+      if (idx2 !== null) queueStep(420, () => setDice3(idx2));
+      if (state.equationHandSlots[0] == null) {
+        queueStep(idx2 !== null ? 590 : 420, () => setOp1(parsed.operators[0] ?? '+'));
+      }
+      if (state.equationHandSlots[1] == null && parsed.operators.length > 1) {
+        queueStep(idx2 !== null ? 760 : 590, () => setOp2(parsed.operators[1] ?? null));
+      }
+    }
+    return () => {
+      botAutofillTimersRef.current.forEach(clearTimeout);
+      botAutofillTimersRef.current = [];
+    };
+  }, [
+    isBotEquationAutofillTurn,
+    state.currentPlayerIndex,
+    state.equationResult,
+    state.lastEquationDisplay,
+    state.equationHandSlots,
+    state.soundsEnabled,
+    diceValues[0],
+    diceValues[1],
+    diceValues[2],
+  ]);
 
   // Effective operators: hand cards override local cycle when placed in position 0 or 1
   const handOp0 = getHandSlotOperation(state.equationHandSlots[0]);
@@ -4212,18 +4410,29 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const effectiveOp1 = handOp0 ?? op1;
   const effectiveOp2 = handOp1 ?? op2;
 
-  // Sub-expression: (dice1 effectiveOp1 dice2) — ל־UI (מתי להציג סלוט שלישי)
+  // Sub-expression: תלוי במצב הסוגריים. left=(d1 op1 d2), right=(d2 op2 d3)
   let subResult: number | null = null;
-  if (d1v !== null && d2v !== null && effectiveOp1 !== null) {
+  if (parensRight && d2v !== null && d3v !== null && effectiveOp2 !== null) {
+    subResult = applyOperation(d2v, effectiveOp2, d3v);
+  } else if (!parensRight && d1v !== null && d2v !== null && effectiveOp1 !== null) {
     subResult = applyOperation(d1v, effectiveOp1, d2v);
   }
 
   let finalResult: number | null = null;
   if (d1v !== null && d2v !== null && effectiveOp1 !== null) {
     if (d3v !== null && effectiveOp2 !== null) {
-      finalResult = evalThreeTerms(d1v, effectiveOp1, d2v, effectiveOp2, d3v);
+      // כפיית סדר פעולות לפי מצב הסוגריים (מתעלם מקדימות טבעית)
+      if (parensRight) {
+        // d1 op1 (d2 op2 d3)
+        const inner = applyOperation(d2v, effectiveOp2, d3v);
+        finalResult = inner === null ? null : applyOperation(d1v, effectiveOp1, inner);
+      } else {
+        // (d1 op1 d2) op2 d3
+        const inner = applyOperation(d1v, effectiveOp1, d2v);
+        finalResult = inner === null ? null : applyOperation(inner, effectiveOp2, d3v);
+      }
     } else if (d3v === null && effectiveOp2 === null) {
-      finalResult = subResult;
+      finalResult = !parensRight ? subResult : applyOperation(d1v, effectiveOp1, d2v);
     } else if (
       d3v === null &&
       effectiveOp2 !== null &&
@@ -4231,7 +4440,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       handOp1
     ) {
       // קלף פעולה/ג'וקר בסלוט השני אבל בלי קוביה שלישית — same as 2-dice finish; usedOps עדיין כולל את האתגר
-      finalResult = subResult;
+      finalResult = !parensRight ? subResult : applyOperation(d1v, effectiveOp1, d2v);
     }
   }
   if (finalResult !== null && (typeof finalResult !== 'number' || !Number.isFinite(finalResult))) finalResult = null;
@@ -4248,13 +4457,13 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   // Error states
   const hasError =
     opsDisallowed ||
-    (d1v !== null && d2v !== null && effectiveOp1 !== null && subResult === null) ||
+    (d1v !== null && d2v !== null && effectiveOp1 !== null && !parensRight && subResult === null) ||
     (d1v !== null &&
       d2v !== null &&
       d3v !== null &&
       effectiveOp1 !== null &&
       effectiveOp2 !== null &&
-      evalThreeTerms(d1v, effectiveOp1, d2v, effectiveOp2, d3v) === null);
+      finalResult === null);
 
   // Animate result appearance
   const prevResult = useRef<number | null>(null);
@@ -4299,8 +4508,10 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     if (state.equationHandPick) return;
     let display: string;
     if (d3v !== null && effectiveOp2 !== null) {
-      // Readability: show the first pair in parentheses, then extend.
-      display = `(${d1v} ${effectiveOp1} ${d2v}) ${effectiveOp2} ${d3v} = ${finalResult}`;
+      // Parens position depends on parensRight toggle
+      display = parensRight
+        ? `${d1v} ${effectiveOp1} (${d2v} ${effectiveOp2} ${d3v}) = ${finalResult}`
+        : `(${d1v} ${effectiveOp1} ${d2v}) ${effectiveOp2} ${d3v} = ${finalResult}`;
     } else {
       display = `${d1v} ${effectiveOp1} ${d2v} = ${finalResult}`;
     }
@@ -4345,7 +4556,10 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   if (!showBuilder) return null;
 
   // When (d1 op1 d2) is complete — הצג סלוט ל־op2 ולקוביה שלישית (אפשר גם לסיים רק משתי קוביות)
-  const show3rd = subResult !== null;
+  // show3rd: left mode = אחרי חישוב הזוג הראשון. right mode = אחרי שd1+op1 הוצבו
+  const show3rd = !parensRight
+    ? subResult !== null
+    : d1v !== null && effectiveOp1 !== null && d2v !== null;
   const timerColor = timerProgress !== null ? timerProgressColor(timerProgress) : null;
   const eqRowDynamicStyle = timerColor ? {
     borderColor: withAlpha(timerColor, 0.72),
@@ -4537,33 +4751,80 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
         </View>
       )}
 
-      {/* ═══ שורת משוואה אחת: (d1·op1·d2) = תת-תוצאה · op2 · d3 — כולם באותה שורה, nowrap ═══ */}
+      {/* ═══ שורת משוואה: מצב סוגריים משמאל או מימין לפי parensRight ═══ */}
       <Animated.View style={{ width: '100%', maxWidth: '100%', alignItems: 'center', opacity: eqRowAnim, transform: [{ translateY: eqRowAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] }}>
         <View style={[eqS.eqRow, eqRowDynamicStyle]}>
-          {show3rd ? <Text style={eqS.bracket} allowFontScaling={false}>(</Text> : null}
-          <View style={eqS.eqChunk}>
-            {renderDiceSlot(dice1, 1)}
-            {renderOpBtn(1, op1, dice1 !== null)}
-            {renderDiceSlot(dice2, 2)}
-          </View>
-          {show3rd ? (
+          {parensRight ? (
+            // מצב ימין: d1 op1 ( d2 op2 d3 )
             <>
-              <Text style={eqS.bracket} allowFontScaling={false}>)</Text>
-              {/* Keep a fixed-width middle segment so the whole equation stays centered and does not jump */}
-              <Text style={[eqS.equalsSmall, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>=</Text>
-              <View style={eqS.subResultBox}>
-                <Text style={[eqS.subResultVal, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>
-                  {subResult !== null ? String(subResult) : '0'}
-                </Text>
+              <View style={eqS.eqChunk}>
+                {renderDiceSlot(dice1, 1)}
+                {renderOpBtn(1, op1, dice1 !== null)}
+              </View>
+              {show3rd ? <Text style={eqS.bracket} allowFontScaling={false}>(</Text> : null}
+              <View style={[eqS.eqChunk, !show3rd && { opacity: 0.25 }]}>
+                {renderDiceSlot(dice2, 2)}
+                {renderOpBtn(2, op2, show3rd)}
+                {renderDiceSlot(dice3, 3)}
+              </View>
+              {show3rd ? <Text style={eqS.bracket} allowFontScaling={false}>)</Text> : null}
+            </>
+          ) : (
+            // מצב שמאל: ( d1 op1 d2 ) = sub op2 d3
+            <>
+              {show3rd ? <Text style={eqS.bracket} allowFontScaling={false}>(</Text> : null}
+              <View style={eqS.eqChunk}>
+                {renderDiceSlot(dice1, 1)}
+                {renderOpBtn(1, op1, dice1 !== null)}
+                {renderDiceSlot(dice2, 2)}
+              </View>
+              {show3rd ? (
+                <>
+                  <Text style={eqS.bracket} allowFontScaling={false}>)</Text>
+                  <Text style={[eqS.equalsSmall, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>=</Text>
+                  <View style={eqS.subResultBox}>
+                    <Text style={[eqS.subResultVal, subResult === null && eqS.hiddenMiddle]} allowFontScaling={false}>
+                      {subResult !== null ? String(subResult) : '0'}
+                    </Text>
+                  </View>
+                </>
+              ) : null}
+              <View style={[eqS.eqChunk, !show3rd && { opacity: 0.25 }]}>
+                {renderOpBtn(2, op2, show3rd)}
+                {renderDiceSlot(dice3, 3)}
               </View>
             </>
-          ) : null}
-          <View style={[eqS.eqChunk, !show3rd && { opacity: 0.25 }]}>
-            {renderOpBtn(2, op2, show3rd)}
-            {renderDiceSlot(dice3, 3)}
-          </View>
+          )}
         </View>
       </Animated.View>
+      {/* טוגל סוגריים — שני ריבועים קטנים ויזואליים, ידידותי לילדים */}
+      <View style={{ flexDirection: 'row', gap: 8, alignSelf: 'center', marginTop: 4 }}>
+        {[
+          { mode: false, label: '(▢ ▢) ▢' },
+          { mode: true, label: '▢ (▢ ▢)' },
+        ].map((opt) => {
+          const active = parensRight === opt.mode;
+          return (
+            <TouchableOpacity
+              key={String(opt.mode)}
+              onPress={() => setParensRight(opt.mode)}
+              disabled={isSolved}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 8,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? '#15803D' : 'rgba(255,255,255,0.28)',
+                backgroundColor: active ? 'rgba(22,163,74,0.22)' : 'rgba(255,255,255,0.05)',
+              }}
+            >
+              <Text allowFontScaling={false} style={{ fontSize: 13, fontWeight: '800', color: active ? '#86EFAC' : 'rgba(255,255,255,0.6)' }}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       {/* תוצאת התרגיל — מעט למעלה, רקע צבעוני (לא שקוף) */}
       <View style={{ alignItems: 'center', marginTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -4596,7 +4857,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   );
 });
 const eqS = StyleSheet.create({
-  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'visible' as const },
+  wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 16, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'visible' as const },
   title: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '700', textAlign: 'center' },
   diceRow: { flexDirection: 'row', gap: 12, justifyContent: 'center', direction: 'ltr' as any },
   diceBtn: { width: 56, height: 56, borderRadius: 14, backgroundColor: 'rgba(255,200,60,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,200,60,0.2)', overflow: 'hidden' },
@@ -4802,56 +5063,85 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     return () => loop.stop();
   }, [waitingMode, waitingPulse]);
   const botScanOffset = useRef(new Animated.Value(0)).current;
+  const botScanAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   useEffect(() => {
+    const stopScan = () => {
+      if (botScanAnimRef.current) {
+        botScanAnimRef.current.stop();
+        botScanAnimRef.current = null;
+      }
+    };
     if (!botTeachingActive) {
+      stopScan();
       botScanOffset.stopAnimation();
       botScanOffset.setValue(0);
       return;
     }
+    let cancelled = false;
+    const rand = (min: number, max: number) => min + Math.random() * (max - min);
     // Move cards through the fan (true scan), not just a lateral sway.
     const maxScanSpan = Math.max(0.8, Math.min(2.6, Math.max(0, count - 1) * 0.45));
-    const baseDuration = botTeachingDifficulty === 'easy' ? 900 : 700;
+    const baseDuration = botTeachingDifficulty === 'easy' ? 980 : 760;
+    const runRandomScan = () => {
+      if (cancelled) return;
+      const target = rand(-maxScanSpan, maxScanSpan);
+      const duration = Math.round(baseDuration + rand(-220, 260));
+      const pauseMs = Math.round(rand(90, 260));
+      const anim = Animated.sequence([
+        Animated.timing(botScanOffset, {
+          toValue: target,
+          duration: Math.max(260, duration),
+          useNativeDriver: true,
+          easing: Easing.inOut(Easing.sin),
+        }),
+        Animated.delay(pauseMs),
+      ]);
+      botScanAnimRef.current = anim;
+      anim.start(({ finished }) => {
+        if (!finished || cancelled) return;
+        runRandomScan();
+      });
+    };
     if (botCandidateCardId) {
+      stopScan();
       const targetIdx = cards.findIndex((c) => c.id === botCandidateCardId);
       if (targetIdx >= 0) {
         const centeredTarget = Math.max(
           -maxScanSpan,
           Math.min(maxScanSpan, targetIdx - scrollRef.current),
         );
-        Animated.timing(botScanOffset, {
-          toValue: centeredTarget,
-          duration: 320,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.cubic),
-        }).start();
-        return;
+        const preTarget = Math.max(
+          -maxScanSpan,
+          Math.min(maxScanSpan, centeredTarget + rand(-0.32, 0.32)),
+        );
+        const focusAnim = Animated.sequence([
+          Animated.timing(botScanOffset, {
+            toValue: preTarget,
+            duration: Math.round(rand(180, 280)),
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.quad),
+          }),
+          Animated.timing(botScanOffset, {
+            toValue: centeredTarget,
+            duration: Math.round(rand(170, 250)),
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
+          Animated.delay(Math.round(rand(100, 220))),
+        ]);
+        botScanAnimRef.current = focusAnim;
+        focusAnim.start();
+      } else {
+        runRandomScan();
       }
+    } else {
+      runRandomScan();
     }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(botScanOffset, {
-          toValue: maxScanSpan,
-          duration: baseDuration,
-          useNativeDriver: true,
-          easing: Easing.inOut(Easing.sin),
-        }),
-        Animated.timing(botScanOffset, {
-          toValue: -maxScanSpan,
-          duration: baseDuration * 2,
-          useNativeDriver: true,
-          easing: Easing.inOut(Easing.sin),
-        }),
-        Animated.timing(botScanOffset, {
-          toValue: 0,
-          duration: baseDuration,
-          useNativeDriver: true,
-          easing: Easing.inOut(Easing.sin),
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [botTeachingActive, botTeachingDifficulty, botCandidateCardId, botScanOffset, cards, count]);
+    return () => {
+      cancelled = true;
+      stopScan();
+    };
+  }, [botTeachingActive, botTeachingDifficulty, botCandidateCardId, botScanOffset, cardIdsSignature, count]);
 
   const dragStartVal = useRef(0);
   const velocityRef = useRef(0);
@@ -4867,6 +5157,7 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
   const pinchStartSpacing = useRef(FAN_DEFAULT_SPACING);
 
   const [centerIdx, setCenterIdx] = useState(0);
+  const cardIdsSignature = useMemo(() => cards.map((c) => c.id).join('|'), [cards]);
   const lastCenterIdx = useRef(-1);
   const lastPanDecisionLogAt = useRef(0);
   const pinchLoggedRef = useRef(false);
@@ -5018,6 +5309,25 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
   // לחיצה על מיני־קלף — הדגשת scale קלה בזמן מגע
   const [pressedCardId, setPressedCardId] = useState<string | null>(null);
+  const botTapAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!botTeachingActive || !botCandidateCardId) return;
+    if (botTapAnimTimerRef.current) {
+      clearTimeout(botTapAnimTimerRef.current);
+      botTapAnimTimerRef.current = null;
+    }
+    setPressedCardId(botCandidateCardId);
+    botTapAnimTimerRef.current = setTimeout(() => {
+      setPressedCardId((prev) => (prev === botCandidateCardId ? null : prev));
+      botTapAnimTimerRef.current = null;
+    }, 170);
+    return () => {
+      if (botTapAnimTimerRef.current) {
+        clearTimeout(botTapAnimTimerRef.current);
+        botTapAnimTimerRef.current = null;
+      }
+    };
+  }, [botTeachingActive, botCandidateCardId]);
 
   if (count === 0) return <View style={{ height: 80 }} />;
 
@@ -5086,7 +5396,11 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
         const distFromCenter = Math.abs(i - centerIdx);
         const zBase = (count - distFromCenter) * 10 + i;
-        const zIndex = pressedCardId === card.id ? 100000 + zBase : zBase;
+        const zIndex = isBotCandidate
+          ? 120000 + zBase
+          : pressedCardId === card.id
+            ? 100000 + zBase
+            : zBase;
         const edgeHitSlop = distFromCenter >= 2
           ? { top: 14, bottom: 14, left: 22, right: 22 }
           : { top: 10, bottom: 10, left: 10, right: 10 };
@@ -5305,10 +5619,22 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     !!state.botConfig &&
     state.botConfig.playerIds.includes(cp.id) &&
     botTeachingPhase !== 'done';
-  const botCandidateCardId =
-    isLocalBotTurn && (botTeachingPhase === 'pick' || botTeachingPhase === 'place')
-      ? state.botPendingStagedIds?.[0] ?? null
+  const predictedBotAction = useMemo(() => {
+    if (!isLocalBotTurn || !state.botConfig) return null;
+    return decideBotAction(state, state.botConfig.difficulty, { rng: () => 0.5 });
+  }, [isLocalBotTurn, state]);
+  const botFractionCandidateCardId =
+    predictedBotAction?.kind === 'playFractionAttack' ||
+    predictedBotAction?.kind === 'playFractionBlock'
+      ? predictedBotAction.cardId
       : null;
+  const botCandidateCardId = useMemo(() => {
+    if (!isLocalBotTurn) return null;
+    if (botTeachingPhase === 'pick' || botTeachingPhase === 'place') {
+      return state.botPendingStagedIds?.[0] ?? null;
+    }
+    return botFractionCandidateCardId;
+  }, [isLocalBotTurn, botTeachingPhase, state.botPendingStagedIds, botFractionCandidateCardId]);
   const maxWildDefense = state.mathRangeMax;
   const wildDefensePickValues = useMemo(
     () => (hasFracDefense && state.fractionPenalty > 0 ? validWildValuesForFractionDefense(state.fractionPenalty, maxWildDefense) : []),
@@ -5320,6 +5646,21 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   const cardSoundLoadingRef = useRef(false);
   const lastFractionBubbleRef = useRef<{ key: string; at: number } | null>(null);
   const fractionDefenseHintKeyRef = useRef('');
+  const lastBotFractionCueRef = useRef<string>('');
+  useEffect(() => {
+    if (!isLocalBotTurn || !soundOn || !botFractionCandidateCardId) return;
+    const cueKey = `${state.roundsPlayed}-${state.currentPlayerIndex}-${state.phase}-${botFractionCandidateCardId}`;
+    if (lastBotFractionCueRef.current === cueKey) return;
+    lastBotFractionCueRef.current = cueKey;
+    void playSfx('tap', { cooldownMs: 0, volumeOverride: 0.26 });
+  }, [
+    isLocalBotTurn,
+    soundOn,
+    botFractionCandidateCardId,
+    state.roundsPlayed,
+    state.currentPlayerIndex,
+    state.phase,
+  ]);
   // צליל בחירת קלף — קובץ: card/assets/card_select.mov (העתק מ־Downloads: "קלף אחד מקוצר.MOV" → card_select.mov)
   useEffect(() => {
     (async () => {
@@ -8602,25 +8943,9 @@ function TurnTransition() {
       <LinearGradient colors={[...playerScreensGradientColors]} start={{ x: 0, y: 0 }} end={{ x: 0.85, y: 1 }} style={StyleSheet.absoluteFill} />
       <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
       {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
-      <View style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
-        <View style={{flexDirection:'column',alignItems:'flex-start',gap:2,flex:1,minWidth:0}}>
-          {!compactPlayerScreen && (
-            <View style={{flexDirection:'row',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'center',marginTop:-25,alignSelf:'center'}}>
-              <View style={{backgroundColor:'rgba(234,179,8,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#FACC15'}}>
-                <Text style={{color:'#FDE68A',fontSize:11,fontWeight:'700'}}>{state.timerSetting === 'off' ? 'ללא טיימר' : state.timerSetting === 'custom' ? (state.timerCustomSeconds >= 60 ? `${Math.floor(state.timerCustomSeconds / 60)} דק' ${state.timerCustomSeconds % 60} שנ'` : `${state.timerCustomSeconds} שנ'`) : state.timerSetting === '60' ? '1 דקה' : `${state.timerSetting} שנ׳`}</Text>
-              </View>
-              {state.showSolveExercise && (
-                <View style={{backgroundColor:'rgba(168,85,247,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#A78BFA'}}>
-                  <Text style={{color:'#C4B5FD',fontSize:11,fontWeight:'700'}}>פתרון תרגיל</Text>
-                </View>
-              )}
-              {state.showFractions && (
-                <View style={{backgroundColor:'rgba(34,197,94,0.2)',borderRadius:8,paddingHorizontal:8,paddingVertical:3,borderWidth:1,borderColor:'#4ADE80'}}>
-                  <Text style={{color:'#86EFAC',fontSize:11,fontWeight:'700'}}>שברים</Text>
-                </View>
-              )}
-            </View>
-          )}
+      <View pointerEvents="box-none" style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
+        <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-start',gap:2,flex:1,minWidth:0,marginTop:-65}}>
+          {/* תגי מידע (שברים/טיימר/פתרון תרגיל) הועברו לטורניר — שורות 446, 458, 461 ב-TournamentInfoModal */}
           <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end',alignSelf:'flex-end',marginTop:2,marginRight:4}}>
             {displayPlayers.map((p) => {
               const isCurrent = cp?.id === p.id;
@@ -8656,9 +8981,9 @@ function TurnTransition() {
             )}
           </View>
         </View>
-        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:6,marginTop:0}}>
-          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} />
-          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} />
+        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
+          <LulosButton text="יציאה" color="red" width={72} height={32} fontSize={11} onPress={()=>dispatch({type:'RESET_GAME'})} style={{ marginBottom: -8 }} />
+          <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
         </View>
       </View>
@@ -9222,20 +9547,8 @@ function GameScreen() {
     );
   const onlineBotPlayer =
     isOnlineGame ? state.players.find((p: any) => p?.isBot) ?? null : null;
-  const showBotMissionStrip =
-    (
-      isLocalBotTurn &&
-      state.phase === 'solved' &&
-      !state.hasPlayedCards
-    ) ||
-    (
-      isOnlineGame &&
-      !!onlineBotPlayer
-    );
-  const canRenderBotMissionStrip =
-    showBotMissionStrip &&
-    state.lastEquationDisplay != null &&
-    state.equationResult != null;
+  // Mission mockups are disabled to keep equation autofill visible and uncluttered.
+  const canRenderBotMissionStrip = false;
   const isOnlineWaiting =
     isOnlineGame && typeof gameScreenMyIndex === 'number' && state.currentPlayerIndex !== gameScreenMyIndex;
   const showOnlineBotDifficultyBtn = isOnlineGame && state.hostBotDifficulty != null;
@@ -10304,6 +10617,9 @@ function GameScreen() {
               top: 4,
               right: state.showSolveExercise ? 176 : 128,
               zIndex: 9,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
             }}
             pointerEvents="none"
           >
@@ -10313,6 +10629,18 @@ function GameScreen() {
               compact
               height={82}
             />
+            <View
+              style={{
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 10,
+                backgroundColor: 'rgba(15,23,42,0.65)',
+                borderWidth: 1,
+                borderColor: 'rgba(250,204,21,0.55)',
+              }}
+            >
+              <Text style={{ color: '#FDE68A', fontSize: 11, fontWeight: '800' }}>🪙 {state.courageCoins}</Text>
+            </View>
           </View>
           <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <ResultsSlot
@@ -10332,7 +10660,7 @@ function GameScreen() {
             style={{
               alignSelf:'center',
               width:'100%',
-              height:240,
+              height:280,
               justifyContent:'center',
               alignItems:'center',
               paddingVertical:10,
@@ -10760,14 +11088,7 @@ function GameScreen() {
         </View>
       )}
 
-      {canRenderBotMissionStrip ? (
-        <BotMissionStrip
-          display={state.lastEquationDisplay!}
-          result={state.equationResult!}
-          botName={onlineBotPlayer?.name ?? cp?.name ?? t('botOffline.botName')}
-          teachLine={isOnlineGame ? (state.lastMoveMessage ?? null) : null}
-        />
-      ) : null}
+      {canRenderBotMissionStrip ? null : null}
 
       <OnlineBotDifficultyModal
         visible={onlineBotDiffOpen}
@@ -10804,7 +11125,7 @@ function GameScreen() {
         }}
       />
 
-      <BotThinkingOverlay topOffset={botOverlayTopOffset} />
+      {null}
 
     </View>
   );
@@ -10960,7 +11281,7 @@ function getBotTurnTeachingState(state: GameState): {
     };
   }
   if (state.phase === 'building') {
-    if (state.dice) {
+    if (state.botDicePausePending && state.dice) {
       return {
         currentStep: 2,
         titleKey: 'botOffline.step.diceResultTitle',
@@ -11008,6 +11329,9 @@ function getBotTeachingPhase(state: GameState): BotTeachingPhase {
 }
 
 function botTeachingDelayRange(state: GameState, difficulty: BotDifficulty): { min: number; max: number } {
+  if (state.botDicePausePending) {
+    return { min: 1500, max: 1500 };
+  }
   if (state.botNoSolutionDrawPending) {
     if (difficulty === 'easy') return { min: 2400, max: 2800 };
     if (difficulty === 'medium') return { min: 2200, max: 2600 };
@@ -11150,16 +11474,53 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
   if (state.phase === 'game-over') return null;
   const handReserve =
     HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + Math.max(insets.bottom, 12);
-  const showMission =
-    state.phase === 'solved' &&
-    !state.hasPlayedCards &&
-    state.lastEquationDisplay != null &&
-    state.equationResult != null;
+  // Hide mission mockup so the actual EquationBuilder remains the only focus.
+  const showMission = false;
   const teaching = getBotTurnTeachingState(state);
-  const teachingLabel = t(teaching.titleKey, { name: current.name });
+  const teachingPhase = getBotTeachingPhase(state);
+  const overlayFade = useRef(new Animated.Value(1)).current;
+  const overlayLift = useRef(new Animated.Value(0)).current;
+  const prevPhaseRef = useRef<BotTeachingPhase | null>(null);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    if (prev === null || prev === teachingPhase) {
+      prevPhaseRef.current = teachingPhase;
+      return;
+    }
+    prevPhaseRef.current = teachingPhase;
+    overlayFade.setValue(0.55);
+    overlayLift.setValue(8);
+    Animated.parallel([
+      Animated.timing(overlayFade, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.quad),
+      }),
+      Animated.timing(overlayLift, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.quad),
+      }),
+    ]).start();
+  }, [teachingPhase, overlayFade, overlayLift]);
+  const teachingLabel = t(teaching.titleKey, {
+    name: current.name,
+    d1: String(state.dice?.die1 ?? ''),
+    d2: String(state.dice?.die2 ?? ''),
+    d3: String(state.dice?.die3 ?? ''),
+  });
+  const teachingBody = t(teaching.bodyKey, {
+    name: current.name,
+    d1: String(state.dice?.die1 ?? ''),
+    d2: String(state.dice?.die2 ?? ''),
+    d3: String(state.dice?.die3 ?? ''),
+  });
   const showDiceSummary =
     state.phase === 'building' &&
     state.dice != null &&
+    state.botDicePausePending &&
     !state.botNoSolutionDrawPending;
   const parseEqNumbers = (display: string): number[] => {
     const lhs = display.split('=')[0] ?? display;
@@ -11194,10 +11555,71 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
   const progressText = showMission
     ? `${progress}/${missionNumbers.length}`
     : null;
+  const missionPopRef = useRef<Record<string, Animated.Value>>({});
+  const missionPrevRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!showMission) {
+      missionPrevRef.current = {};
+      missionPopRef.current = {};
+      return;
+    }
+    for (let idx = 0; idx < missionMatch.length; idx++) {
+      const key = `mission-${idx}`;
+      if (!missionPopRef.current[key]) missionPopRef.current[key] = new Animated.Value(1);
+      const now = missionMatch[idx] === true;
+      const prev = missionPrevRef.current[key] === true;
+      if (now && !prev) {
+        missionPopRef.current[key]!.setValue(0.88);
+        Animated.sequence([
+          Animated.timing(missionPopRef.current[key]!, {
+            toValue: 1.12,
+            duration: 130,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.quad),
+          }),
+          Animated.timing(missionPopRef.current[key]!, {
+            toValue: 1,
+            duration: 120,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.quad),
+          }),
+        ]).start();
+      }
+      missionPrevRef.current[key] = now;
+    }
+  }, [showMission, missionMatch]);
   return (
-    <View pointerEvents="box-none" style={[botOverlayStyles.botThinkingOverlay, { top: topOffset, bottom: handReserve }]}>
+    <Animated.View
+      pointerEvents="box-none"
+      style={[
+        botOverlayStyles.botThinkingOverlay,
+        {
+          top: topOffset,
+          bottom: handReserve,
+          opacity: overlayFade,
+          transform: [{ translateY: overlayLift }],
+        },
+      ]}
+    >
       <Text style={[botOverlayStyles.botThinkingText, { writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
         {teachingLabel}
+      </Text>
+      <Text
+        style={{
+          marginTop: 4,
+          color: 'rgba(226,232,240,0.96)',
+          fontSize: 11,
+          fontWeight: '700',
+          textAlign: 'center',
+          backgroundColor: 'rgba(15,23,42,0.62)',
+          borderRadius: 10,
+          paddingHorizontal: 10,
+          paddingVertical: 5,
+          maxWidth: 430,
+          writingDirection: isRTL ? 'rtl' : 'ltr',
+        }}
+      >
+        {teachingBody}
       </Text>
       {showDiceSummary ? (
         <View
@@ -11293,7 +11715,7 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
           </Text>
           <View style={{ marginTop: 7, flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 6 }}>
             {missionNumbers.map((num, idx) => (
-              <View
+              <Animated.View
                 key={`mission-${idx}-${num}`}
                 style={{
                   minWidth: 30,
@@ -11303,17 +11725,18 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
                   borderWidth: 1,
                   borderColor: missionMatch[idx] ? 'rgba(52,211,153,0.8)' : 'rgba(148,163,184,0.6)',
                   backgroundColor: missionMatch[idx] ? 'rgba(16,185,129,0.24)' : 'rgba(51,65,85,0.5)',
+                  transform: [{ scale: missionPopRef.current[`mission-${idx}`] ?? 1 }],
                 }}
               >
                 <Text style={{ color: '#E2E8F0', fontSize: 12, fontWeight: '800', textAlign: 'center' }}>
                   {num}
                 </Text>
-              </View>
+              </Animated.View>
             ))}
           </View>
         </View>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 

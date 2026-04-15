@@ -88,10 +88,13 @@ function buildBotStagedPlan(
   equationCommits: EquationCommitPayload[];
 } | null {
   const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
-  const candidates = hand.filter(
-    (card) => card.type === 'number' || card.type === 'wild',
-  );
   const equationCommits = buildBotCommits(state);
+  const commitIds = new Set(equationCommits.map((c) => c.cardId));
+  const candidates = hand.filter(
+    (card) =>
+      (card.type === 'number' || card.type === 'wild' || card.type === 'operation') &&
+      !commitIds.has(card.id),
+  );
   const maxWild = state.mathRangeMax ?? 25;
   return pickBotStagedPlan(
     state.validTargets,

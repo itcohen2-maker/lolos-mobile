@@ -349,8 +349,8 @@ export const en: Record<string, string> = {
   'local.openingDrawBody': 'Draw: {{name}} starts',
   'local.fractionBlockToast': '⚔️ {{name}} blocked with {{fraction}} — the challenge passes to you!',
   'local.fractionBlockMsg': '{{name}} blocked with a fraction — the challenge continues!',
-  'local.fractionAttackToast': '⚔️ {{name}} attacked you with fraction {{fraction}}!',
-  'local.fractionAttackMsg': '{{name}} attacked with a fraction!',
+  'local.fractionAttackToast': '⚔️ {{name}} challenged you with fraction {{fraction}}!',
+  'local.fractionAttackMsg': '{{name}} challenged you with a fraction!',
   'local.callLolosDeclared': '{{name}} called near finish!',
   'local.possibleResultsUseCount': 'Possible results: use {{n}}/3 free.',
   'local.possibleResultsPaidNoDeck': 'Paid info fee was triggered but there are no cards left to draw.',
@@ -517,12 +517,12 @@ export const en: Record<string, string> = {
   'fraction.counterHint': 'A counter fraction is a valid defense — the challenge passes to the next player.',
   'fraction.counterHintDetail':
     'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or take the penalty draw. Joker does not defend a fraction attack.',
-  'notification.fractionAttack.titleSelf': '⚔️ Fraction challenge — your turn to defend',
+  'notification.fractionAttack.titleSelf': 'You were challenged with a fraction card',
   'notification.fractionAttack.bodySelf':
-    'New target: {{target}}. If you do not defend, draw {{penalty}} cards.\n\nYou can:\n• Play a number divisible by {{penalty}} (or a wild set to such a value)\n• Block with another fraction — target divides again and the challenge moves to the next player\n• Draw {{penalty}} cards — ends the challenge for you\n\nJoker cannot defend a fraction attack.',
+    'Defense:\n• Play a fraction card to pass the turn\n• Or play a number divisible by {{penalty}} that matches the fraction rule\n\nActive challenge number: {{target}}',
   'notification.fractionAttack.titleWatch': '⚔️ Fraction challenge in progress',
   'notification.fractionAttack.bodyWatch':
-    "{{name}}'s turn. Target {{target}}, penalty {{penalty}} cards if they do not defend. They may play a matching number/wild, a counter fraction (chain continues), or draw.",
+    "{{name}} was challenged by a fraction card.\nDefense: a fraction to pass, or a number divisible by {{penalty}}.\nActive number: {{target}}",
   'equation.twoDiceOnly': 'You can finish using only 2 dice',
   'game.almostDone': '🏁 Almost done!',
   'wildModal.mustDivide': 'The value must be divisible by {{pen}} (in range 1–{{max}}).',
@@ -691,24 +691,24 @@ export const en: Record<string, string> = {
   'start.advancedSetup.sectionTimerIntro':
     'Optional time limit per turn while building an equation. Off means no countdown pressure.',
   'start.advancedSetup.stage.A.detail':
-    'Number cards 0–12. Addition and subtraction together; dice targets stay at zero or above.',
+    'Number cards 0–12. Addition and subtraction together.',
   'start.advancedSetup.stage.B.detail':
-    'Number cards 0–12. Addition and subtraction; negative dice targets allowed.',
+    'Number cards 0–12. Addition and subtraction.',
   'start.advancedSetup.stage.C.detail':
-    'Number cards 0–25. Addition and subtraction; targets stay at zero or above.',
+    'Number cards 0–25. Addition and subtraction.',
   'start.advancedSetup.stage.D.detail':
-    'Number cards 0–25. Addition and subtraction; negative dice targets allowed.',
+    'Number cards 0–25. Addition and subtraction.',
   'start.advancedSetup.stage.E.detail':
-    'Number cards 0–12. Multiplication and division together; dice targets stay at zero or above.',
+    'Number cards 0–12. Multiplication and division together.',
   'start.advancedSetup.stage.F.detail':
-    'Number cards 0–12. Multiplication and division; negative dice targets allowed.',
+    'Number cards 0–12. Multiplication and division.',
   'start.advancedSetup.stage.G.detail':
-    'Number cards 0–25. Multiplication and division; targets stay at zero or above.',
+    'Number cards 0–25. Multiplication and division.',
   'start.advancedSetup.stage.H.detail':
-    'Number cards 0–25. Multiplication and division; negative dice targets allowed.',
+    'Number cards 0–25. Multiplication and division.',
   'start.wheel.beginnerStage': 'Practice level (A-H)',
   'start.wheel.beginnerStageHelp':
-    'A–D: add & subtract — A/B on cards 0–12, C/D on 0–25; B and D allow negative dice targets. E–H: multiply & divide — E/F on 0–12, G/H on 0–25; F and H allow negatives. The line under the buttons summarizes your pick.',
+    'A–D: add & subtract — A/B on cards 0–12, C/D on 0–25. E–H: multiply & divide — E/F on 0–12, G/H on 0–25. The line under the buttons summarizes your pick.',
   'start.wheel.operators': 'Operators in play',
   'start.wheel.timerRow': 'Timer',
   'start.wheel.guidanceRow': 'Guidance & hints',
@@ -851,7 +851,7 @@ export const en: Record<string, string> = {
   'botOffline.step.rollTitle': '{{name}} checks options before rolling',
   'botOffline.step.rollBody': 'The bot first looks for an identical play or a fraction attack. If no strong move is available, it rolls.',
   'botOffline.step.diceResultTitle': '{{name}} reads the dice result',
-  'botOffline.step.diceResultBody': 'These are the numbers from the dice. Now the bot moves to building an equation.',
+  'botOffline.step.diceResultBody': 'These are the numbers we got. I am trying to build equations now.',
   'botOffline.step.buildTitle': '{{name}} builds a dice solution',
   'botOffline.step.buildBody': 'The bot picks a valid target from the list and builds an equation that fits its hand.',
   'botOffline.step.equationTitle': '{{name}} equation is ready',
@@ -862,6 +862,8 @@ export const en: Record<string, string> = {
   'botOffline.step.noSolutionBody': 'No legal match is available between the dice and hand right now, so the bot draws and continues.',
   'botOffline.step.playTitle': '{{name}} plays cards to the pile',
   'botOffline.step.playBody': 'After confirming the equation, the bot plays cards matching the target value and ends the turn.',
+  'botOffline.fractionAttackExplain': '{{x}} is divided by {{y}}',
+  'botOffline.fractionAttackChallenged': 'I challenged you',
 
   // ── Tutorial ──
   'tutorial.diceTitle': "Let's learn to play!",

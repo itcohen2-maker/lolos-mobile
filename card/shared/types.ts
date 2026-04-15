@@ -157,10 +157,12 @@ export interface ServerGameState {
   courageMeterPercent: number;
   /** מד אומץ: אבן דרך נוכחית (0-3) */
   courageMeterStep: number;
-  /** מד אומץ: מונה רצף הצלחות השלכה לקראת בונוס כל 2 הצלחות */
+  /** @deprecated נשמר לתאימות; חוק רצף השלכות בוטל */
   courageDiscardSuccessStreak: number;
   /** מזהה פולס מונוטוני לטריגר אנימציית תגמול בלקוח */
   courageRewardPulseId: number;
+  /** מטבעות לרקורד המשחק הנוכחי */
+  courageCoins: number;
   /** לרוב null; מוגדר רק ב־state_update מיד אחרי playIdentical (מקוון) */
   identicalCelebration?: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: LastMovePayload;
@@ -212,8 +214,10 @@ export interface PlayerView {
   consecutiveIdenticalPlays: number;
   courageMeterPercent: number;
   courageMeterStep: number;
+  /** @deprecated נשמר לתאימות; חוק רצף השלכות בוטל */
   courageDiscardSuccessStreak: number;
   courageRewardPulseId: number;
+  courageCoins: number;
   /** מגיע מהשרת רק בפריים אחרי קלף זהה מקוון — ממופה ל־identicalAlert בלקוח */
   identicalCelebration: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: string | null;

@@ -16,13 +16,13 @@ export interface DifficultyStageConfig {
 /** ± בטווח 0–12 / 0–25; ×÷ באותם טווחים — בלי שלב «רק חיבור» / «רק חיסור». */
 export const DIFFICULTY_STAGE_CONFIG: Record<DifficultyStageId, DifficultyStageConfig> = {
   A: { id: 'A', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: false },
-  B: { id: 'B', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: true },
+  B: { id: 'B', rangeMax: 12, enabledOperators: ['+', '-'], allowNegativeTargets: false },
   C: { id: 'C', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: false },
-  D: { id: 'D', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: true },
+  D: { id: 'D', rangeMax: 25, enabledOperators: ['+', '-'], allowNegativeTargets: false },
   E: { id: 'E', rangeMax: 12, enabledOperators: ['x', '÷'], allowNegativeTargets: false },
-  F: { id: 'F', rangeMax: 12, enabledOperators: ['x', '÷'], allowNegativeTargets: true },
+  F: { id: 'F', rangeMax: 12, enabledOperators: ['x', '÷'], allowNegativeTargets: false },
   G: { id: 'G', rangeMax: 25, enabledOperators: ['x', '÷'], allowNegativeTargets: false },
-  H: { id: 'H', rangeMax: 25, enabledOperators: ['x', '÷'], allowNegativeTargets: true },
+  H: { id: 'H', rangeMax: 25, enabledOperators: ['x', '÷'], allowNegativeTargets: false },
 };
 
 export const STAGE_SEQUENCE: DifficultyStageId[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];

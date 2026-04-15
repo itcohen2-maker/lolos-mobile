@@ -351,6 +351,7 @@ function playerViewToGameState(view: PlayerView): any {
     courageMeterStep: view.courageMeterStep ?? 0,
     courageDiscardSuccessStreak: view.courageDiscardSuccessStreak ?? 0,
     courageRewardPulseId: view.courageRewardPulseId ?? 0,
+    courageCoins: view.courageCoins ?? 0,
     identicalAlert: view.identicalCelebration ?? null,
     jokerModalOpen: false,
     equationHandSlots,
@@ -387,6 +388,7 @@ function playerViewToGameState(view: PlayerView): any {
     botPendingDemoActions: null,
     botNoSolutionTicks: 0,
     botNoSolutionDrawPending: false,
+    botDicePausePending: false,
     botTickSeq: 0,
   };
 }

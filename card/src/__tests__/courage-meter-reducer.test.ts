@@ -36,47 +36,39 @@ function solvedConfirmState(overrides: Partial<GameState> = {}): GameState {
 }
 
 describe('courage meter reducer rules', () => {
-  it('advances step milestones to 33, 66, 100 on streak rewards', () => {
-    const s1 = preRollIdenticalState({ courageMeterStep: 0, courageMeterPercent: 0, courageDiscardSuccessStreak: 1 });
-    const n1 = gameReducer(s1, { type: 'PLAY_IDENTICAL', card: s1.players[0].hand[0] } as GameAction, tf);
+  it('does not progress on PLAY_IDENTICAL', () => {
+    const st = preRollIdenticalState({ courageMeterStep: 1, courageMeterPercent: 33, courageCoins: 0 });
+    const next = gameReducer(st, { type: 'PLAY_IDENTICAL', card: st.players[0].hand[0] } as GameAction, tf);
+    expect(next.courageMeterStep).toBe(1);
+    expect(next.courageMeterPercent).toBe(33);
+    expect(next.courageCoins).toBe(0);
+  });
+
+  it('advances only on successful CONFIRM_STAGED', () => {
+    const s1 = solvedConfirmState({ courageMeterStep: 0, courageMeterPercent: 0, courageCoins: 0 });
+    const n1 = gameReducer(s1, { type: 'CONFIRM_STAGED' } as GameAction, tf);
     expect(n1.courageMeterStep).toBe(1);
     expect(n1.courageMeterPercent).toBe(33);
+    expect(n1.courageCoins).toBe(0);
 
-    const s2 = preRollIdenticalState({ courageMeterStep: 1, courageMeterPercent: 33, courageDiscardSuccessStreak: 1 });
-    const n2 = gameReducer(s2, { type: 'PLAY_IDENTICAL', card: s2.players[0].hand[0] } as GameAction, tf);
+    const s2 = solvedConfirmState({ courageMeterStep: 1, courageMeterPercent: 33, courageCoins: 0 });
+    const n2 = gameReducer(s2, { type: 'CONFIRM_STAGED' } as GameAction, tf);
     expect(n2.courageMeterStep).toBe(2);
     expect(n2.courageMeterPercent).toBe(66);
-
-    const s3 = preRollIdenticalState({ courageMeterStep: 2, courageMeterPercent: 66, courageDiscardSuccessStreak: 1 });
-    const n3 = gameReducer(s3, { type: 'PLAY_IDENTICAL', card: s3.players[0].hand[0] } as GameAction, tf);
-    expect(n3.courageMeterStep).toBe(3);
-    expect(n3.courageMeterPercent).toBe(100);
   });
 
-  it('caps courage meter at full and does not exceed 100', () => {
-    const st = preRollIdenticalState({
-      courageMeterStep: 3,
-      courageMeterPercent: 100,
-      courageDiscardSuccessStreak: 1,
-      courageRewardPulseId: 9,
-    });
-    const next = gameReducer(st, { type: 'PLAY_IDENTICAL', card: st.players[0].hand[0] } as GameAction, tf);
-    expect(next.courageMeterStep).toBe(3);
-    expect(next.courageMeterPercent).toBe(100);
-    expect(next.courageRewardPulseId).toBe(9);
-    expect(next.courageDiscardSuccessStreak).toBe(0);
-  });
-
-  it('grants combined equation + streak reward and resets streak', () => {
+  it('auto-resets at full and grants 5 coins', () => {
     const st = solvedConfirmState({
-      courageMeterStep: 0,
-      courageMeterPercent: 0,
-      courageDiscardSuccessStreak: 1,
+      courageMeterStep: 2,
+      courageMeterPercent: 66,
+      courageCoins: 7,
+      courageRewardPulseId: 4,
     });
     const next = gameReducer(st, { type: 'CONFIRM_STAGED' } as GameAction, tf);
-    expect(next.courageMeterStep).toBe(2);
-    expect(next.courageMeterPercent).toBe(66);
+    expect(next.courageMeterStep).toBe(0);
+    expect(next.courageMeterPercent).toBe(0);
+    expect(next.courageCoins).toBe(12);
     expect(next.courageDiscardSuccessStreak).toBe(0);
-    expect(next.courageRewardPulseId).toBe(2);
+    expect(next.courageRewardPulseId).toBe(5);
   });
 });

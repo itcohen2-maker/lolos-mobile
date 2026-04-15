@@ -122,32 +122,20 @@ function clampCourageStep(step: number): number {
 function applyCourageStepReward(st: ServerGameState): ServerGameState {
   const nextStep = clampCourageStep((st.courageMeterStep ?? 0) + 1);
   if (nextStep === (st.courageMeterStep ?? 0)) return st;
+  const nextPercent = COURAGE_STEP_TO_PERCENT[nextStep];
+  const isFull = nextPercent >= 100;
   return {
     ...st,
-    courageMeterStep: nextStep,
-    courageMeterPercent: COURAGE_STEP_TO_PERCENT[nextStep],
+    courageMeterStep: isFull ? 0 : nextStep,
+    courageMeterPercent: isFull ? 0 : nextPercent,
+    courageDiscardSuccessStreak: 0,
     courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
+    courageCoins: (st.courageCoins ?? 0) + (isFull ? 5 : 0),
   };
 }
 
-function applyCourageRewards(
-  st: ServerGameState,
-  options: { equationSuccess?: boolean; discardSuccess?: boolean },
-): ServerGameState {
-  let next = st;
-  if (options.equationSuccess) {
-    next = applyCourageStepReward(next);
-  }
-  if (options.discardSuccess) {
-    const currentStreak = next.courageDiscardSuccessStreak ?? 0;
-    const incremented = currentStreak + 1;
-    if (incremented >= 2) {
-      next = applyCourageStepReward({ ...next, courageDiscardSuccessStreak: 0 });
-    } else {
-      next = { ...next, courageDiscardSuccessStreak: incremented };
-    }
-  }
-  return next;
+function applyCourageEquationReward(st: ServerGameState): ServerGameState {
+  return applyCourageStepReward(st);
 }
 
 // ── Helper: draw N cards from draw pile for a player ──
@@ -314,6 +302,7 @@ export function startGame(
     courageMeterStep: 0,
     courageDiscardSuccessStreak: 0,
     courageRewardPulseId: 0,
+    courageCoins: 0,
     identicalCelebration: null,
     lastMoveMessage: null,
     lastEquationDisplay: null,
@@ -598,7 +587,7 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
     equationCommits: [],
     message: '',
   };
-  stNs = applyCourageRewards(stNs, { equationSuccess: true, discardSuccess: true });
+  stNs = applyCourageEquationReward(stNs);
   stNs = checkWin(stNs);
   if (stNs.phase === 'game-over') return stNs;
   return endTurnLogic(stNs);
@@ -632,7 +621,6 @@ export function playIdentical(st: ServerGameState, cardId: string): ServerGameSt
     lastMoveMessage: toast, message: '',
     identicalCelebration: celebration,
   };
-  ns = applyCourageRewards(ns, { discardSuccess: true });
   ns = checkWin(ns);
   if (ns.phase === 'game-over') return { ...ns, identicalCelebration: null };
   return endTurnLogic(ns);
@@ -649,10 +637,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
   if (st.pendingFractionTarget !== null) {
     const newTarget = st.pendingFractionTarget / denom;
     const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-    let ns = applyCourageRewards(
-      { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true },
-      { discardSuccess: true },
-    );
+    let ns = { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true };
     ns = checkWin(ns);
     if (ns.phase === 'game-over') return ns;
     const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
@@ -680,10 +665,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
   if (effTop === null) return locErr('fraction.cannotPlayOnTop');
   const newTarget = effTop / denom;
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns = applyCourageRewards(
-    { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true },
-    { discardSuccess: true },
-  );
+  let ns = { ...st, players: np, discardPile: [...st.discardPile, card], hasPlayedCards: true };
   ns = checkWin(ns);
   if (ns.phase === 'game-over') return ns;
   const next = getNextActivePlayerIndex(ns.players, ns.currentPlayerIndex);
@@ -726,13 +708,13 @@ export function defendFractionSolve(st: ServerGameState, cardId: string, wildRes
 
   const cp = st.players[st.currentPlayerIndex];
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns = applyCourageRewards({
+  let ns = {
     ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true, lastCardValue: lastVal,
     lastMoveMessage: locMsg('toast.defenseOk'),
     message: locMsg('msg.defenseOk'),
-  }, { discardSuccess: true });
+  };
   ns = checkWin(ns);
   if (ns.phase === 'game-over') return ns;
   return endTurnLogic(ns);
@@ -852,6 +834,7 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     courageMeterStep: state.courageMeterStep,
     courageDiscardSuccessStreak: state.courageDiscardSuccessStreak,
     courageRewardPulseId: state.courageRewardPulseId,
+    courageCoins: state.courageCoins ?? 0,
     identicalCelebration: state.identicalCelebration ?? null,
     lastMoveMessage: formatLastMove(locale, state.lastMoveMessage),
     difficulty: state.difficulty,
