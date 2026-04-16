@@ -157,11 +157,17 @@ const steps: Animated.CompositeAnimation[] = [
 ];
 ```
 
-After this sequence, the existing `botCandidateCardId` follow-up still appends its own step to move the offset from `mid` to the chosen card. That behaviour is unchanged — only its starting offset is different (mid instead of 0). Recompute `targetOffset` based on `toOffset(targetIdx)` so the final card-pick lands on the correct card.
+After this sequence, the existing `botCandidateCardId` follow-up still appends its own step to move the offset toward the chosen card. The starting offset is now `toOffset(mid)` (not 0). Replace the current clamped target with the unclamped form:
+
+```ts
+targetOffset = toOffset(targetIdx);
+```
+
+No `maxScanSpan` clamp — the whole point of the fix is that we now go end-to-end. Keep the 180 ms pre-pick delay and the 420 ms `Easing.out(Easing.cubic)` for the final move to the chosen card; only the computed `toValue` changes.
 
 Skip everything if `count <= 1`.
 
-Remove `botTeachingDifficulty` from the duration computation and from the effect's dependency array since timings are now constants; that also removes the random jitter.
+Remove `botTeachingDifficulty` from the duration computation, drop `maxScanSpan` entirely, and remove both from the effect's dependency array since timings are now constants. This also removes the random jitter.
 
 ## Testing
 
