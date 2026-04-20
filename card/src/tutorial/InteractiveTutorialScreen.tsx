@@ -790,8 +790,9 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     }
   }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
 
-  // ── Lesson 5a: pre-fill equation slots 0, 1, 2 with dice indices so the
-  //    learner sees "6 _ 6 _ 8 = ?" the moment they enter the lesson. Only
+  // ── Lesson 5a: pre-fill equation slots 0 and 1 with dice indices so the
+  //    learner sees "6 _ 6 = ?" the moment they enter the lesson. d3
+  //    remains a rolled-but-unplaced dice button at top. Only the
   //    the operator slot(s) stay empty and pulsing. This fires once per
   //    lesson entry, after the game has transitioned to `building` so the
   //    EquationBuilder is mounted and its fan-demo subscriber is active.
@@ -806,9 +807,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // Stagger by a frame so React's commit completes and the EquationBuilder's
     // useEffect that registers subscribeFanDemo has definitely run.
     const timer = setTimeout(() => {
+      // Only d1 and d2 go into the equation; d3 stays as an unplaced
+      // dice button at top (learner doesn't need it in L5a — the lesson
+      // is about cycling a single operator).
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 });
     }, 50);
     return () => clearTimeout(timer);
   }, [engine.lessonIndex, engine.stepIndex, gameState?.phase]);

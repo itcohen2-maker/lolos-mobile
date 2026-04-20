@@ -5418,7 +5418,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 {/* mid-open bracket — visible only in RIGHT mode (before d2) */}
                 {show3rd ? renderBracket('(', parensRight) : null}
                 {/* d2 — always at the same column position */}
-                <View style={[!show3rd && { opacity: 0.25 }]}>{renderDiceSlot(dice2, 2)}</View>
+                <View style={[!show3rd && !state.isTutorial && { opacity: 0.25 }]}>{renderDiceSlot(dice2, 2)}</View>
                 {/* mid-close bracket — visible only in LEFT mode (after d2) */}
                 {show3rd ? renderBracket(')', !parensRight) : null}
                 {/* = + subResultBox — visible only in LEFT mode */}
@@ -5439,7 +5439,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                   </>
                 ) : null}
                 {/* op2 + d3 (kept as a chunk for inner gap) */}
-                <View style={[eqS.eqChunk, !show3rd && { opacity: 0.25 }]}>
+                <View style={[eqS.eqChunk, !show3rd && !state.isTutorial && { opacity: 0.25 }]}>
                   {renderOpBtn(2, op2, show3rd)}
                   {renderDiceSlot(dice3, 3)}
                 </View>
@@ -10025,33 +10025,41 @@ function TurnTransition() {
                   return <MiniResultCard key={card.id} value={card.value!} index={i} />;
                 }
                 if (card.type === 'wild') {
+                  // Purple — matches WildCard gradient (#7C3AED → #5B21B6)
                   const wLabel = card.resolvedValue != null ? String(card.resolvedValue) : '★';
                   return (
-                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#7C3AED', borderWidth: 2, borderColor: '#A78BFA', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '900' }}>{wLabel}</Text>
+                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#5B21B6', borderWidth: 2, borderColor: '#A78BFA', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#EDE9FE', fontSize: 14, fontWeight: '900' }}>{wLabel}</Text>
                     </View>
                   );
                 }
                 if (card.type === 'operation') {
-                  const opGlyph = opDisplay[card.operation ?? ''] ?? card.operation ?? '?';
+                  // Color-per-operator — matches opColors in game
+                  const op = card.operation ?? '+';
+                  const cl = opColors[op] ?? opColors['+'];
+                  const opGlyph = opDisplay[op] ?? op;
                   return (
-                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#1E40AF', borderWidth: 2, borderColor: '#60A5FA', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '900' }}>{opGlyph}</Text>
+                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: cl.face, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: cl.face, fontSize: 16, fontWeight: '900' }}>{opGlyph}</Text>
                     </View>
                   );
                 }
                 if (card.type === 'fraction') {
+                  // Color-per-denominator — matches fracColors in game
+                  const den = (card.fraction ?? '1/2').split('/')[1] ?? '2';
+                  const fc = fracColors[den] ?? numRed;
                   const fracLabel = card.fraction === '1/2' ? '½' : card.fraction === '1/3' ? '⅓' : card.fraction === '1/4' ? '¼' : card.fraction === '1/5' ? '⅕' : card.fraction ?? '?';
                   return (
-                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#065F46', borderWidth: 2, borderColor: '#34D399', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '900' }}>{fracLabel}</Text>
+                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: fc.face, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: fc.face, fontSize: 16, fontWeight: '900' }}>{fracLabel}</Text>
                     </View>
                   );
                 }
                 if (card.type === 'joker') {
+                  // Rainbow border feel — matches JokerCard multicolor
                   return (
-                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#92400E', borderWidth: 2, borderColor: '#FBBF24', alignItems: 'center', justifyContent: 'center' }}>
-                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '900' }}>★</Text>
+                    <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: '#EA4335', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#EA4335', fontSize: 16, fontWeight: '900' }}>★</Text>
                     </View>
                   );
                 }
@@ -10589,6 +10597,12 @@ function GameScreen() {
   const lockUiForBotTurn = isLocalBotTurn && !state.isTutorial;
   const onlineBotPlayer =
     isOnlineGame ? state.players.find((p: any) => p?.isBot) ?? null : null;
+  // Is the ONLINE bot currently playing? Used for showing demo visuals
+  // (mini cards strip, red chip) even though the server drives the bot logic.
+  const isOnlineBotTurn =
+    isOnlineGame && !!cp && (cp as any).isBot === true && state.phase !== 'game-over';
+  // Unified flag: bot is playing (local or online)
+  const isBotTurnAny = isLocalBotTurn || isOnlineBotTurn;
   // Mission mockups are disabled to keep equation autofill visible and uncluttered.
   const canRenderBotMissionStrip = false;
   const isOnlineWaiting =
@@ -11330,7 +11344,7 @@ function GameScreen() {
   // player sees the same "possible results" strip the teaching narration is
   // pointing at — `cp` during the bot's turn is the bot, so the hand-filtered
   // list is usually empty and would render nothing.
-  const resultsStripFeed = (isLocalBotTurn || isBotDemoBeat) ? state.validTargets : filteredResultsForHand;
+  const resultsStripFeed = (isBotTurnAny || isBotDemoBeat) ? state.validTargets : filteredResultsForHand;
   // Fraction cards in hand that can be played on the current top of the
   // discard pile (e.g. 1/3 when the top is a number divisible by 3).
   const playableFractionCardsForResults = useMemo(() => {
@@ -11465,7 +11479,7 @@ function GameScreen() {
   const botDemoOpenedResultsRef = useRef(false);
   // Auto-open the strip when the bot enters building/solved so the player
   // always sees the possible results during the bot's equation phase.
-  const botBuildingSolved = isLocalBotTurn &&
+  const botBuildingSolved = isBotTurnAny &&
     (state.phase === 'building' || state.phase === 'solved') &&
     !state.hasPlayedCards &&
     state.validTargets.length > 0;
@@ -11522,27 +11536,33 @@ function GameScreen() {
   //    state — no dependency on validTargets matching or demo-beat timing.
   const botEquationShownRef = useRef('');
   useEffect(() => {
-    if (!isLocalBotTurn) return;
-    if (state.phase !== 'solved' || state.hasPlayedCards) return;
-    if (!state.lastEquationDisplay) return;
-    const key = `${state.roundsPlayed}-${state.currentPlayerIndex}-${state.lastEquationDisplay}`;
-    if (botEquationShownRef.current === key) return;
-    botEquationShownRef.current = key;
-    // Build a synthetic EquationOption directly from state — guaranteed to
-    // have the right equation string and result, regardless of whether
-    // validTargets contains a matching entry.
-    const syntheticEq: EquationOption = {
-      result: state.equationResult ?? 0,
-      equation: state.lastEquationDisplay,
-    };
-    setSelectedEquationForDisplay(syntheticEq);
-    setSolveChipPulseKey((prev) => prev + 1);
-    // Also ensure the results strip is open
-    if (!resultsOpen) {
-      botDemoOpenedResultsRef.current = true;
-      setResultsOpenState(true);
+    if (!isBotTurnAny) return;
+    if (state.hasPlayedCards) return;
+    // Open strip + red chip as early as possible during bot's turn:
+    // - building phase: show first valid target as a preview
+    // - solved phase: show the actual equation the bot confirmed
+    if (state.phase === 'building' && state.validTargets.length > 0) {
+      const buildKey = `build-${state.roundsPlayed}-${state.currentPlayerIndex}`;
+      if (botEquationShownRef.current === buildKey) return;
+      botEquationShownRef.current = buildKey;
+      const first = state.validTargets[0];
+      setSelectedEquationForDisplay({ result: first.result, equation: first.equation });
+      setSolveChipPulseKey((prev) => prev + 1);
+      if (!resultsOpen) {
+        botDemoOpenedResultsRef.current = true;
+        setResultsOpenState(true);
+      }
+    } else if (state.phase === 'solved' && state.lastEquationDisplay) {
+      const solvedKey = `solved-${state.roundsPlayed}-${state.currentPlayerIndex}-${state.lastEquationDisplay}`;
+      if (botEquationShownRef.current === solvedKey) return;
+      botEquationShownRef.current = solvedKey;
+      setSelectedEquationForDisplay({
+        result: state.equationResult ?? 0,
+        equation: state.lastEquationDisplay,
+      });
+      setSolveChipPulseKey((prev) => prev + 1);
     }
-  }, [isLocalBotTurn, state.phase, state.hasPlayedCards, state.lastEquationDisplay, state.equationResult, state.equationOpsUsed, state.roundsPlayed, state.currentPlayerIndex, resultsOpen]);
+  }, [isBotTurnAny, state.phase, state.hasPlayedCards, state.lastEquationDisplay, state.equationResult, state.validTargets, state.roundsPlayed, state.currentPlayerIndex, resultsOpen]);
 
   const handleMiniResultSelect = useCallback((eq: EquationOption) => {
     playMiniResultTapSound();
@@ -11787,7 +11807,7 @@ function GameScreen() {
   }, [state.validTargets, handNumberValuesForResults, playableFractionCardsForResults]);
   // During bot's turn the strip shows ALL validTargets (unfiltered), so the
   // badge count must match that — not the hand-filtered count.
-  const matchCountForHand = isLocalBotTurn ? state.validTargets.length : matchCountForHandRaw;
+  const matchCountForHand = isBotTurnAny ? state.validTargets.length : matchCountForHandRaw;
   const wildResultsGuidanceCountRef = useRef(0);
   useEffect(() => {
     wildResultsGuidanceCountRef.current = 0;
@@ -12138,7 +12158,7 @@ function GameScreen() {
           During the bot's teaching beat we force-render the strip even if the
           player hasn't enabled "possible results" — the demo is the whole
           point: it's how the player discovers the feature. */}
-      {((isLocalBotTurn || isBotDemoBeat || state.showPossibleResults) && !state.isTutorial && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards) ? (
+      {((isBotTurnAny || isBotDemoBeat || state.showPossibleResults) && !state.isTutorial && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards) ? (
         <View style={{ position: 'absolute', top: 455, left: 0, right: 0, minHeight: 50, zIndex: 30, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }} pointerEvents="box-none">
           {resultsMiniArrowPulse ? (
             <Animated.View
@@ -12173,7 +12193,7 @@ function GameScreen() {
           <ResultsStripBelowTable
             resultsOpen={resultsOpen}
             filteredResults={resultsStripFeed}
-            fractionCards={isLocalBotTurn ? [] : playableFractionCardsForResults}
+            fractionCards={isBotTurnAny ? [] : playableFractionCardsForResults}
             miniPulseToken={miniResultsPulseToken}
             loopPulse={!miniResultTapped && !!state.showSolveExercise}
             onSelectEquation={state.showSolveExercise ? handleMiniResultSelect : undefined}
@@ -12366,7 +12386,7 @@ function GameScreen() {
       )}
 
       {/* כפתור פתרון תרגיל — ליד כפתור תוצאות אפשריות, ממורכז לגובה הערימה וברווח 20px */}
-      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && !state.isTutorial && (isLocalBotTurn || isBotDemoBeat || state.showSolveExercise) && selectedEquationForDisplay !== null && (
+      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && !state.isTutorial && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise) && selectedEquationForDisplay !== null && (
         <View style={{ position: 'absolute', top: 84, right: 224, zIndex: 8 }} pointerEvents="box-none">
           <SolveExerciseChip
             equation={selectedEquationForDisplay.equation}
