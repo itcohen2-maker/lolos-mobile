@@ -272,7 +272,9 @@ test('M4.5.3 — building phase: bot completes plan over multiple BOT_STEP dispa
 
   const initialBotHandSize = startState.players[1].hand.length;
   let state = startState;
-  for (let i = 0; i < 12; i++) {
+  // Loop upper bound accounts for the vs-bot teaching demo (two extra
+  // narration beats before confirmEquation when guidanceEnabled !== false).
+  for (let i = 0; i < 24; i++) {
     state = gameReducer(state, { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1], tf);
     if (state.phase === 'turn-transition' || state.phase === 'game-over') break;
     if (state.hasPlayedCards && state.phase !== 'building') break;
@@ -320,7 +322,9 @@ test('M4.5.3b — building phase exposes staged queue before final confirm', () 
   } as unknown as GameState;
 
   let afterConfirm = startState;
-  for (let i = 0; i < 6; i++) {
+  // Loop upper bound accounts for the vs-bot teaching demo (two extra
+  // narration beats at 3 ticks each before confirmEquation).
+  for (let i = 0; i < 20; i++) {
     afterConfirm = gameReducer(
       afterConfirm,
       { type: 'BOT_STEP' } as unknown as Parameters<typeof gameReducer>[1],

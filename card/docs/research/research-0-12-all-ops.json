@@ -1,0 +1,37 @@
+{
+  "generatedAt": "2026-04-19T18:01:51.085Z",
+  "config": {
+    "numPlayers": 3,
+    "cardsPerPlayer": 7,
+    "maxNumber": 12,
+    "includeFractions": false,
+    "enabledOperators": [
+      "+",
+      "-",
+      "x",
+      "÷"
+    ],
+    "allowNegativeTargets": true,
+    "dice": "3d6 (1..6 each)",
+    "games": 20000,
+    "maxTurns": 400,
+    "model": "simplified policy simulation (equation-match -> identical -> draw)"
+  },
+  "outcomes": {
+    "finishedGames": 19688,
+    "finishRate": 0.9844,
+    "meanTurnsAmongFinished": 13.798760666395774,
+    "minObservedTurns": 13,
+    "p50Turns": 13,
+    "p90Turns": 15,
+    "p95Turns": 15,
+    "p99Turns": 21,
+    "probabilities": {
+      "finish_lte_30": 0.982,
+      "finish_lte_50": 0.98435,
+      "finish_lte_100": 0.9844,
+      "finish_lte_200": 0.9844,
+      "finish_lte_400": 0.9844
+    }
+  }
+}

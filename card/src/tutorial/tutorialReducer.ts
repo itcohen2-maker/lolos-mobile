@@ -28,6 +28,16 @@ export interface TutorialState {
   showLessonIntro: boolean;
   /** New math onboarding overlay visibility */
   showMathOnboarding: boolean;
+  /** Exit control per-step (always true unless future step locks it) */
+  canExit: boolean;
+  /** 0 = first demo, 1 = second demo of same scenario */
+  demoVariantIndex: 0 | 1;
+  /** Did user complete both demo variants for current scenario */
+  hasSeenTwoSolutions: boolean;
+  /** Ask user whether to continue to fractions lesson */
+  awaitingFractionsOptIn: boolean;
+  /** User choice for fractions module */
+  fractionsOptIn: 'yes' | 'no' | null;
 }
 
 export type TutorialAction =
@@ -40,6 +50,8 @@ export type TutorialAction =
   | { type: 'DISMISS_WRONG_ACTION' }
   | { type: 'ADVANCE_TO_USER_TURN' }
   | { type: 'NEXT_LESSON' }
+  | { type: 'NEXT_VARIANT' }
+  | { type: 'TUTORIAL_CONFIRM_FRACTIONS_OPT_IN'; choice: 'yes' | 'no' }
   | { type: 'EXIT_TUTORIAL' }
   | { type: 'SET_SPEECH'; textKey: string; params?: Record<string, string | number> }
   | { type: 'CLEAR_SPEECH' };
@@ -57,6 +69,11 @@ export const INITIAL_TUTORIAL_STATE: TutorialState = {
   completed: false,
   showLessonIntro: true,
   showMathOnboarding: true,
+  canExit: true,
+  demoVariantIndex: 0,
+  hasSeenTwoSolutions: false,
+  awaitingFractionsOptIn: false,
+  fractionsOptIn: null,
 };
 
 function getCurrentStep(state: TutorialState): TutorialStep | null {
@@ -94,6 +111,7 @@ export function tutorialReducer(state: TutorialState, action: TutorialAction): T
         active: true,
         freePlay: lesson.freePlay,
         showLessonIntro: true,
+        canExit: true,
       });
     }
 
@@ -143,6 +161,7 @@ export function tutorialReducer(state: TutorialState, action: TutorialAction): T
         allowedActions: [],
         speechBubble: { textKey: 'tutorial.lessonComplete' },
         wrongActionFeedback: false,
+        hasSeenTwoSolutions: state.demoVariantIndex === 1 ? true : state.hasSeenTwoSolutions,
       };
     }
 
@@ -153,9 +172,37 @@ export function tutorialReducer(state: TutorialState, action: TutorialAction): T
       return { ...state, wrongActionFeedback: false };
 
     case 'NEXT_LESSON': {
+      if (state.lessonIndex === 3 && state.fractionsOptIn === null) {
+        return {
+          ...state,
+          awaitingFractionsOptIn: true,
+          speechBubble: { textKey: 'tutorial.fractions.askBody' },
+          hintTextKey: null,
+          allowedActions: [],
+        };
+      }
       const nextLesson = state.lessonIndex + 1;
       if (nextLesson >= TOTAL_LESSONS) {
         return { ...state, active: false, completed: true };
+      }
+      if (state.lessonIndex === 3 && state.fractionsOptIn === 'no' && nextLesson === 4) {
+        const skipTo = Math.min(5, TOTAL_LESSONS - 1);
+        const lesson = getLesson(skipTo);
+        return applyStepState({
+          ...state,
+          lessonIndex: skipTo,
+          turn: 'bot',
+          stepIndex: 0,
+          freePlay: lesson.freePlay,
+          showLessonIntro: true,
+          wrongActionFeedback: false,
+          speechBubble: null,
+          hintTextKey: null,
+          demoVariantIndex: 0,
+          hasSeenTwoSolutions: false,
+          awaitingFractionsOptIn: false,
+          canExit: true,
+        });
       }
       const lesson = getLesson(nextLesson);
       return applyStepState({
@@ -168,8 +215,31 @@ export function tutorialReducer(state: TutorialState, action: TutorialAction): T
         wrongActionFeedback: false,
         speechBubble: null,
         hintTextKey: null,
+        demoVariantIndex: 0,
+        hasSeenTwoSolutions: false,
+        awaitingFractionsOptIn: false,
+        canExit: true,
       });
     }
+
+    case 'NEXT_VARIANT':
+      return applyStepState({
+        ...state,
+        turn: 'bot',
+        stepIndex: 0,
+        demoVariantIndex: 1,
+        hasSeenTwoSolutions: false,
+        showLessonIntro: false,
+        speechBubble: { textKey: 'tutorial.variant.second' },
+      });
+
+    case 'TUTORIAL_CONFIRM_FRACTIONS_OPT_IN':
+      return {
+        ...state,
+        fractionsOptIn: action.choice,
+        awaitingFractionsOptIn: false,
+        speechBubble: null,
+      };
 
     case 'EXIT_TUTORIAL':
       return { ...INITIAL_TUTORIAL_STATE, completed: state.completed };

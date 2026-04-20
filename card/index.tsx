@@ -4859,9 +4859,17 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const cycleOp = (which: 1 | 2) => {
     if (!interactive) return;
     if (isSolved) return;
-    // Play the dice-roll sample on each successful cycle for tactile feedback.
+    // Sound on each cycle:
+    //   • Lesson 5a (sign-cycle tutorial): the `complete`-fanfare
+    //     (sfx_ui_complete.wav), same chime the online-vs-bot flow plays for
+    //     the "who starts first" draw / on-player-joined moment.
+    //   • Everywhere else: the dice-roll sample for tactile feedback.
     if (state.soundsEnabled !== false) {
-      void _playDiceRollOneShot();
+      if (state.isTutorial && tutorialBus.getL5aBlockFanTaps()) {
+        void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.45 });
+      } else {
+        void _playDiceRollOneShot();
+      }
     }
     const cur = which === 1 ? op1 : op2;
     const idx = eqOpChoices.indexOf(cur);
@@ -5404,7 +5412,11 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 <TouchableOpacity onPress={() => {
                   hDice(dIdx);
                   if (state.isTutorial) {
-                    void playSfx('tap', { cooldownMs: 0, volumeOverride: 0.26 });
+                    // Use the `complete`-fanfare (sfx_ui_complete.wav) — the
+                    // same chime the online-vs-bot flow plays for the "who
+                    // starts first" draw. Gives die-picks in the tutorial a
+                    // distinctive, game-consistent sound.
+                    void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.45 });
                     tutorialBus.emitUserEvent({ kind: 'eqUserPickedDice', idx: dIdx });
                   }
                 }} activeOpacity={0.7}
@@ -5469,8 +5481,9 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 <View style={[!show3rd && !state.isTutorial && { opacity: 0.25 }]}>{renderDiceSlot(dice2, 2)}</View>
                 {/* mid-close bracket — visible only in LEFT mode (after d2) */}
                 {show3rd ? renderBracket(')', !parensRight) : null}
-                {/* = + subResultBox — visible only in LEFT mode */}
-                {show3rd ? (
+                {/* = + subResultBox — visible only in LEFT mode. Also hidden
+                    during lesson 5a so the learner sees just `[a] [?] [b]`. */}
+                {show3rd && !tutorialBus.getL5aBlockFanTaps() ? (
                   <>
                     <Text
                       style={[eqS.equalsSmall, (!midEqVisible || subResult === null) && eqS.hiddenMiddle]}
@@ -5486,13 +5499,17 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                     </View>
                   </>
                 ) : null}
-                {/* op2 + d3 (kept as a chunk for inner gap) */}
-                <View style={[eqS.eqChunk, !show3rd && !state.isTutorial && { opacity: 0.25 }]}>
-                  {renderOpBtn(2, op2, show3rd)}
-                  {renderDiceSlot(dice3, 3)}
-                </View>
+                {/* op2 + d3 (kept as a chunk for inner gap). Lesson 5a hides
+                    the whole chunk — the third slot + second op belong to the
+                    advanced equation and would confuse the sign-cycle lesson. */}
+                {tutorialBus.getL5aBlockFanTaps() ? null : (
+                  <View style={[eqS.eqChunk, !show3rd && !state.isTutorial && { opacity: 0.25 }]}>
+                    {renderOpBtn(2, op2, show3rd)}
+                    {renderDiceSlot(dice3, 3)}
+                  </View>
+                )}
                 {/* outer right bracket — visible only in RIGHT mode */}
-                {show3rd ? renderBracket(')', parensRight) : null}
+                {show3rd && !tutorialBus.getL5aBlockFanTaps() ? renderBracket(')', parensRight) : null}
               </>
             );
           })()}
@@ -11924,13 +11941,17 @@ function GameScreen() {
   }, [bottomPad, state.phase, state.players.length]);
   return (
     <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }}>
-      {/* שכבה כחולה עדינה כמו מסך השחקן — מרככת מעבר תור ↔ משחק */}
-      <LinearGradient
-        colors={[...playerScreensGradientColors]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.85, y: 1 }}
-        style={[StyleSheet.absoluteFill, { opacity: 0.2 }]}
-      />
+      {/* שכבה כחולה עדינה כמו מסך השחקן — מרככת מעבר תור ↔ משחק.
+          בטוטוריאל משמיטים אותה כדי שהרקע הכהה יהיה חלק ולא תיראה
+          "שכבה קלה של המוקאפ" מעל ה-UI האמיתי. */}
+      {!state.isTutorial && (
+        <LinearGradient
+          colors={[...playerScreensGradientColors]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0.85, y: 1 }}
+          style={[StyleSheet.absoluteFill, { opacity: 0.2 }]}
+        />
+      )}
       {/* רקע כתום־זהוב — מכסה את כל המסך. בטוטוריאל מחליפים לכהה אטום
           (slate-800) כדי שהמשוואה והקוביות יבלטו, בלי תמונת השולחן. */}
       {state.isTutorial ? (
@@ -12658,7 +12679,9 @@ function GameScreen() {
       )}
 
       {/* ערוך תרגיל — חוזר לשלב building לעריכת המשוואה. זמין כל עוד לא הנחת קלפים
-          (גם אם כבר הצגת קלפים; REVERT_TO_BUILDING מאפס את stagedCards). */}
+          (גם אם כבר הצגת קלפים; REVERT_TO_BUILDING מאפס את stagedCards).
+          מיקום: מתחת למניפה (bottom נמוך מ־HAND_BOTTOM_OFFSET=195) כדי לא לדרוס
+          את אזור המשוואה/התוצאות באמצע המסך. */}
       {state.phase === 'solved' && !state.hasPlayedCards && !l5GuidedTutorial && (
         <View
           style={[
@@ -12669,7 +12692,7 @@ function GameScreen() {
           pointerEvents="box-none"
         >
           <View
-            style={{ position: 'absolute', top: 460, left: 0, right: 0, alignItems: 'center' }}
+            style={{ position: 'absolute', bottom: 40, left: 0, right: 0, alignItems: 'center' }}
             pointerEvents="box-none"
           >
             <LulosButton

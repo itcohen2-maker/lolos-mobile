@@ -193,6 +193,17 @@ function translateInner(
     }
 
     // -----------------------------------------------------------------------
+    // Teaching-only beats — no reducer action. The bot-step loop treats these
+    // as no-ops (they only advance the narration/presentation). Returning null
+    // here is the correct behaviour; applyBotActionAtomically short-circuits
+    // for these kinds before attempting a translation.
+    // -----------------------------------------------------------------------
+
+    case 'checkPossibleResults':
+    case 'useMiniCards':
+      return null;
+
+    // -----------------------------------------------------------------------
     // Default — unrecognised BotAction kind.
     // TypeScript's exhaustive switch would normally catch this at compile time,
     // but a runtime guard is prudent for future action kinds added before the

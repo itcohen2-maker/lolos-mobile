@@ -2,7 +2,7 @@
 // LobbyScreens — Create/Join room + Lobby wait
 // ============================================================
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,7 +19,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { useMultiplayer } from '../hooks/useMultiplayer';
-import type { BotDifficulty, Fraction, HostGameSettings } from '../../shared/types';
+import type { BotDifficulty, Fraction, HostGameSettings, Operation } from '../../shared/types';
 
 const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
 import type { MsgParams } from '../../shared/i18n';
@@ -106,22 +106,37 @@ export function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: strin
   }
 }
 
-export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } = {}) {
+export function LobbyEntry({ onBackToChoice, defaultPlayerName }: { onBackToChoice?: () => void; defaultPlayerName?: string } = {}) {
   const { t, isRTL } = useLocale();
   const { createRoom, joinRoom, error, clearError, setServerUrl } = useMultiplayer();
   const ta = isRTL ? 'right' : 'left';
   const [step, setStep] = useState<'create' | 'join'>('create');
-  const [playerName, setPlayerName] = useState('');
+  const [playerName, setPlayerName] = useState((defaultPlayerName ?? '').slice(0, 7));
   const [roomCode, setRoomCode] = useState('');
   const [joinFromLinkReady, setJoinFromLinkReady] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
+  // "Connecting..." modal — shown between tapping Create/Join and the room
+  // actually appearing. Once the multiplayer hook reports `inRoom`, the
+  // parent switches screen so this component unmounts; if the server errors,
+  // the `error` effect below clears this back to false.
+  const [isConnecting, setIsConnecting] = useState(false);
 
   useEffect(() => {
     if (error) {
+      setIsConnecting(false);
       const t = setTimeout(clearError, 4000);
       return () => clearTimeout(t);
     }
   }, [error, clearError]);
+
+  // Safety timeout — if the server doesn't answer within 15s, hide the
+  // connecting modal so the learner isn't stuck on a frozen spinner. A real
+  // connection error will have already been surfaced via `error` above.
+  useEffect(() => {
+    if (!isConnecting) return;
+    const timer = setTimeout(() => setIsConnecting(false), 15000);
+    return () => clearTimeout(timer);
+  }, [isConnecting]);
 
   useEffect(() => {
     const { roomCode: roomFromUrl, serverUrl, name } = parseJoinParamsFromUrl();
@@ -133,21 +148,42 @@ export function LobbyEntry({ onBackToChoice }: { onBackToChoice?: () => void } =
     setJoinFromLinkReady(true);
   }, [setServerUrl]);
 
+  useEffect(() => {
+    if (playerName.trim().length > 0) return;
+    if (!defaultPlayerName) return;
+    setPlayerName(defaultPlayerName.slice(0, 7));
+  }, [defaultPlayerName, playerName]);
+
   const handleCreate = () => {
     console.log('[MP][debug] handleCreate pressed, name=', JSON.stringify(playerName));
     if (!playerName.trim()) { console.log('[MP][debug] rejected: empty name'); return; }
+    setIsConnecting(true);
     createRoom(playerName.trim());
     setStep('create');
   };
 
   const handleJoin = () => {
     if (!playerName.trim() || !roomCode.trim()) return;
+    setIsConnecting(true);
     joinRoom(roomCode.trim(), playerName.trim());
   };
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <LanguageToggle />
+      {/* "Connecting to room…" overlay — shown while the socket is handshaking
+          with the server and the room is being created/joined. Disappears the
+          moment the parent switches to the lobby screen (inRoom=true) or a
+          connection error surfaces. */}
+      <Modal visible={isConnecting} transparent animationType="fade">
+        <View style={styles.connectingBackdrop}>
+          <View style={styles.connectingCard}>
+            <ActivityIndicator size="large" color="#FDE047" />
+            <Text style={styles.connectingTitle}>{t('mp.connectingTitle')}</Text>
+            <Text style={styles.connectingBody}>{t('mp.connectingBody')}</Text>
+          </View>
+        </View>
+      </Modal>
       {onBackToChoice && (
         <TouchableOpacity style={styles.backBtn} onPress={onBackToChoice}>
           <Text style={styles.backBtnText}>{t('lobby.backToMode')}</Text>
@@ -253,9 +289,27 @@ export function LobbyScreen() {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const { roomCode, players, lobbyStatus, isHost, connected, startGame, startBotGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
-  const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
+  const [difficulty, setDifficultyRaw] = useState<'easy' | 'full'>('full');
+  const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+', '-', 'x', '÷']);
   const [showFractions, setShowFractions] = useState(true);
   const [fractionKinds, setFractionKinds] = useState<Fraction[]>([...ALL_FRACTION_KINDS]);
+  // When switching to 0-12, auto-remove 1/4 and 1/5 fractions.
+  const setDifficulty = (d: 'easy' | 'full') => {
+    setDifficultyRaw(d);
+    if (d === 'easy') {
+      setFractionKinds((prev) => {
+        const filtered = prev.filter((f) => f === '1/2' || f === '1/3');
+        return filtered.length > 0 ? filtered : ['1/2', '1/3'];
+      });
+    }
+  };
+
+  const operatorPreset: 'plusMinus' | 'mulDiv' | 'all' = useMemo(() => {
+    const has = (op: Operation) => enabledOperators.includes(op);
+    if (has('+') && has('-') && has('x') && has('÷')) return 'all';
+    if (has('x') && has('÷') && !has('+') && !has('-')) return 'mulDiv';
+    return 'plusMinus';
+  }, [enabledOperators]);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timerSetting, setTimerSetting] = useState<HostGameSettings['timerSetting']>('off');
@@ -320,6 +374,18 @@ export function LobbyScreen() {
     startGame(difficulty, buildGameSettings());
   };
 
+  /** Auto-start: once the host confirmed settings and a second player actually joined, kick off the game. */
+  const autoStartFiredRef = useRef(false);
+  useEffect(() => {
+    if (!isHost || !settingsConfirmed) return;
+    if (players.length < 2) return;
+    if (starting || autoStartFiredRef.current) return;
+    autoStartFiredRef.current = true;
+    setStarting(true);
+    startGame(difficulty, buildGameSettings());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, settingsConfirmed, players.length, starting]);
+
   const buildGameSettings = (): HostGameSettings => {
     const trimmed = botDisplayName.replace(/[\r\n\x00-\x1f]/g, '').trim().slice(0, 24);
     return {
@@ -328,7 +394,7 @@ export function LobbyScreen() {
       showPossibleResults,
       showSolveExercise,
       mathRangeMax: difficulty === 'easy' ? 12 : 25,
-      enabledOperators: ['+', '-'],
+      enabledOperators: [...enabledOperators],
       allowNegativeTargets: false,
       fractionKinds: showFractions ? (fractionKinds.length > 0 ? fractionKinds : [...ALL_FRACTION_KINDS]) : [],
       difficultyStage: difficulty === 'easy' ? 'A' : 'H',
@@ -512,6 +578,26 @@ export function LobbyScreen() {
 
           {showAdvancedHostSettings && (
             <>
+          <Text style={styles.label}>{t('start.advancedSetup.operatorsTitle')}</Text>
+          <View style={styles.operatorsRow}>
+            {([
+              ['plusMinus', ['+', '-'] as Operation[], 'start.advancedSetup.operators.plusMinus.label'],
+              ['all', ['+', '-', 'x', '÷'] as Operation[], 'start.advancedSetup.operators.all.label'],
+            ] as const).map(([key, ops, labelKey]) => {
+              const on = operatorPreset === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  onPress={() => setEnabledOperators([...ops])}
+                  activeOpacity={0.75}
+                  style={[styles.operatorChip, on && styles.operatorChipOn]}
+                >
+                  <Text style={[styles.operatorChipText, on && styles.operatorChipTextOn]}>{t(labelKey)}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           <Text style={styles.label}>{t('lobby.fractions')}</Text>
           <View style={styles.diffRow}>
             <TouchableOpacity
@@ -731,8 +817,8 @@ const styles = StyleSheet.create({
   logoWrap: { alignSelf: 'center', marginBottom: 12 },
   backBtn: { alignSelf: 'flex-start', marginBottom: 16, paddingVertical: 8, paddingHorizontal: 12 },
   backBtnText: { color: brand.cyan, fontSize: 14, fontWeight: '600' },
-  title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8 },
-  subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24 },
+  title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8, alignSelf: 'stretch', textAlign: 'right' },
+  subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24, alignSelf: 'stretch', textAlign: 'right' },
   label: { color: '#D1D5DB', fontSize: 14, fontWeight: '600', alignSelf: 'flex-start', marginTop: 16, marginBottom: 8 },
   input: {
     width: '100%',
@@ -894,7 +980,7 @@ const styles = StyleSheet.create({
   },
   summaryText: { color: '#E2E8F0', fontSize: 13, fontWeight: '600', lineHeight: 21, textAlign: 'right' },
   errorBox: { marginTop: 16, padding: 12, backgroundColor: 'rgba(239,68,68,0.2)', borderRadius: 10, width: '100%' },
-  errorText: { color: '#FCA5A5', textAlign: 'center' },
+  errorText: { color: '#FCA5A5', textAlign: 'right' },
   infoBox: {
     width: '100%',
     borderRadius: 10,
@@ -907,12 +993,42 @@ const styles = StyleSheet.create({
   },
   infoText: { color: brand.text, fontSize: 12, textAlign: 'right' },
   rulesLinkBtn: { marginTop: 8, marginBottom: 4, paddingVertical: 8 },
-  rulesLinkText: { color: brand.cyan, fontSize: 14, fontWeight: '700', textAlign: 'center', textDecorationLine: 'underline' },
+  rulesLinkText: { color: brand.cyan, fontSize: 14, fontWeight: '700', textAlign: 'right', textDecorationLine: 'underline' },
   rulesModalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
     padding: 20,
+  },
+  connectingBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  connectingCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: 'rgba(253,224,71,0.55)',
+    paddingVertical: 26,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    minWidth: 260,
+  },
+  connectingTitle: {
+    color: '#FDE047',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 14,
+    textAlign: 'center',
+  },
+  connectingBody: {
+    color: '#CBD5E1',
+    fontSize: 14,
+    marginTop: 6,
+    textAlign: 'center',
   },
   rulesModalCard: {
     backgroundColor: '#0f172a',
@@ -935,6 +1051,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rulesModalCloseBtnText: { color: '#111827', fontSize: 15, fontWeight: '800' },
-  advancedToggleBtn: { marginTop: 12, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, borderWidth: 2, borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.15)' },
-  advancedToggleText: { color: '#FCD34D', fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  advancedToggleBtn: { marginTop: 12, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, borderWidth: 2, borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.18)' },
+  advancedToggleText: { color: '#DDD6FE', fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  operatorsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', alignSelf: 'stretch' },
+  operatorChip: { flex: 1, minWidth: 92, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center' },
+  operatorChipOn: { borderColor: '#FDE68A', backgroundColor: 'rgba(253,230,138,0.18)' },
+  operatorChipText: { color: '#D1D5DB', fontSize: 14, fontWeight: '800' },
+  operatorChipTextOn: { color: '#FFF' },
 });

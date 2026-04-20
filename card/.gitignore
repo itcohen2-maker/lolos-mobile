@@ -45,3 +45,13 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Playwright
+/playwright-report/
+/test-results/
+/tests/results/
+/tests/.env
+
+# Superpowers brainstorm sessions (local-only mockups)
+.superpowers/
+

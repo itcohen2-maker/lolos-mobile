@@ -190,6 +190,7 @@ export interface TutorialHandResult {
 export function generateTutorialHand(
   dice: DiceResult,
   lesson: LessonConfig,
+  variant: 0 | 1 = 0,
 ): TutorialHandResult {
   tutIdCounter = 0;
   const targets = generateValidTargets(
@@ -204,7 +205,7 @@ export function generateTutorialHand(
     return fallbackHand(lesson);
   }
 
-  const HAND_SIZE = 7;
+  const HAND_SIZE = 9;
   const solutionCards: Card[] = [];
   const specialCards: Card[] = [];
   let targetEq: EquationOption | null = null;
@@ -216,7 +217,11 @@ export function generateTutorialHand(
       const pick = pickAdditionTarget(targets, lesson.maxRange);
       if (pick) {
         targetEq = pick.target;
-        solutionCards.push(numCard(pick.a), numCard(pick.b));
+        if (variant === 1) {
+          solutionCards.push(numCard(pick.b), numCard(pick.a));
+        } else {
+          solutionCards.push(numCard(pick.a), numCard(pick.b));
+        }
       }
       break;
     }
@@ -227,7 +232,10 @@ export function generateTutorialHand(
       if (pick) {
         targetEq = pick.target;
         solutionCards.push(numCard(pick.a), numCard(pick.b));
-        specialCards.push(opCard(pick.op));
+        const opVariant = variant === 1
+          ? (lesson.enabledOperators.find((op) => op !== pick.op && op !== '+') ?? pick.op)
+          : pick.op;
+        specialCards.push(opCard(opVariant));
       }
       break;
     }
@@ -239,6 +247,10 @@ export function generateTutorialHand(
         targetEq = pick.target;
         solutionCards.push(numCard(pick.a), numCard(pick.b));
         specialCards.push(jokerCard());
+        if (variant === 1) {
+          const fallbackOp = lesson.enabledOperators.find((op) => op !== '+');
+          if (fallbackOp) specialCards.push(opCard(fallbackOp));
+        }
       }
       break;
     }
@@ -249,7 +261,7 @@ export function generateTutorialHand(
       if (pick) {
         targetEq = pick.target;
         // Only give one number, wild replaces the other
-        solutionCards.push(numCard(pick.a));
+        solutionCards.push(numCard(variant === 1 ? pick.b : pick.a));
         specialCards.push(wildCard());
       }
       break;
@@ -266,7 +278,7 @@ export function generateTutorialHand(
         discardTop = numCard(identicalValue);
         specialCards.push(numCard(identicalValue)); // identical to discard top
         const fracs: Fraction[] = lesson.fractionKinds ?? ['1/2'];
-        specialCards.push(fractionCard(fracs[0]));
+        specialCards.push(fractionCard(fracs[variant === 1 && fracs[1] ? 1 : 0]));
       }
       break;
     }

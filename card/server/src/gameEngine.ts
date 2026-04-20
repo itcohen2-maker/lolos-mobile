@@ -17,7 +17,7 @@ const DEFAULT_HOST_GAME_SETTINGS: HostGameSettings = {
   showPossibleResults: true,
   showSolveExercise: true,
   mathRangeMax: 25,
-  enabledOperators: ['x', '÷'],
+  enabledOperators: ['+', '-', 'x', '÷'],
   allowNegativeTargets: true,
   difficultyStage: 'H',
   fractionKinds: ['1/2', '1/3', '1/4', '1/5'],
@@ -75,6 +75,18 @@ export function withOnlineTurnDeadline(st: ServerGameState): ServerGameState {
     return { ...st, turnDeadlineAt: Date.now() + ONLINE_TURN_ACTION_MS };
   }
   const configuredSeconds = resolveConfiguredTurnTimerSeconds(st);
+  // Pre-roll idle safety: the player pressed "אני מוכן" but hasn't rolled the
+  // dice yet. Without a deadline here, an AFK player blocks the whole room
+  // indefinitely. Use the configured host timer if set, otherwise fall back
+  // to 60s so the turn always has an upper bound.
+  // Bots are excluded — they act on their own timer (scheduleBotAction) and
+  // don't need human idle protection.
+  const currentIsBot = st.players[st.currentPlayerIndex]?.isBot === true;
+  const isPreRollIdle = st.phase === 'pre-roll' && !st.hasPlayedCards && !currentIsBot;
+  if (isPreRollIdle) {
+    const seconds = configuredSeconds ?? 60;
+    return { ...st, turnDeadlineAt: Date.now() + seconds * 1000 };
+  }
   // In online game:
   // - If host enabled turn timer -> use only configured timer.
   // - If host timer is off -> fallback safety timeout after dice roll (60s).
@@ -169,6 +181,25 @@ function bumpTournamentOnWin(st: ServerGameState, winnerIndex: number): Tourname
   );
 }
 
+/** Technical victory: a player left/disconnected, the remaining human wins. */
+export function technicalVictory(
+  st: ServerGameState,
+  leavingPlayerId: string,
+): ServerGameState | null {
+  const remaining = st.players.find(
+    (p) => p.id !== leavingPlayerId && !p.isBot && !p.isEliminated,
+  );
+  if (!remaining) return null;
+  const wi = st.players.indexOf(remaining);
+  return {
+    ...st,
+    phase: 'game-over',
+    winner: remaining,
+    tournamentTable: bumpTournamentOnWin(st, wi),
+    lastMoveMessage: { key: 'toast.technicalVictory', params: { left: st.players.find((p) => p.id === leavingPlayerId)?.name ?? 'Player' } },
+  };
+}
+
 function checkWin(st: ServerGameState): ServerGameState {
   const cp = st.players[st.currentPlayerIndex];
   if (cp.hand.length <= 2) {
@@ -180,7 +211,7 @@ function checkWin(st: ServerGameState): ServerGameState {
       tournamentTable: bumpTournamentOnWin(st, wi),
     };
   }
-  if (cp.hand.length === 3) {
+  if (cp.hand.length === 3 && !cp.isBot) {
     const warn = locMsg('toast.threeCardsLeft', { name: cp.name });
     const mergedToast: LastMovePayload = st.lastMoveMessage
       ? Array.isArray(st.lastMoveMessage)
@@ -303,8 +334,10 @@ export function startGame(
     courageDiscardSuccessStreak: 0,
     courageRewardPulseId: 0,
     courageCoins: 0,
+    lastCourageRewardReason: null,
     identicalCelebration: null,
     lastMoveMessage: null,
+    lastDiscardCount: 0,
     lastEquationDisplay: null,
     difficulty,
     hostGameSettings,
@@ -330,6 +363,7 @@ export function beginTurn(st: ServerGameState): ServerGameState {
     return {
       ...st,
       phase: 'pre-roll',
+      lastDiscardCount: 0,
       message: locMsg('toast.fractionDefenseRequired', {
         target: st.pendingFractionTarget,
         penalty: st.fractionPenalty,
@@ -342,6 +376,7 @@ export function beginTurn(st: ServerGameState): ServerGameState {
     fractionAttackResolved: false,
     pendingFractionTarget: null,
     fractionPenalty: 0,
+    lastDiscardCount: 0,
     message: '',
   };
 }
@@ -381,7 +416,12 @@ export function doRollDice(st: ServerGameState): ServerGameState | { error: Loca
 /** דילוג תור אם השחקן לא הגיב בזמן — קנס ושליפה + מעבר לשחקן הבא */
 export function forceTurnTimeout(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
   const isTurnTransitionTimeout = st.phase === 'turn-transition';
-  const isInTurnTimeout = (st.phase === 'building' || st.phase === 'solved');
+  // Pre-roll included: player pressed "אני מוכן" but sat idle without rolling.
+  // doEndTurn handles the no-move penalty draw and passes the turn on.
+  // Bots never timeout — they have their own action timer (scheduleBotAction).
+  const botPlaying = st.players[st.currentPlayerIndex]?.isBot === true;
+  if (botPlaying) return locErr('timer.notActivePhase');
+  const isInTurnTimeout = (st.phase === 'pre-roll' || st.phase === 'building' || st.phase === 'solved');
   if (!isTurnTransitionTimeout && !isInTurnTimeout) {
     return locErr('timer.notActivePhase');
   }
@@ -584,6 +624,7 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
     stagedCards: [], consecutiveIdenticalPlays: 0,
     hasPlayedCards: true, lastCardValue: lastCardVal,
     lastMoveMessage: stToast, lastEquationDisplay: null,
+    lastDiscardCount: stIds.size,
     equationCommits: [],
     message: '',
   };
@@ -618,6 +659,7 @@ export function playIdentical(st: ServerGameState, cardId: string): ServerGameSt
     hasPlayedCards: true,
     consecutiveIdenticalPlays: newConsecutive,
     lastCardValue: card.type === 'number' ? card.value ?? null : card.type === 'wild' ? effectiveVal : null,
+    lastDiscardCount: 1,
     lastMoveMessage: toast, message: '',
     identicalCelebration: celebration,
   };
@@ -650,6 +692,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
       pendingFractionTarget: newTarget, fractionPenalty: denom,
       fractionAttackResolved: false,
       equationCommits: [],
+      lastDiscardCount: 1,
       lastMoveMessage: locMsg('toast.fractionBlock', { name: cp.name, fraction: String(card.fraction) }),
       message: locMsg('toast.msg.fractionBlocked', { name: cp.name, fraction: String(card.fraction) }),
     };
@@ -678,6 +721,7 @@ export function playFraction(st: ServerGameState, cardId: string): ServerGameSta
     pendingFractionTarget: newTarget, fractionPenalty: denom,
     fractionAttackResolved: false,
     equationCommits: [],
+    lastDiscardCount: 1,
     lastMoveMessage: locMsg('toast.fractionAttack', { name: cp.name, fraction: String(card.fraction) }),
     message: locMsg('toast.msg.fractionPlayed', { name: cp.name, fraction: String(card.fraction) }),
   };
@@ -712,6 +756,7 @@ export function defendFractionSolve(st: ServerGameState, cardId: string, wildRes
     ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true, lastCardValue: lastVal,
+    lastDiscardCount: 1,
     lastMoveMessage: locMsg('toast.defenseOk'),
     message: locMsg('msg.defenseOk'),
   };
@@ -835,8 +880,10 @@ export function getPlayerView(state: ServerGameState, playerId: string, locale: 
     courageDiscardSuccessStreak: state.courageDiscardSuccessStreak,
     courageRewardPulseId: state.courageRewardPulseId,
     courageCoins: state.courageCoins ?? 0,
+    lastCourageRewardReason: state.lastCourageRewardReason ?? null,
     identicalCelebration: state.identicalCelebration ?? null,
     lastMoveMessage: formatLastMove(locale, state.lastMoveMessage),
+    lastDiscardCount: state.lastDiscardCount ?? 0,
     difficulty: state.difficulty,
     gameSettings: state.hostGameSettings,
     winner: state.winner ? { id: state.winner.id, name: state.winner.name } : null,

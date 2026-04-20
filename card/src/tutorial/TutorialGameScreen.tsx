@@ -119,7 +119,10 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
 
     const lesson = getLesson(tut.lessonIndex);
     const dice = gameState.dice ?? { die1: 3, die2: 4, die3: 2 };
-    const result = generateTutorialHand(dice, lesson);
+    const variantDice = tut.demoVariantIndex === 1
+      ? { die1: Math.max(1, ((dice.die1 + 2) % 6) || 6), die2: Math.max(1, ((dice.die2 + 3) % 6) || 6), die3: Math.max(1, ((dice.die3 + 1) % 6) || 6) }
+      : dice;
+    const result = generateTutorialHand(variantDice, lesson, tut.demoVariantIndex);
 
     handsRiggedForLessonRef.current = tut.lessonIndex;
     gameDispatch({
@@ -127,7 +130,7 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
       hands: [result.botHand, result.playerHand],
       ...(result.discardTop ? { discardPile: [result.discardTop] } : {}),
     });
-  }, [tut.active, tut.lessonIndex, gameState.phase, gameState.players]);
+  }, [tut.active, tut.lessonIndex, tut.demoVariantIndex, gameState.phase, gameState.players]);
 
   // ── Re-rig user hand after dice roll ──
   const lastDiceSeqRef = useRef(-1);
@@ -141,13 +144,16 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
     lastDiceSeqRef.current = diceSeq;
 
     const lesson = getLesson(tut.lessonIndex);
-    const result = generateTutorialHand(gameState.dice, lesson);
+    const variantDice = tut.demoVariantIndex === 1
+      ? { die1: Math.max(1, ((gameState.dice.die1 + 1) % 6) || 6), die2: Math.max(1, ((gameState.dice.die2 + 2) % 6) || 6), die3: Math.max(1, ((gameState.dice.die3 + 3) % 6) || 6) }
+      : gameState.dice;
+    const result = generateTutorialHand(variantDice, lesson, tut.demoVariantIndex);
 
     gameDispatch({
       type: 'TUTORIAL_SET_HANDS',
       hands: [gameState.players[0].hand, result.playerHand],
     });
-  }, [tut.active, tut.turn, gameState.phase, gameState.dice, gameState.diceRollSeq]);
+  }, [tut.active, tut.turn, tut.demoVariantIndex, gameState.phase, gameState.dice, gameState.diceRollSeq]);
 
   // ── Bot turn automation ──
   // When it's bot's turn (player 0) and tutorial says 'bot', auto-play
@@ -209,9 +215,25 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
   useEffect(() => {
     if (!tut.active || tut.showLessonIntro) return;
     if (gameState.currentPlayerIndex === 0 && tut.turn === 'user') {
-      tutDispatch({ type: 'NEXT_LESSON' });
+      const lesson = getLesson(tut.lessonIndex);
+      const needsDualDemo = !lesson.freePlay && tut.lessonIndex <= 3;
+      if (needsDualDemo && tut.demoVariantIndex === 0) {
+        handsRiggedForLessonRef.current = -1;
+        lastDiceSeqRef.current = -1;
+        tutDispatch({ type: 'NEXT_VARIANT' });
+      } else {
+        tutDispatch({ type: 'NEXT_LESSON' });
+      }
     }
-  }, [tut.active, tut.turn, tut.showLessonIntro, gameState.currentPlayerIndex]);
+  }, [tut.active, tut.turn, tut.showLessonIntro, tut.lessonIndex, tut.demoVariantIndex, gameState.currentPlayerIndex]);
+
+  useEffect(() => {
+    if (!tut.active) return;
+    if (tut.lessonIndex !== 3) return;
+    if (tut.awaitingFractionsOptIn) return;
+    if (tut.fractionsOptIn == null) return;
+    tutDispatch({ type: 'NEXT_LESSON' });
+  }, [tut.active, tut.lessonIndex, tut.awaitingFractionsOptIn, tut.fractionsOptIn, tutDispatch]);
 
   // ── Mark seen when completed ──
   useEffect(() => {
@@ -241,6 +263,8 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
         title={t(lesson.titleKey)}
         description={t(lesson.descKey)}
         onContinue={() => tutDispatch({ type: 'DISMISS_LESSON_INTRO' })}
+        onExit={onExit}
+        exitLabel={t('tutorial.exit')}
       />
     );
   }
@@ -345,11 +369,41 @@ function TutorialGameContent({ onExit, gameDispatch, gameState }: TutorialGameSc
         <Text style={styles.progressText}>
           {t('tutorial.lessonProgress', { current: tut.lessonIndex + 1, total: TOTAL_LESSONS })}
         </Text>
-        <TouchableOpacity onPress={onExit} style={styles.exitBtn} activeOpacity={0.7}>
+        <TouchableOpacity onPress={onExit} style={styles.exitBtn} activeOpacity={0.7} disabled={!tut.canExit}>
           <Text style={styles.exitBtnText}>✕</Text>
           <Text style={styles.exitBtnLabel}>{t('tutorial.exit')}</Text>
         </TouchableOpacity>
       </View>
+
+      {tut.lessonIndex === 0 && tut.turn === 'user' && !tut.showMathOnboarding ? (
+        <View style={styles.fanGuideBox}>
+          <Text style={styles.fanGuideText}>{t('tutorial.fan.guide')}</Text>
+          <Text style={styles.fanGuideArrows}>◀︎   ▶︎   👆</Text>
+        </View>
+      ) : null}
+
+      {tut.awaitingFractionsOptIn ? (
+        <View style={styles.fractionsPromptWrap}>
+          <View style={styles.fractionsPromptCard}>
+            <Text style={styles.fractionsPromptTitle}>{t('tutorial.fractions.askTitle')}</Text>
+            <Text style={styles.fractionsPromptBody}>{t('tutorial.fractions.askBody')}</Text>
+            <View style={styles.fractionsPromptRow}>
+              <TouchableOpacity
+                style={[styles.fractionsPromptBtn, styles.fractionsPromptBtnGhost]}
+                onPress={() => tutDispatch({ type: 'TUTORIAL_CONFIRM_FRACTIONS_OPT_IN', choice: 'no' })}
+              >
+                <Text style={styles.fractionsPromptBtnGhostText}>{t('tutorial.fractions.no')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.fractionsPromptBtn}
+                onPress={() => tutDispatch({ type: 'TUTORIAL_CONFIRM_FRACTIONS_OPT_IN', choice: 'yes' })}
+              >
+                <Text style={styles.fractionsPromptBtnText}>{t('tutorial.fractions.yes')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -403,9 +457,9 @@ function executeBotStep(
 // ── Lesson Intro Overlay ──
 
 function LessonIntroOverlay({
-  lessonNumber, totalLessons, title, description, onContinue,
+  lessonNumber, totalLessons, title, description, onContinue, onExit, exitLabel,
 }: {
-  lessonNumber: number; totalLessons: number; title: string; description: string; onContinue: () => void;
+  lessonNumber: number; totalLessons: number; title: string; description: string; onContinue: () => void; onExit: () => void; exitLabel: string;
 }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
@@ -428,6 +482,9 @@ function LessonIntroOverlay({
         <Text style={styles.introDesc}>{description}</Text>
         <TouchableOpacity style={styles.introBtn} onPress={onContinue}>
           <Text style={styles.introBtnText}>▶</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.introExitBtn} onPress={onExit}>
+          <Text style={styles.introExitText}>{exitLabel}</Text>
         </TouchableOpacity>
       </Animated.View>
     </View>
@@ -613,8 +670,95 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#111827',
   },
+  introExitBtn: {
+    marginTop: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  introExitText: {
+    color: '#E5E7EB',
+    fontWeight: '700',
+  },
   completeEmoji: {
     fontSize: 64,
     marginBottom: 16,
+  },
+  fanGuideBox: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 90,
+    backgroundColor: 'rgba(17,24,39,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    borderRadius: 14,
+    padding: 10,
+    alignItems: 'center',
+  },
+  fanGuideText: {
+    color: '#FDE68A',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  fanGuideArrows: {
+    marginTop: 4,
+    color: '#F9FAFB',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  fractionsPromptWrap: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10020,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  fractionsPromptCard: {
+    width: '88%',
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  fractionsPromptTitle: {
+    color: '#FDE68A',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  fractionsPromptBody: {
+    marginTop: 8,
+    color: '#E5E7EB',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  fractionsPromptRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  fractionsPromptBtn: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    backgroundColor: '#16A34A',
+    alignItems: 'center',
+  },
+  fractionsPromptBtnGhost: {
+    backgroundColor: '#374151',
+  },
+  fractionsPromptBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  fractionsPromptBtnGhostText: {
+    color: '#E5E7EB',
+    fontWeight: '700',
   },
 });

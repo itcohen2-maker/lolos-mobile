@@ -125,6 +125,7 @@ export interface GameState {
     ticks: number;
     notification: unknown | null;
   };
+  botPostEquationPauseTicks?: number;
   botTickSeq?: number;
 }
 
@@ -197,6 +198,7 @@ const baseline: GameState = {
   botDicePausePending: false,
   botFractionDefenseTicks: 0,
   botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+  botPostEquationPauseTicks: 0,
   botTickSeq: 0,
 };
 

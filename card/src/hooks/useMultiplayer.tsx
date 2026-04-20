@@ -22,6 +22,7 @@ import { DIFFICULTY_STAGE_CONFIG, migrateDifficultyStage } from '../../shared/di
 import { normalizeOperationToken } from '../../shared/equationOpCycle';
 import { t } from '../../shared/i18n';
 import { useLocale } from '../i18n/LocaleContext';
+import { playSfx } from '../audio/sfx';
 
 const DEFAULT_SOCKET_PORT = 3001;
 
@@ -329,12 +330,13 @@ function playerViewToGameState(view: PlayerView): any {
     courageDiscardSuccessStreak: view.courageDiscardSuccessStreak ?? 0,
     courageRewardPulseId: view.courageRewardPulseId ?? 0,
     courageCoins: view.courageCoins ?? 0,
+    lastCourageRewardReason: view.lastCourageRewardReason ?? null,
     identicalAlert: view.identicalCelebration ?? null,
     jokerModalOpen: false,
     equationHandSlots,
     equationHandPick: null,
     lastMoveMessage: view.lastMoveMessage,
-    lastDiscardCount: 0,
+    lastDiscardCount: view.lastDiscardCount ?? 0,
     difficulty: view.difficulty,
     diceMode: gs.diceMode,
     showFractions: gs.showFractions,
@@ -368,6 +370,7 @@ function playerViewToGameState(view: PlayerView): any {
     botDicePausePending: false,
     botFractionDefenseTicks: 0,
     botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
+    botPostEquationPauseTicks: 0,
     botTickSeq: 0,
   };
 }
@@ -444,6 +447,8 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const serverStateRef = useRef<PlayerView | null>(null);
   const awaitingReconnectSyncRef = useRef(false);
   const startBotGameReqRef = useRef(0);
+  /** עוקב אחרי מספר השחקנים הקודם כדי לזהות הצטרפות חדשה ולהשמיע צליל + התראה */
+  const prevPlayerCountRef = useRef(0);
 
   useEffect(() => {
     serverStateRef.current = serverState;
@@ -469,6 +474,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     setServerState(null);
     setDisconnectChoice(null);
     setIsHost(false);
+    prevPlayerCountRef.current = 0;
   }, []);
 
   const disconnect = useCallback(() => {
@@ -535,18 +541,33 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       playerIdRef.current = pid;
     });
     socket.on('player_joined', ({ players: p }) => {
-      setPlayers(p.map((x: any) => ({
+      const mapped = p.map((x: any) => ({
         id: x.id,
         name: x.name,
         isHost: x.isHost,
         isConnected: x.isConnected,
         isBot: x.isBot ?? false,
-      })));
+      }));
+      setPlayers(mapped);
       const pid = playerIdRef.current;
-      if (pid) {
-        const me = p.find((x: { id: string }) => x.id === pid);
-        if (me) setIsHost(!!me.isHost);
+      const me = pid ? p.find((x: { id: string }) => x.id === pid) : null;
+      if (me) setIsHost(!!me.isHost);
+      const prev = prevPlayerCountRef.current;
+      const curr = mapped.length;
+      // הצטרפות שחקן חדש (לא הבוט, לא אנחנו): מנגן צליל ומציג התראה למארח וליתר השחקנים הקיימים.
+      if (curr > prev && prev >= 1) {
+        const newcomer = pid
+          ? mapped.find((x) => x.id !== pid && !x.isBot)
+          : mapped.find((x) => !x.isBot);
+        const display = newcomer?.name ?? (localeRef.current === 'he' ? 'שחקן חדש' : 'A new player');
+        setToast(
+          localeRef.current === 'he'
+            ? `🎉 ${display} הצטרף/ה לחדר!`
+            : `🎉 ${display} joined the room!`,
+        );
+        void playSfx('complete', { cooldownMs: 400, volumeOverride: 0.55 });
       }
+      prevPlayerCountRef.current = curr;
     });
     socket.on('lobby_status', (data: LobbyStatusState) => {
       setLobbyStatus(data);

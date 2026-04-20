@@ -144,14 +144,43 @@ function handleBotDefense(state: GameState): BotAction {
 
 /**
  * Pre-roll priority: identical-playable → attack fraction → rollDice.
+ *
+ * Medium/Hard preference layer: a wild is far more valuable as an equation
+ * variable (via `validateStagedCards`, which accepts wilds as fill-ins) than
+ * as a one-shot identical discard. When the only identical candidate is a
+ * wild and the bot has enough other numeric material to build an equation
+ * after rolling, prefer a non-wild identical if one exists, otherwise defer
+ * the wild and fall through to the fraction-attack / rollDice branches so
+ * the wild survives into the `building` phase. Easy keeps the eager
+ * original behaviour.
  */
-function handleBotPreRoll(state: GameState): BotAction {
+function handleBotPreRoll(
+  state: GameState,
+  difficulty: BotDifficulty,
+): BotAction {
   const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
   const topDiscard = state.discardPile[state.discardPile.length - 1];
 
-  const identicalCard = hand.find((card) =>
+  const allIdenticalCandidates = hand.filter((card) =>
     validateIdenticalPlay(card, topDiscard),
   );
+
+  let identicalCard: Card | undefined = allIdenticalCandidates[0];
+
+  if (difficulty !== 'easy' && identicalCard && identicalCard.type === 'wild') {
+    // Prefer a non-wild identical if one is available.
+    const nonWildIdentical = allIdenticalCandidates.find(
+      (card) => card.type !== 'wild',
+    );
+    if (nonWildIdentical) {
+      identicalCard = nonWildIdentical;
+    } else if (botCanPlausiblyUseWildInEquation(hand)) {
+      // Defer spending the wild as identical — let it survive to `building`
+      // where validateStagedCards can slot it into an equation.
+      identicalCard = undefined;
+    }
+  }
+
   if (identicalCard) {
     return { kind: 'playIdentical', cardId: identicalCard.id };
   }
@@ -164,6 +193,21 @@ function handleBotPreRoll(state: GameState): BotAction {
   }
 
   return { kind: 'rollDice' };
+}
+
+/**
+ * Cheap heuristic: the bot has at least one wild plus at least one concrete
+ * number card — enough material for the post-roll `validateStagedCards`
+ * enumerator to have a realistic shot at slotting the wild into an equation
+ * for some target produced by the upcoming dice.
+ */
+function botCanPlausiblyUseWildInEquation(hand: Card[]): boolean {
+  const hasWild = hand.some((c) => c.type === 'wild');
+  if (!hasWild) return false;
+  const numberCount = hand.filter(
+    (c) => c.type === 'number' && typeof c.value === 'number',
+  ).length;
+  return numberCount >= 1;
 }
 
 /**
@@ -210,7 +254,7 @@ export function decideBotAction(
       if (state.pendingFractionTarget !== null) {
         return handleBotDefense(state);
       }
-      return handleBotPreRoll(state);
+      return handleBotPreRoll(state, difficulty);
     case 'building':
       return handleBotBuilding(state, difficulty, rng);
     case 'solved':

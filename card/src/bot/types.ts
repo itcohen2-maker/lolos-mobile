@@ -32,4 +32,9 @@ export type BotAction =
   | { kind: 'drawCard' }
   | { kind: 'endTurn' }
   | { kind: 'defendFractionSolve'; cardId: string; wildResolve?: number }
-  | { kind: 'defendFractionPenalty' };
+  | { kind: 'defendFractionPenalty' }
+  // Teaching-only beats shown before the bot's confirmEquation. They do not
+  // translate to any GameAction — they only drive the narration bubble and the
+  // possible-results strip so a new player sees those features demonstrated.
+  | { kind: 'checkPossibleResults' }
+  | { kind: 'useMiniCards' };

@@ -137,17 +137,18 @@ export function pickBotStagedPlan(
  * Longer delays on easier levels so players can read the exercise; Hard is still the fastest tier.
  */
 export function botStepDelayRange(difficulty: BotDifficulty): { min: number; max: number } {
+  // All delays shortened by ≈⅓ for a snappier bot turn.
   switch (difficulty) {
     case 'easy':
-      return { min: 2200, max: 2800 };
+      return { min: 1470, max: 1870 };
     case 'medium':
-      return { min: 1900, max: 2400 };
+      return { min: 1270, max: 1600 };
     case 'hard':
-      return { min: 1800, max: 2200 };
+      return { min: 1200, max: 1470 };
     default: {
       const _e: never = difficulty;
       void _e;
-      return { min: 2800, max: 4200 };
+      return { min: 1870, max: 2800 };
     }
   }
 }

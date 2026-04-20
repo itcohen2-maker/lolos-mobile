@@ -1,0 +1,68 @@
+{
+  "generatedAt": "2026-04-19T19:25:05.870Z",
+  "config": {
+    "maxNumber": 12,
+    "includeFractions": true,
+    "enabledOperators": [
+      "+",
+      "-",
+      "x",
+      "÷"
+    ],
+    "players": 3,
+    "cardsPerPlayer": 7,
+    "gamesPerVariant": 20000,
+    "maxTurns": 400,
+    "model": "simplified policy simulation (equation/identical/fraction/draw)"
+  },
+  "results": [
+    {
+      "name": "fractions_half_third",
+      "fractionKinds": [
+        "1/2",
+        "1/3"
+      ],
+      "games": 20000,
+      "finishedGames": 19470,
+      "finishRate": 0.9735,
+      "meanTurnsAmongFinished": 14.93030303030303,
+      "minObservedTurns": 13,
+      "p50Turns": 13,
+      "p90Turns": 19,
+      "p95Turns": 22,
+      "p99Turns": 39,
+      "probabilities": {
+        "finish_lte_30": 0.9517,
+        "finish_lte_50": 0.9699,
+        "finish_lte_100": 0.9734,
+        "finish_lte_200": 0.9735,
+        "finish_lte_400": 0.9735
+      }
+    },
+    {
+      "name": "fractions_all",
+      "fractionKinds": [
+        "1/2",
+        "1/3",
+        "1/4",
+        "1/5"
+      ],
+      "games": 20000,
+      "finishedGames": 18926,
+      "finishRate": 0.9463,
+      "meanTurnsAmongFinished": 15.994821938074606,
+      "minObservedTurns": 13,
+      "p50Turns": 14,
+      "p90Turns": 21,
+      "p95Turns": 27,
+      "p99Turns": 54,
+      "probabilities": {
+        "finish_lte_30": 0.90635,
+        "finish_lte_50": 0.9353,
+        "finish_lte_100": 0.94495,
+        "finish_lte_200": 0.9461,
+        "finish_lte_400": 0.9463
+      }
+    }
+  ]
+}

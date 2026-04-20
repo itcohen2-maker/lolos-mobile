@@ -65,16 +65,18 @@ import {
   getPlayerView,
   forceTurnTimeout,
   withOnlineTurnDeadline,
+  technicalVictory,
 } from './gameEngine';
 import { validateFractionPlay, validateIdenticalPlay, validateStagedCards } from './equations';
 import type { Room } from './roomManager';
 import { migrateDifficultyStage } from '../../shared/difficultyStages';
 import { normalizeOperationToken } from '../../shared/equationOpCycle';
+import { botNarrationToastText, renderBotNarration, type BotNarrationInput } from '../../shared/botNarration';
 
 type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
-const BOT_OFFER_DELAY_MS = 15_000;
+const BOT_OFFER_DELAY_MS = 0;
 const BOT_DIFF_LEVELS: BotDifficulty[] = ['easy', 'medium', 'hard'];
 
 /** לקוחות ישנים שעדיין שולחים beginner */
@@ -168,6 +170,44 @@ function emitRoomToasts(io: IOServer, room: Room): void {
   }
 }
 
+function cardLabelForLocale(state: ServerGameState, cardId: string, locale: AppLocale): string {
+  const card = state.players[state.currentPlayerIndex]?.hand.find((c) => c.id === cardId);
+  if (!card) return '—';
+  if (card.type === 'number') return String(card.value ?? '?');
+  if (card.type === 'fraction') return String(card.fraction ?? '?');
+  if (card.type === 'operation') return String(card.operation ?? '?');
+  if (card.type === 'wild') return t(locale, 'labels.wild');
+  if (card.type === 'joker') return t(locale, 'labels.joker');
+  return '—';
+}
+
+function cardTypeInCurrentHand(state: ServerGameState, cardId: string): Card['type'] | null {
+  return state.players[state.currentPlayerIndex]?.hand.find((c) => c.id === cardId)?.type ?? null;
+}
+
+function botNarrationText(locale: AppLocale, input: BotNarrationInput): string {
+  const rendered = renderBotNarration((key, params) => t(locale, key, params), input);
+  return botNarrationToastText(rendered);
+}
+
+function emitBotStepToast(
+  io: IOServer,
+  room: Room,
+  builder: (locale: AppLocale, botName: string) => string,
+): void {
+  const state = room.state;
+  if (!state) return;
+  const botName = state.players[state.currentPlayerIndex]?.name ?? 'Bot';
+  for (const player of room.players) {
+    if (!player.isConnected || player.isBot) continue;
+    const text = builder(player.locale, botName);
+    if (!text) continue;
+    emitToPlayer(io, room, player.id, (sock) => {
+      sock.emit('toast', { message: text });
+    });
+  }
+}
+
 function emitToPlayer(
   io: IOServer,
   room: Room,
@@ -254,6 +294,17 @@ function scheduleRoomTurnTimer(io: IOServer, room: Room): void {
 function scheduleBotOffer(io: IOServer, room: Room): void {
   clearBotOfferTimer(room);
   if (room.state || hasBot(room) || getHumanPlayers(room).length !== 1) return;
+  // No delay — the bot-offer is available the moment the host is alone.
+  // Previously this was a 15s wait (later 3s) to give a chance for a friend
+  // to join before suggesting a bot; users found it annoying, so it was
+  // removed entirely. If a countdown is ever wanted, re-introduce via a
+  // positive BOT_OFFER_DELAY_MS + setTimeout.
+  if (BOT_OFFER_DELAY_MS <= 0) {
+    room.lobbyStatus = 'bot_offer';
+    room.botOfferAt = null;
+    emitLobbyStatus(io, room);
+    return;
+  }
   room.lobbyStatus = 'waiting_for_player';
   room.botOfferAt = Date.now() + BOT_OFFER_DELAY_MS;
   emitLobbyStatus(io, room);
@@ -405,6 +456,14 @@ function handleBotDefense(io: IOServer, room: Room, state: ServerGameState): voi
   const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
   const divisibleCard = hand.find((card) => card.type === 'number' && (card.value ?? 0) > 0 && (card.value ?? 0) % state.fractionPenalty === 0);
   if (divisibleCard) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, {
+        kind: 'defendFractionSolveNumber',
+        name,
+        card: cardLabelForLocale(state, divisibleCard.id, locale),
+        penalty: String(state.fractionPenalty),
+      }),
+    );
     applyBotState(io, room, (currentState) => defendFractionSolve(currentState, divisibleCard.id));
     return;
   }
@@ -412,16 +471,35 @@ function handleBotDefense(io: IOServer, room: Room, state: ServerGameState): voi
   const wildCard = hand.find((card) => card.type === 'wild');
   if (wildCard) {
     const wildResolve = Math.max(state.fractionPenalty, 1);
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, {
+        kind: 'defendFractionSolveWild',
+        name,
+        card: cardLabelForLocale(state, wildCard.id, locale),
+        value: String(wildResolve),
+        penalty: String(state.fractionPenalty),
+      }),
+    );
     applyBotState(io, room, (currentState) => defendFractionSolve(currentState, wildCard.id, wildResolve));
     return;
   }
 
   const counterFraction = hand.find((card) => card.type === 'fraction');
   if (counterFraction) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, {
+        kind: 'playFractionBlock',
+        name,
+        card: cardLabelForLocale(state, counterFraction.id, locale),
+      }),
+    );
     applyBotState(io, room, (currentState) => playFraction(currentState, counterFraction.id));
     return;
   }
 
+  emitBotStepToast(io, room, (locale, name) =>
+    botNarrationText(locale, { kind: 'defendFractionPenalty', name, penalty: String(state.fractionPenalty) }),
+  );
   applyBotState(io, room, (currentState) => defendFractionPenalty(currentState));
 }
 
@@ -431,16 +509,39 @@ function handleBotPreRoll(io: IOServer, room: Room, state: ServerGameState): voi
 
   const identicalCard = hand.find((card) => validateIdenticalPlay(card, topDiscard));
   if (identicalCard) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, {
+        kind: 'playIdentical',
+        name,
+        card: cardLabelForLocale(state, identicalCard.id, locale),
+      }),
+    );
     applyBotState(io, room, (currentState) => playIdentical(currentState, identicalCard.id));
     return;
   }
 
   const attackFraction = hand.find((card) => card.type === 'fraction' && validateFractionPlay(card, topDiscard));
   if (attackFraction) {
+    emitBotStepToast(io, room, (locale) => {
+      const denom = Number(String(attackFraction.fraction ?? '').split('/')[1] ?? 0) || 1;
+      const topVisibleValue =
+        topDiscard?.resolvedTarget ??
+        topDiscard?.resolvedValue ??
+        (topDiscard?.type === 'number' ? (topDiscard.value ?? null) : null);
+      const divideX = topVisibleValue ?? state.pendingFractionTarget ?? denom;
+      return botNarrationText(locale, {
+        kind: 'playFractionAttack',
+        x: String(divideX),
+        y: String(Math.max(1, denom)),
+      });
+    });
     applyBotState(io, room, (currentState) => playFraction(currentState, attackFraction.id));
     return;
   }
 
+  emitBotStepToast(io, room, (locale, name) =>
+    botNarrationText(locale, { kind: 'rollDice', name }),
+  );
   applyBotState(io, room, (currentState) => doRollDice(currentState));
 }
 
@@ -449,6 +550,14 @@ function handleBotBuilding(io: IOServer, room: Room, state: ServerGameState): vo
   if (pending != null && state.phase === 'solved' && !state.hasPlayedCards) {
     if (pending.length > 0) {
       const cardId = pending[0]!;
+      emitBotStepToast(io, room, (locale, name) => {
+        const type = cardTypeInCurrentHand(state, cardId);
+        const card = cardLabelForLocale(state, cardId, locale);
+        if (type === 'number') return botNarrationText(locale, { kind: 'stageNumber', name, card });
+        if (type === 'wild') return botNarrationText(locale, { kind: 'stageWild', name, card });
+        if (type === 'operation') return botNarrationText(locale, { kind: 'stageOperation', name, card });
+        return botNarrationText(locale, { kind: 'stageCard', name, card });
+      });
       applyBotState(io, room, (s) => {
         const r = stageCard(s, cardId);
         if ('error' in r) return r;
@@ -456,6 +565,9 @@ function handleBotBuilding(io: IOServer, room: Room, state: ServerGameState): vo
       });
       return;
     }
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, { kind: 'confirmStaged', name }),
+    );
     applyBotState(io, room, (s) => {
       const r = confirmStaged(s);
       if ('error' in r) return r;
@@ -482,19 +594,43 @@ function handleBotBuilding(io: IOServer, room: Room, state: ServerGameState): vo
     diff,
   );
   if (!picked) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, { kind: 'drawCard', name }),
+    );
     applyBotState(io, room, (currentState) => drawCard(currentState));
     return;
   }
 
+  emitBotStepToast(io, room, (locale, name) => {
+    const jokerCommit = picked.equationCommits.find((c) => c.jokerAs != null);
+    const operationCommit = picked.equationCommits.find((c) => {
+      const card = state.players[state.currentPlayerIndex]?.hand.find((h) => h.id === c.cardId);
+      return card?.type === 'operation';
+    });
+    return botNarrationText(locale, {
+      kind: 'confirmEquation',
+      name,
+      equation: picked.equationDisplay,
+      target: String(picked.target),
+      jokerOp: jokerCommit ? String(jokerCommit.jokerAs ?? '+') : undefined,
+      operationLabel: operationCommit ? cardLabelForLocale(state, operationCommit.cardId, locale) : undefined,
+    });
+  });
   const equationOk = applyBotState(io, room, (currentState) =>
     confirmEquation(currentState, picked.target, picked.equationDisplay, picked.equationCommits),
   );
   if (!equationOk || !room.state) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, { kind: 'drawCard', name }),
+    );
     applyBotState(io, room, (currentState) => drawCard(currentState));
     return;
   }
 
   if (picked.stagedCardIds.length === 0) {
+    emitBotStepToast(io, room, (locale, name) =>
+      botNarrationText(locale, { kind: 'confirmStaged', name }),
+    );
     applyBotState(io, room, (currentState) => confirmStaged(currentState));
     return;
   }
@@ -510,6 +646,9 @@ function runBotStep(io: IOServer, room: Room): void {
 
   switch (room.state.phase) {
     case 'turn-transition':
+      emitBotStepToast(io, room, (locale, name) =>
+        botNarrationText(locale, { kind: 'beginTurn', name }),
+      );
       applyBotState(io, room, (state) => beginTurn(state));
       break;
     case 'pre-roll':
@@ -523,6 +662,9 @@ function runBotStep(io: IOServer, room: Room): void {
       if (room.state.botPendingStagedIds != null) {
         handleBotBuilding(io, room, room.state);
       } else {
+        emitBotStepToast(io, room, (locale, name) =>
+          botNarrationText(locale, { kind: 'endTurn', name }),
+        );
         applyBotState(io, room, (state) => doEndTurn(state));
       }
       break;
@@ -620,6 +762,19 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     const { room, playerId, playerName } = result;
     socket.leave(room.code);
     io.to(room.code).emit('player_left', { playerId, playerName });
+    // If a game is in progress and a human left, the remaining player
+    // wins immediately (technical victory — no grace period, no bot offer).
+    if (room.state && room.state.phase !== 'game-over') {
+      const tvResult = technicalVictory(room.state, playerId);
+      if (tvResult) {
+        room.state = tvResult;
+        clearRoomDisconnectGrace(room);
+        clearRoomTurnTimer(room);
+        clearBotActionTimer(room);
+        broadcastState(io, room);
+        emitRoomToasts(io, room);
+      }
+    }
     if (room.players.length > 0) {
       clearRoomDisconnectGrace(room);
       emitRoomPlayers(io, room);
@@ -1075,6 +1230,18 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
       if (shouldStartDisconnectGrace(room, playerId)) {
         const deadlineAt = setDisconnectGraceTimer(room, playerId, (timerRoom, disconnectedPlayerId) => {
           clearRoomTurnTimer(timerRoom);
+          clearBotActionTimer(timerRoom);
+          // Grace expired — opponent didn't return. End with technical
+          // victory for the remaining player (no bot offer).
+          if (timerRoom.state && timerRoom.state.phase !== 'game-over') {
+            const tvResult = technicalVictory(timerRoom.state, disconnectedPlayerId);
+            if (tvResult) {
+              timerRoom.state = tvResult;
+              broadcastState(io, timerRoom);
+              emitRoomToasts(io, timerRoom);
+              return;
+            }
+          }
           if (timerRoom.state) {
             timerRoom.state = { ...timerRoom.state, turnDeadlineAt: null };
             broadcastState(io, timerRoom);

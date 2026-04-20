@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-04-19T17:45:07.028Z",
+  "config": {
+    "numPlayers": 3,
+    "cardsPerPlayer": 7,
+    "maxNumber": 12,
+    "includeFractions": false,
+    "enabledOperators": [
+      "+",
+      "-"
+    ],
+    "allowNegativeTargets": true,
+    "dice": "3d6 (1..6 each)",
+    "games": 20000,
+    "maxTurns": 400,
+    "model": "simplified policy simulation (equation-match -> identical -> draw)"
+  },
+  "theoretical": {
+    "minTurnsAbsoluteLowerBound": 1,
+    "rationale": "Player starts with 7 cards and wins at <=2, so must discard at least 5 cards. In principle this can happen in one winning turn under favorable state."
+  },
+  "outcomes": {
+    "finishedGames": 19979,
+    "finishRate": 0.99895,
+    "meanTurnsAmongFinished": 14.112818459382352,
+    "minObservedTurns": 13,
+    "p50Turns": 13,
+    "p90Turns": 15,
+    "p95Turns": 19,
+    "p99Turns": 26,
+    "probabilities": {
+      "finish_lte_30": 0.99285,
+      "finish_lte_50": 0.99825,
+      "finish_lte_100": 0.99895,
+      "finish_lte_200": 0.99895,
+      "finish_lte_400": 0.99895
+    }
+  }
+}

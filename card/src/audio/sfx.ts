@@ -154,6 +154,10 @@ export async function setSfxVolume(nextVolume: number): Promise<void> {
   );
 }
 
+export function isSfxMuted(): boolean {
+  return muted;
+}
+
 export function setSfxMuted(nextMuted: boolean): void {
   muted = nextMuted;
 }

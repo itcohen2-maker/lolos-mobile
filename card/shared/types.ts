@@ -163,9 +163,13 @@ export interface ServerGameState {
   courageRewardPulseId: number;
   /** מטבעות לרקורד המשחק הנוכחי */
   courageCoins: number;
+  /** סיבה מילולית לתוספת האחרונה במד ההצטיינות; מוצגת פעם אחת במסך מעבר התור. */
+  lastCourageRewardReason: string | null;
   /** לרוב null; מוגדר רק ב־state_update מיד אחרי playIdentical (מקוון) */
   identicalCelebration?: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: LastMovePayload;
+  /** כמה קלפים הושלכו במהלך האחרון (ל־UI מסונכרן עם מצב מקומי) */
+  lastDiscardCount: number;
   lastEquationDisplay: string | null;
   difficulty: 'easy' | 'full';
   hostGameSettings: HostGameSettings;
@@ -218,9 +222,13 @@ export interface PlayerView {
   courageDiscardSuccessStreak: number;
   courageRewardPulseId: number;
   courageCoins: number;
+  /** סיבה מילולית לתוספת האחרונה במד ההצטיינות; מוצגת פעם אחת במסך מעבר התור. */
+  lastCourageRewardReason: string | null;
   /** מגיע מהשרת רק בפריים אחרי קלף זהה מקוון — ממופה ל־identicalAlert בלקוח */
   identicalCelebration: { playerName: string; cardDisplay: string; consecutive: number } | null;
   lastMoveMessage: string | null;
+  /** סיכום השלכה אחרונה ל־UI (למשל "פחות קלף אחד") */
+  lastDiscardCount?: number;
   difficulty: 'easy' | 'full';
   gameSettings: HostGameSettings;
   winner: { id: string; name: string } | null;

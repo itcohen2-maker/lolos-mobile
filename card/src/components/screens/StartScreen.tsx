@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,16 +13,39 @@ import Button from '../ui/Button';
 import { useLocale } from '../../i18n/LocaleContext';
 import { CARDS_PER_PLAYER } from '../../../shared/gameConstants';
 
-export default function StartScreen() {
+interface StartScreenProps {
+  onBackToChoice?: () => void;
+  onHowToPlay?: () => void;
+  preferredName?: string;
+}
+
+export default function StartScreen({ preferredName }: StartScreenProps = {}) {
   const { t, isRTL } = useLocale();
   const { dispatch } = useGame();
   const [playerCount, setPlayerCount] = useState(2);
-  const [names, setNames] = useState<string[]>(Array(10).fill(''));
+  const [names, setNames] = useState<string[]>(() => {
+    const base = Array(10).fill('');
+    const first = (preferredName ?? '').trim();
+    if (first) base[0] = first;
+    return base;
+  });
   const [difficulty, setDifficulty] = useState<'easy' | 'full'>('full');
   const [showRules, setShowRules] = useState(false);
 
   const maxPlayers = difficulty === 'easy' ? 8 : 10;
   const ta = isRTL ? 'right' : 'left';
+
+  useEffect(() => {
+    const first = (preferredName ?? '').trim();
+    if (!first) return;
+    setNames((prev) => {
+      // Don't overwrite if the user already typed a first player name.
+      if ((prev[0] ?? '').trim().length > 0) return prev;
+      const next = [...prev];
+      next[0] = first;
+      return next;
+    });
+  }, [preferredName]);
 
   const handleStart = () => {
     const players = Array.from({ length: playerCount }, (_, i) => ({
