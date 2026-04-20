@@ -14,7 +14,6 @@ import { HappyBubble } from '../components/HappyBubble';
 import { GoldDieFace } from '../../AnimatedDice';
 import { GoldDiceButton } from '../../components/GoldDiceButton';
 import OperationCard from '../components/cards/OperationCard';
-import JokerCard from '../components/cards/JokerCard';
 import { initializeSfx, isSfxMuted, setSfxMuted } from '../audio/sfx';
 import { generateTutorialHand } from './generateTutorialHand';
 
@@ -1533,39 +1532,4 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   );
 }
 
-// ── Lesson-5 presentation helpers (kept local to this file — the tutorial
-//    owns its scratch canvas visuals, intentionally not sharing the game's
-//    Card components to avoid pulling the game state/hooks into the overlay). ──
-function L5Operand({ value }: { value: number }): React.ReactElement {
-  return (
-    <View
-      style={{
-        width: 62,
-        height: 78,
-        borderRadius: 14,
-        borderWidth: 2,
-        borderColor: '#60A5FA',
-        backgroundColor: '#EFF6FF',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <Text style={{ fontSize: 32, fontWeight: '900', color: '#1D4ED8' }}>{value}</Text>
-    </View>
-  );
-}
-
-function L5OpCard({ op, highlighted }: { op: '+' | '-' | 'x' | '÷'; highlighted: boolean }): React.ReactElement {
-  const card = { id: `l5-op-${op}`, type: 'operation' as const, operation: op === 'x' ? '*' : op === '÷' ? '/' : op };
-  return (
-    <View style={{ transform: highlighted ? [{ scale: 1.12 }] : undefined }}>
-      <OperationCard card={card as any} selected={highlighted} small />
-    </View>
-  );
-}
-
-function L5JokerCard({ label: _label }: { label: string }): React.ReactElement {
-  const card = { id: 'l5-joker', type: 'joker' as const };
-  return <JokerCard card={card as any} small />;
-}
 
