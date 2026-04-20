@@ -985,11 +985,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     engine.stepIndex === 0 &&
     (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
 
-  // L5Op → OperationCard.operation shape mapping. Matches what the real
-  // game's state produces: '*' for multiply, '/' for divide, raw for +/−.
-  const mapL5OpToOperation = (op: L5Op): '+' | '-' | '*' | '/' =>
-    op === 'x' ? '*' : op === '÷' ? '/' : op;
-
   const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
@@ -1225,8 +1220,8 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
                 card={{
                   id: 'tut-l5-show-op',
                   type: 'operation',
-                  operation: mapL5OpToOperation(l5SelectedOp),
-                } as any}
+                  operation: l5SelectedOp,
+                } satisfies Card}
               />
             </Animated.View>
           ) : null}

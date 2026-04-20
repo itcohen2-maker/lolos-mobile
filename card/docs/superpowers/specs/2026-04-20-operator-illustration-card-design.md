@@ -24,13 +24,13 @@ No new mockup visuals. No duplication of the `OperationCard` styling. The tutori
 
 **Wrapping:** `OperationCard` with `small={false}` (default) renders the underlying `Card` at 72×104. To reach the ≥120px spec, wrap in an `Animated.View` with `transform: [{ scale: 1.25 }]` → effective 90×130. No CSS/style edits to `OperationCard` or `Card` themselves.
 
-**Card data shape:** Identical to what the legacy `L5OpCard` produced:
+**Card data shape:**
 
 ```ts
-{ id: 'tut-l5-show-op', type: 'operation', operation: mapOp(l5SelectedOp) }
+{ id: 'tut-l5-show-op', type: 'operation', operation: l5SelectedOp }
 ```
 
-Where `mapOp('x') = '*'`, `mapOp('÷') = '/'`, otherwise identity. This matches the card type the real game uses internally.
+`L5Op = '+' | '-' | 'x' | '÷'` is identical to the game's `Operation` type — pass through directly. (An earlier draft of this spec called for mapping `'x' → '*'` and `'÷' → '/'`, but the real game's `OperationCard` renders `card.operation` as a literal string, so those glyphs would have drifted from what the learner sees in the equation's `?` slot and in real game cards.)
 
 ## State wiring
 
