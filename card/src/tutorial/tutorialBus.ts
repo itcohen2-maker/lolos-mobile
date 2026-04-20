@@ -52,6 +52,13 @@ export type UserEvent =
   | { kind: 'l5JokerPickedInModal'; op: '+' | '-' | 'x' | '÷' }
   | { kind: 'l5JokerPlaced'; op: '+' | '-' | 'x' | '÷' }
   | { kind: 'l5JokerFlowCompleted'; op: '+' | '-' | 'x' | '÷' }
+  /** Lesson 5c (solve-for-op) signals. `l5OpSolveCorrect` fires each time
+   *  the learner correctly confirms one of the two exercises; the final
+   *  `l5OpExercisesDone` fires after both are done and drives the step
+   *  outcome. `l5OpSolveWrong` fires on wrong-sign confirm for UI feedback. */
+  | { kind: 'l5OpSolveCorrect'; exerciseIdx: 0 | 1 }
+  | { kind: 'l5OpSolveWrong' }
+  | { kind: 'l5OpExercisesDone' }
   /** Optional fractions tutorial: learner tapped Continue / Ack. */
   | { kind: 'fracLessonAck' }
   /** Fraction attack successfully played (tutorial validates before dispatch). */
@@ -77,6 +84,9 @@ let currentFanLength = 0;
 
 let emphasizedCardId: string | null = null;
 const emphasizedListeners = new Set<(id: string | null) => void>();
+
+let opButtonPulse = 0;
+const opButtonPulseListeners = new Set<(v: number) => void>();
 
 /** Lesson 4 dynamic dice config, set by InteractiveTutorialScreen before
  *  the bot demo runs, read by lesson-04-equation via DemoApi. */
@@ -172,6 +182,18 @@ export const tutorialBus = {
     return () => { emphasizedListeners.delete(fn); };
   },
 
+  setOpButtonPulse(v: number): void {
+    opButtonPulse = v;
+    opButtonPulseListeners.forEach((l) => l(v));
+  },
+  getOpButtonPulse(): number {
+    return opButtonPulse;
+  },
+  subscribeOpButtonPulse(fn: (v: number) => void): () => void {
+    opButtonPulseListeners.add(fn);
+    return () => { opButtonPulseListeners.delete(fn); };
+  },
+
   setL5Config(cfg: { a: number; b: number }): void {
     l5Config = cfg;
   },
@@ -260,5 +282,7 @@ export const tutorialBus = {
     lastEquationResult = null;
     layouts.confirmEqBtn = null;
     layouts.playCardsBtn = null;
+    opButtonPulse = 0;
+    opButtonPulseListeners.clear();
   },
 };

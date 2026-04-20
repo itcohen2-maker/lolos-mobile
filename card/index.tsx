@@ -4701,6 +4701,13 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const [l5UiTick, setL5UiTick] = useState(0);
   useEffect(() => tutorialBus.subscribeL5Ui(() => setL5UiTick((n) => n + 1)), []);
 
+  // Tutorial op-button pulse: driven by tutorialBus so InteractiveTutorialScreen
+  // can animate the empty operator slot without prop-drilling.
+  const [opPulse, setOpPulse] = useState(tutorialBus.getOpButtonPulse());
+  useEffect(() => {
+    return tutorialBus.subscribeOpButtonPulse(setOpPulse);
+  }, []);
+
   // Drop-in animation: one Animated.Value per dice (0=hidden, 1=visible)
   const dropAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const eqRowAnim = useRef(new Animated.Value(0)).current;
@@ -5308,6 +5315,20 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             {normalizedDisplayOp || '⬦'}
           </Text>
         )}
+        {opPulse > 0 && state.isTutorial ? (
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: -4, left: -4, right: -4, bottom: -4,
+              borderRadius: 16,
+              borderWidth: 3,
+              borderColor: '#FCD34D',
+              opacity: opPulse,
+              transform: [{ scale: 1 + opPulse * 0.08 }],
+            }}
+          />
+        ) : null}
       </TouchableOpacity>
     );
   };
@@ -10321,7 +10342,12 @@ function TurnTransition() {
         }}
       />
 
-      {cp && !state.isTutorial && (!state.botConfig || nameModalOpen) && (
+      {/* Name modal suppressed in vs-bot AND online — users enter their name once
+          in ChoiceScreen/Lobby. Pass-and-play still auto-prompts each player.
+          The chip in the header still opens the modal manually via nameModalOpen. */}
+      {cp && !state.isTutorial && (
+        (!state.botConfig && !mp?.gameOverride) || nameModalOpen
+      ) && (
         <PlayerNameModal
           initialName={(editingPlayerIndex != null ? state.players[editingPlayerIndex]?.name : cp.name) ?? cp.name}
           playerSlot={(editingPlayerIndex ?? currentIdx) + 1}
@@ -12582,8 +12608,9 @@ function GameScreen() {
         </View>
       )}
 
-      {/* בחר קלפים — מופיע לפני בחירת קלף; אחרי בחירה יופיע "בחרתי" */}
-      {state.phase === 'solved' && !state.hasPlayedCards && state.stagedCards.length === 0 && !l5GuidedTutorial && (
+      {/* ערוך תרגיל — חוזר לשלב building לעריכת המשוואה. זמין כל עוד לא הנחת קלפים
+          (גם אם כבר הצגת קלפים; REVERT_TO_BUILDING מאפס את stagedCards). */}
+      {state.phase === 'solved' && !state.hasPlayedCards && !l5GuidedTutorial && (
         <View
           style={[
             StyleSheet.absoluteFillObject,

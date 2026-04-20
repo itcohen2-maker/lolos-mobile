@@ -303,6 +303,16 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
   const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' | 'placeSign'>('tapJoker');
 
+  // ── Lesson 5c (solve-for-op) state ──
+  // Two pre-generated exercises; learner must pick the sign that makes each
+  // equation true and press "Confirm". `l5ExIndex` is the 0-based pointer
+  // (2 = both solved, outcome fires). `l5ExWrongTick` triggers the
+  // already-existing shake animation when the learner confirms a wrong sign.
+  type L5Ex = { a: number; b: number; op: L5Op; result: number };
+  const [l5Exercises, setL5Exercises] = useState<L5Ex[]>([]);
+  const [l5ExIndex, setL5ExIndex] = useState<0 | 1 | 2>(0);
+  const [l5ExWrongTick, setL5ExWrongTick] = useState(0);
+
   // Curated (a, b) pairs where all 4 operations yield integers. Pick one at
   // random when lesson 5 starts so the learner sees different numbers each
   // run. `a >= b >= 2` and `a % b === 0` guarantees `a / b` is a whole number
@@ -322,6 +332,19 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     if (op === 'x') return a * b;
     if (op === '÷') return b === 0 ? null : a / b;
     return null;
+  };
+  // Generate two lesson-5c exercises with different ops so the learner
+  // doesn't get the same sign twice. Pairs are sampled from L5_PAIRS; for
+  // each pair the chosen op + a/b are used to pre-compute the target result
+  // (always an integer because L5_PAIRS is curated).
+  const generateL5Exercises = (): L5Ex[] => {
+    const allOps: L5Op[] = ['+', '-', 'x', '÷'];
+    const ops = [...allOps].sort(() => Math.random() - 0.5).slice(0, 2);
+    return ops.map((op) => {
+      const { a, b } = pickL5Pair();
+      const result = computeL5Result(a, b, op)!;
+      return { a, b, op, result };
+    });
   };
 
   // ── Start the engine on mount + ensure SFX are loaded (StartScreen
@@ -868,21 +891,30 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     setL5JokerOpen(false);
     setL5CycledSigns(new Set());
     setL5PendingJokerOp(null);
+    setL5Exercises(generateL5Exercises());
+    setL5ExIndex(0);
     tutorialBus.setL5Config(cfg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex]);
 
-  // ── Between lesson-5 steps (cycle → joker), reset only the sub-state that
-  //    step 5b needs fresh: clear the current op so the slot shows `?` again
-  //    and clear any pending joker pick from step 5a state. Keeps l5Config so
-  //    the same numbers carry over. ──
+  // ── Between lesson-5 steps (cycle → joker → solve), reset sub-state so
+  //    each step starts on a clean slate (`?` slot empty, modal closed,
+  //    no pending joker pick). `l5Config` and `l5Exercises` stay — they
+  //    were set on lesson entry. ──
   useEffect(() => {
     if (engine.lessonIndex !== 4) return;
-    if (engine.stepIndex !== 1) return; // only on step 5b entry
     if (engine.phase !== 'bot-demo') return;
-    setL5SelectedOp(null);
-    setL5JokerOpen(false);
-    setL5PendingJokerOp(null);
+    if (engine.stepIndex === 1 || engine.stepIndex === 2) {
+      setL5SelectedOp(null);
+      setL5JokerOpen(false);
+      setL5PendingJokerOp(null);
+    }
+    if (engine.stepIndex === 2) {
+      // Step 5c — rearm the pair of exercises + index at the top of the run.
+      setL5Exercises(generateL5Exercises());
+      setL5ExIndex(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
   // ── Lesson 5a: when the learner cycles the `?` slot, publish the matching
@@ -913,7 +945,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   //    the slot becomes filled). Native driver can't handle that churn safely
   //    — keeping the animation on the JS side avoids a native-graph crash. ──
   useEffect(() => {
-    if (engine.lessonIndex !== 4 || l5SelectedOp !== null) {
+    if (engine.lessonIndex !== 4) {
       l5SlotPulse.setValue(0);
       return;
     }
@@ -924,8 +956,15 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       ]),
     );
     loop.start();
-    return () => loop.stop();
-  }, [engine.lessonIndex, l5SelectedOp, l5SlotPulse]);
+    const sub = l5SlotPulse.addListener(({ value }) => {
+      tutorialBus.setOpButtonPulse(value);
+    });
+    return () => {
+      loop.stop();
+      l5SlotPulse.removeListener(sub);
+      tutorialBus.setOpButtonPulse(0);
+    };
+  }, [engine.lessonIndex, l5SlotPulse]);
 
   // ── Celebrate timer (longer if the step provides a custom message
   //    that the learner actually needs time to read). Dice lesson (idx 2)
@@ -1185,6 +1224,230 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       {/* Lesson 5 runs on the real game UI (EquationBuilder + hand) —
           the legacy scratch canvas was removed. Sign cycling is wired via
           index.tsx:cycleOp and emits `l5AllSignsCycled` / joker events. */}
+
+      {/* Lesson 5c (solve-for-op) — a self-contained puzzle: two exercises
+          of `[a] [?] [b] = [result]` where the learner picks the sign that
+          makes the equation true and confirms. Covers the real game UI with
+          a dark backdrop so only the puzzle is visible. */}
+      {isOpCycleLesson && engine.stepIndex === 2 && l5Exercises.length === 2 && l5ExIndex < 2 ? (() => {
+        const current = l5Exercises[l5ExIndex];
+        if (!current) return null;
+        const displayOp: L5Op | null = l5PendingJokerOp ?? l5SelectedOp;
+        const liveResult = computeL5Result(current.a, current.b, displayOp);
+        const confirmEnabled = displayOp !== null;
+        const isCorrect = displayOp !== null && computeL5Result(current.a, current.b, displayOp) === current.result;
+        const onConfirm = () => {
+          if (!confirmEnabled) return;
+          if (isCorrect) {
+            const idx = l5ExIndex as 0 | 1;
+            tutorialBus.emitUserEvent({ kind: 'l5OpSolveCorrect', exerciseIdx: idx });
+            if (idx === 0) {
+              // Advance to exercise 2 with a clean slot.
+              setL5ExIndex(1);
+              setL5SelectedOp(null);
+              setL5PendingJokerOp(null);
+              setL5JokerOpen(false);
+            } else {
+              // Both done — fire the step outcome.
+              setL5ExIndex(2);
+              tutorialBus.emitUserEvent({ kind: 'l5OpExercisesDone' });
+            }
+          } else {
+            tutorialBus.emitUserEvent({ kind: 'l5OpSolveWrong' });
+            setL5ExWrongTick((n) => n + 1);
+          }
+        };
+        const onSlotTap = () => {
+          // If a joker sign is pending, placing it in the slot commits it.
+          if (l5PendingJokerOp !== null) {
+            setL5SelectedOp(l5PendingJokerOp);
+            setL5PendingJokerOp(null);
+            return;
+          }
+          // Otherwise cycle through the four signs.
+          const cur = l5SelectedOp;
+          const idx = cur === null ? -1 : L5_CYCLE.indexOf(cur);
+          const next = L5_CYCLE[(idx + 1) % L5_CYCLE.length];
+          setL5SelectedOp(next);
+        };
+        const onOpCardTap = (op: L5Op) => {
+          setL5SelectedOp(op);
+          setL5PendingJokerOp(null);
+        };
+        return (
+          <>
+            {/* Dark cover over the real game body. */}
+            <View
+              pointerEvents="auto"
+              style={{
+                position: 'absolute',
+                top: HEADER_COL_H,
+                left: -10,
+                right: -10,
+                bottom: -60,
+                backgroundColor: '#0a1628',
+                zIndex: 9000,
+              }}
+            />
+            {/* Exercise counter (e.g. "תרגיל 1 מתוך 2"). */}
+            <View pointerEvents="none" style={{ position: 'absolute', top: HEADER_COL_H + 28, left: 0, right: 0, alignItems: 'center', zIndex: 9100 }}>
+              <Text style={{ color: '#CBD5E1', fontSize: 13, fontWeight: '700' }}>
+                {locale === 'he' ? `תרגיל ${l5ExIndex + 1} מתוך 2` : `Exercise ${l5ExIndex + 1} of 2`}
+              </Text>
+            </View>
+            {/* Equation row: a [?] b = result */}
+            <View
+              pointerEvents="box-none"
+              style={{ position: 'absolute', top: HEADER_COL_H + 70, left: 0, right: 0, alignItems: 'center', zIndex: 9100 }}
+            >
+              <View
+                style={{
+                  flexDirection: 'row', direction: 'ltr', alignItems: 'center', gap: 14,
+                  paddingVertical: 18, paddingHorizontal: 24, borderRadius: 20,
+                  backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+                }}
+              >
+                <L5cOperand value={current.a} />
+                <TouchableOpacity activeOpacity={0.85} onPress={onSlotTap}>
+                  <View
+                    style={{
+                      width: 62, height: 78, borderRadius: 14, borderWidth: 3,
+                      borderColor: displayOp ? '#F97316' : '#FDE68A',
+                      backgroundColor: displayOp ? '#FFF7ED' : 'rgba(253,230,138,0.12)',
+                      alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ fontSize: 34, fontWeight: '900', color: displayOp ? '#EA580C' : '#FDE68A' }}>
+                      {displayOp ?? '?'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <L5cOperand value={current.b} />
+                <Text style={{ fontSize: 32, fontWeight: '900', color: '#FDE68A' }}>=</Text>
+                <View
+                  style={{
+                    minWidth: 62, height: 78, paddingHorizontal: 14, borderRadius: 14, borderWidth: 2,
+                    borderColor: '#34D399', backgroundColor: 'rgba(16,185,129,0.12)',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ fontSize: 32, fontWeight: '900', color: '#A7F3D0' }}>
+                    {String(current.result)}
+                  </Text>
+                </View>
+              </View>
+              {/* Live-result preview — shows what the current sign produces vs target. */}
+              {displayOp !== null && liveResult !== null && liveResult !== current.result ? (
+                <Text style={{ marginTop: 10, color: '#FCA5A5', fontSize: 14, fontWeight: '700' }}>
+                  {locale === 'he' ? `עם הסימן הזה: ${liveResult}` : `With this sign: ${liveResult}`}
+                </Text>
+              ) : null}
+            </View>
+            {/* Op cards row + joker (all tappable). */}
+            <View
+              pointerEvents="box-none"
+              style={{ position: 'absolute', top: HEADER_COL_H + 260, left: 0, right: 0, alignItems: 'center', zIndex: 9100 }}
+            >
+              <View style={{ flexDirection: 'row', direction: 'ltr', gap: 12, alignItems: 'center' }}>
+                {(['+', '-', 'x', '÷'] as L5Op[]).map((op) => (
+                  <TouchableOpacity key={op} activeOpacity={0.85} onPress={() => onOpCardTap(op)}>
+                    <View
+                      style={{
+                        width: 56, height: 72, borderRadius: 12, borderWidth: 2,
+                        borderColor: displayOp === op ? '#F59E0B' : '#F97316',
+                        backgroundColor: '#FFF7ED', alignItems: 'center', justifyContent: 'center',
+                        transform: displayOp === op ? [{ scale: 1.08 }] : undefined,
+                      }}
+                    >
+                      <Text style={{ fontSize: 28, fontWeight: '800', color: '#EA580C' }}>{op}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity activeOpacity={0.85} onPress={() => setL5JokerOpen(true)}>
+                  <View
+                    style={{
+                      width: 56, height: 72, borderRadius: 12, borderWidth: 2, borderColor: '#EAB308',
+                      backgroundColor: '#FEFCE8', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ fontSize: 20, color: '#CA8A04', fontWeight: '900' }}>★</Text>
+                    <Text style={{ fontSize: 10, color: '#CA8A04', fontWeight: '800', marginTop: 2 }}>
+                      {t('tutorial.l5.jokerLabel')}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+            </View>
+            {/* Confirm button. */}
+            <View pointerEvents="box-none" style={{ position: 'absolute', top: HEADER_COL_H + 370, left: 0, right: 0, alignItems: 'center', zIndex: 9100 }}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={onConfirm}
+                disabled={!confirmEnabled}
+                style={{
+                  paddingVertical: 14, paddingHorizontal: 32, borderRadius: 16,
+                  backgroundColor: confirmEnabled ? '#F97316' : '#475569',
+                  borderWidth: 2, borderColor: confirmEnabled ? '#FDE68A' : '#64748B',
+                  opacity: confirmEnabled ? 1 : 0.7,
+                }}
+              >
+                <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '900' }}>
+                  {t('game.buildingEquationNext')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {/* Joker modal — reuse the same modal body as lesson 5b. Picking
+                a sign sets `l5PendingJokerOp`; the learner then taps the slot
+                to place it (or taps an op card directly). */}
+            {l5JokerOpen ? (
+              <View
+                pointerEvents="auto"
+                style={{
+                  position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                  backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center',
+                  zIndex: 9500,
+                }}
+              >
+                <View
+                  style={{
+                    backgroundColor: '#0F172A', borderRadius: 22, paddingVertical: 22, paddingHorizontal: 26,
+                    borderWidth: 2, borderColor: '#EAB308', minWidth: 260,
+                  }}
+                >
+                  <Text style={{ color: '#FEF9C3', fontSize: 18, fontWeight: '900', textAlign: 'center', marginBottom: 16 }}>
+                    {t('tutorial.l5.jokerPickTitle')}
+                  </Text>
+                  <View style={{ flexDirection: 'row', direction: 'ltr', gap: 10, justifyContent: 'center' }}>
+                    {(['+', '-', 'x', '÷'] as L5Op[]).map((op) => (
+                      <TouchableOpacity
+                        key={op}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setL5JokerOpen(false);
+                          setL5PendingJokerOp(op);
+                          tutorialBus.emitUserEvent({ kind: 'opSelected', op, via: 'joker' });
+                        }}
+                        style={{
+                          width: 54, height: 54, borderRadius: 12, backgroundColor: '#FFF7ED',
+                          borderWidth: 2, borderColor: '#F97316', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        <Text style={{ fontSize: 26, color: '#EA580C', fontWeight: '900' }}>{op}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setL5JokerOpen(false)}
+                    style={{ marginTop: 18, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 18, borderRadius: 10, backgroundColor: 'rgba(71,85,105,0.92)' }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '800' }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
+          </>
+        );
+      })() : null}
 
       {/* The game's red "יציאה" button at top-left is uncovered by design;
           its onPress emits tutorialBus.requestExit() to leave the tutorial. */}
