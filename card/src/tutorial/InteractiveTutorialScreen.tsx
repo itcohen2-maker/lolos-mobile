@@ -13,7 +13,6 @@ import { useLocale } from '../i18n/LocaleContext';
 import { HappyBubble } from '../components/HappyBubble';
 import { GoldDieFace } from '../../AnimatedDice';
 import { GoldDiceButton } from '../../components/GoldDiceButton';
-import OperationCard from '../components/cards/OperationCard';
 import { initializeSfx, isSfxMuted, setSfxMuted } from '../audio/sfx';
 import { generateTutorialHand } from './generateTutorialHand';
 
@@ -302,13 +301,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   // Sign picked in the joker modal but not yet placed in the slot.
   const [l5PendingJokerOp, setL5PendingJokerOp] = useState<L5Op | null>(null);
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
-  // Card swap animation value. 0 = hidden (opacity 0, scale 0.85);
-  // 1 = resting (opacity 1, scale 1.25). Driven by the useEffect that
-  // watches l5SelectedOp below.
-  const cardAnim = useRef(new Animated.Value(0)).current;
-  // Tracks the previous l5SelectedOp so the effect can distinguish first
-  // appearance (null → op) from a swap (op → different op).
-  const prevL5OpRef = useRef<L5Op | null>(null);
   const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' | 'placeSign'>('tapJoker');
 
   // Curated (a, b) pairs where all 4 operations yield integers. Pick one at
@@ -853,20 +845,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     setL5PendingJokerOp(null);
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
-  // ── Lesson 5a: listen for cycleOp → opSelected events from index.tsx so the
-  //    local `l5SelectedOp` state reflects the current operator in the `?`
-  //    slot. This wire-up was previously missing — without it, the illustration
-  //    card never appears (gate is `l5SelectedOp !== null`). The reducer-level
-  //    tracking in index.tsx owns truth; we mirror it here for rendering. ──
-  useEffect(() => {
-    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) return;
-    return tutorialBus.subscribeUserEvent((evt) => {
-      if (evt.kind === 'opSelected' && evt.via === 'cycle') {
-        setL5SelectedOp(evt.op);
-      }
-    });
-  }, [engine.lessonIndex, engine.stepIndex]);
-
   // ── Lesson 5: pulse the `?` slot whenever nothing is selected yet so the
   //    learner's eye is drawn to the interactive spot. Stops the instant an
   //    op is chosen. useNativeDriver is intentionally FALSE: the pulse feeds
@@ -887,38 +865,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     loop.start();
     return () => loop.stop();
   }, [engine.lessonIndex, l5SelectedOp, l5SlotPulse]);
-
-  // Lesson 5a card animation — drives `cardAnim` when the selected operator
-  // changes. First appearance (null → op): fade/scale in over 180ms.
-  // Subsequent swap (op → different op): shrink/fade out 120ms, then back
-  // in 180ms, creating a quick "flip" feel between signs.
-  useEffect(() => {
-    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) {
-      cardAnim.setValue(0);
-      prevL5OpRef.current = null;
-      return;
-    }
-    if (l5SelectedOp === null) {
-      cardAnim.setValue(0);
-      prevL5OpRef.current = null;
-      return;
-    }
-    if (prevL5OpRef.current === null) {
-      cardAnim.stopAnimation();
-      Animated.timing(cardAnim, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }).start();
-    } else if (prevL5OpRef.current !== l5SelectedOp) {
-      cardAnim.stopAnimation();
-      Animated.sequence([
-        Animated.timing(cardAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
-        Animated.timing(cardAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
-      ]).start();
-    }
-    prevL5OpRef.current = l5SelectedOp;
-  }, [engine.lessonIndex, engine.stepIndex, l5SelectedOp, cardAnim]);
 
   // ── Celebrate timer (longer if the step provides a custom message
   //    that the learner actually needs time to read). Dice lesson (idx 2)
@@ -991,14 +937,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const isDiceLesson = engine.lessonIndex === 2;
   const isEquationLesson = engine.lessonIndex === 3;
   const isOpCycleLesson = engine.lessonIndex === 4;
-  // Lesson 5a — show a full OperationCard at fan height mirroring the
-  // operator currently selected in the equation's `?` slot. Visible during
-  // bot-demo, await-mimic, and celebrate phases of cycle-signs.
-  const showOpIllustration =
-    engine.lessonIndex === 4 &&
-    engine.stepIndex === 0 &&
-    (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
-
   const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
@@ -1189,58 +1127,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
 
       {/* The game's red "יציאה" button at top-left is uncovered by design;
           its onPress emits tutorialBus.requestExit() to leave the tutorial. */}
-
-      {/* Lesson 5a — illustration card at fan height + opaque cover hiding the
-          real hand. The cover is full-width up to FAN_VISUAL_TOP_FROM_BOTTOM,
-          painted in the game's background color so the fan is invisible. The
-          illustration card sits centered horizontally in the middle of the
-          fan strip band. */}
-      {showOpIllustration ? (
-        <>
-          <View
-            pointerEvents="auto"
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: FAN_VISUAL_TOP_FROM_BOTTOM,
-              backgroundColor: '#0a1628',
-              zIndex: 9050,
-            }}
-          />
-          {l5SelectedOp !== null ? (
-            <Animated.View
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: FAN_BOTTOM + (FAN_STRIP_H - 130) / 2,
-                alignItems: 'center',
-                zIndex: 9100,
-                opacity: cardAnim,
-                transform: [
-                  {
-                    scale: cardAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.85, 1.25],
-                    }),
-                  },
-                ],
-              }}
-            >
-              <OperationCard
-                card={{
-                  id: 'tut-l5-show-op',
-                  type: 'operation',
-                  operation: l5SelectedOp,
-                } satisfies Card}
-              />
-            </Animated.View>
-          ) : null}
-        </>
-      ) : null}
 
       {/* Exit + Skip + Back buttons — top-right. Exit always available so
           learners (or QA) can leave the tutorial at any point regardless of
