@@ -765,11 +765,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     }
     if (gameState.phase === 'pre-roll' && !l5LessonHandRiggedRef.current) {
       l5LessonHandRiggedRef.current = true;
-      const rolled = rollThree();
-      gameDispatch({ type: 'ROLL_DICE', values: { die1: rolled.d1, die2: rolled.d2, die3: rolled.d3 } });
-      const target = rolled.d1 + rolled.d2;
+      // L5a pedagogy: fixed dice so each op produces a visually distinct result
+      // (6+6=12, 6−6=0, 6×6=36, 6÷6=1). Not rolled randomly.
+      const FIXED_L5_DICE = { d1: 6, d2: 6, d3: 8 };
+      gameDispatch({ type: 'ROLL_DICE', values: { die1: FIXED_L5_DICE.d1, die2: FIXED_L5_DICE.d2, die3: FIXED_L5_DICE.d3 } });
       const ts = Date.now();
-      void target; void rolled;
       const playerHand = [
         { id: `tut-l5-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
         { id: `tut-l5-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
@@ -785,6 +785,18 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5-bot-joker-${ts}`, type: 'joker' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+      // Pre-fill equation slots 1 and 2 with die indices 0 and 1 (d1=6, d2=6),
+      // via the tutorialBus eq* commands that index.tsx listens to. The operator
+      // slot stays null and keeps pulsing until the learner cycles it. d3 stays
+      // unused, visible as a spare die above the equation.
+      // Small rAF delay: the fan-demo bus fires synchronously, but the game
+      // reducer needs the ROLL_DICE and TUTORIAL_SET_HANDS actions to land
+      // first. A single microtask ensures the picks target the freshly-rigged
+      // equation builder.
+      queueMicrotask(() => {
+        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
+        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
+      });
     }
   }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
 
