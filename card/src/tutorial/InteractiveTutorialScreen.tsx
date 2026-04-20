@@ -303,7 +303,9 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   // Sign picked in the joker modal but not yet placed in the slot.
   const [l5PendingJokerOp, setL5PendingJokerOp] = useState<L5Op | null>(null);
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
-  // Cardswap animation value. 0 = hidden/small, 1 = resting (scale 1.25).
+  // Card swap animation value. 0 = hidden (opacity 0, scale 0.85);
+  // 1 = resting (opacity 1, scale 1.25). Driven by the useEffect that
+  // watches l5SelectedOp below.
   const cardAnim = useRef(new Animated.Value(0)).current;
   // Tracks the previous l5SelectedOp so the effect can distinguish first
   // appearance (null → op) from a swap (op → different op).
@@ -889,12 +891,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       return;
     }
     if (prevL5OpRef.current === null) {
+      cardAnim.stopAnimation();
       Animated.timing(cardAnim, {
         toValue: 1,
         duration: 180,
         useNativeDriver: true,
       }).start();
     } else if (prevL5OpRef.current !== l5SelectedOp) {
+      cardAnim.stopAnimation();
       Animated.sequence([
         Animated.timing(cardAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
         Animated.timing(cardAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
