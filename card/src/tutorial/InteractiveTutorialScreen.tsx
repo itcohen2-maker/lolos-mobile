@@ -304,9 +304,10 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const [l5PendingJokerOp, setL5PendingJokerOp] = useState<L5Op | null>(null);
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
   // Cardswap animation value. 0 = hidden/small, 1 = resting (scale 1.25).
-  // Initialized at 1 — Task 2 changes this to 0 when the full animation
-  // sequence is wired up.
-  const cardAnim = useRef(new Animated.Value(1)).current;
+  const cardAnim = useRef(new Animated.Value(0)).current;
+  // Tracks the previous l5SelectedOp so the effect can distinguish first
+  // appearance (null → op) from a swap (op → different op).
+  const prevL5OpRef = useRef<L5Op | null>(null);
   const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' | 'placeSign'>('tapJoker');
 
   // Curated (a, b) pairs where all 4 operations yield integers. Pick one at
@@ -871,6 +872,36 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     loop.start();
     return () => loop.stop();
   }, [engine.lessonIndex, l5SelectedOp, l5SlotPulse]);
+
+  // Lesson 5a card animation — drives `cardAnim` when the selected operator
+  // changes. First appearance (null → op): fade/scale in over 180ms.
+  // Subsequent swap (op → different op): shrink/fade out 120ms, then back
+  // in 180ms, creating a quick "flip" feel between signs.
+  useEffect(() => {
+    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) {
+      cardAnim.setValue(0);
+      prevL5OpRef.current = null;
+      return;
+    }
+    if (l5SelectedOp === null) {
+      cardAnim.setValue(0);
+      prevL5OpRef.current = null;
+      return;
+    }
+    if (prevL5OpRef.current === null) {
+      Animated.timing(cardAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+    } else if (prevL5OpRef.current !== l5SelectedOp) {
+      Animated.sequence([
+        Animated.timing(cardAnim, { toValue: 0, duration: 120, useNativeDriver: true }),
+        Animated.timing(cardAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
+      ]).start();
+    }
+    prevL5OpRef.current = l5SelectedOp;
+  }, [engine.lessonIndex, engine.stepIndex, l5SelectedOp, cardAnim]);
 
   // ── Celebrate timer (longer if the step provides a custom message
   //    that the learner actually needs time to read). Dice lesson (idx 2)
