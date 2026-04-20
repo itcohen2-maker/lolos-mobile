@@ -556,16 +556,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     return () => tutorialBus.setFracGuidedMode(false);
   }, [engine.lessonIndex, engine.phase]);
 
-  // Step 5a: signs-only sandbox — hide the hand; step 5b needs the joker in hand.
-  useEffect(() => {
-    const hideFan =
-      engine.lessonIndex === 4 &&
-      engine.stepIndex === 0 &&
-      (engine.phase === 'bot-demo' || engine.phase === 'await-mimic');
-    tutorialBus.setL5HideFan(hideFan);
-    return () => tutorialBus.setL5HideFan(false);
-  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
-
   useEffect(() => {
     const isL5bAwait = engine.lessonIndex === 4 && engine.stepIndex === 1 && engine.phase === 'await-mimic';
     if (!isL5bAwait) return;
@@ -815,16 +805,23 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // the second call runs. Without the gap, hDice reads stale `dice1`
     // and the second pick clobbers the first — result: only one number
     // lands in the equation.
+    // Clear any stale dice/op state from a prior lesson before we place
+    // our picks. Without this, stray dice3/op values can leak into the
+    // equation when the learner re-enters lesson 5 via skip.
+    const timerReset = setTimeout(() => {
+      tutorialBus.emitFanDemo({ kind: 'eqReset' });
+    }, 20);
     const timer1 = setTimeout(() => {
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
-    }, 50);
+    }, 120);
     const timer2 = setTimeout(() => {
       // Only d1 and d2 go into the equation; d3 stays as an unplaced
       // dice button at top (learner doesn't need it in L5a — the lesson
       // is about cycling a single operator).
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-    }, 200);
+    }, 280);
     return () => {
+      clearTimeout(timerReset);
       clearTimeout(timer1);
       clearTimeout(timer2);
     };
