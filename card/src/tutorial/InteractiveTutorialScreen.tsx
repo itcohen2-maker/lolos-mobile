@@ -953,7 +953,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
 
   // L5Op → OperationCard.operation shape mapping. Matches what the real
   // game's state produces: '*' for multiply, '/' for divide, raw for +/−.
-  const mapL5OpToOperation = (op: L5Op): string =>
+  const mapL5OpToOperation = (op: L5Op): '+' | '-' | '*' | '/' =>
     op === 'x' ? '*' : op === '÷' ? '/' : op;
 
   const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
