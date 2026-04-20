@@ -769,19 +769,20 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       gameDispatch({ type: 'ROLL_DICE', values: { die1: rolled.d1, die2: rolled.d2, die3: rolled.d3 } });
       const target = rolled.d1 + rolled.d2;
       const ts = Date.now();
+      void target; void rolled;
       const playerHand = [
+        { id: `tut-l5-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+        { id: `tut-l5-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+        { id: `tut-l5-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+        { id: `tut-l5-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
         { id: `tut-l5-joker-${ts}`, type: 'joker' as const },
-        { id: `tut-l5-num-a-${ts}`, type: 'number' as const, value: target },
-        { id: `tut-l5-num-b-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d2 + rolled.d3) },
-        { id: `tut-l5-num-c-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d1 + rolled.d3) },
-        { id: `tut-l5-num-d-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d1 + rolled.d2 + rolled.d3) },
       ];
       const botHand = [
-        { id: `tut-l5-bot-num-a-${ts}`, type: 'number' as const, value: target },
-        { id: `tut-l5-bot-num-b-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d2 + rolled.d3) },
-        { id: `tut-l5-bot-num-c-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d1 + rolled.d3) },
-        { id: `tut-l5-bot-num-d-${ts}`, type: 'number' as const, value: Math.max(1, rolled.d1 + rolled.d2 + rolled.d3) },
-        { id: `tut-l5-bot-num-e-${ts}`, type: 'number' as const, value: target + 1 },
+        { id: `tut-l5-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+        { id: `tut-l5-bot-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+        { id: `tut-l5-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+        { id: `tut-l5-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
+        { id: `tut-l5-bot-joker-${ts}`, type: 'joker' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
     }
