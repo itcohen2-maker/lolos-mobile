@@ -765,7 +765,12 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       gameDispatch({ type: 'BEGIN_TURN' });
       return;
     }
-    if (gameState.phase === 'pre-roll' && !l5LessonHandRiggedRef.current) {
+    // Rig regardless of current gameState.phase — entering lesson 5 from any
+    // prior lesson/state (including `solved` after L4, or mid-`building` from
+    // a GO_BACK) should rebuild the L5 hand + dice. ROLL_DICE in tutorial
+    // mode bypasses its own phase gate (see index.tsx reducer). TUTORIAL_SET_HANDS
+    // has no phase restriction. Run the rigging once per lesson entry.
+    if (!l5LessonHandRiggedRef.current) {
       l5LessonHandRiggedRef.current = true;
       // L5a pedagogy: fixed dice so each op produces a visually distinct result
       // (6+6=12, 6−6=0, 6×6=36, 6÷6=1). Not rolled randomly.
