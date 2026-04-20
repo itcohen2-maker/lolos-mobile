@@ -5164,12 +5164,12 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     borderColor: withAlpha(timerColor, 0.72),
     backgroundColor: withAlpha(timerColor, 0.16),
   } : null;
-  const equalsColor = timerColor ?? '#FFD700';
+  const equalsColor = timerColor ?? '#7C3AED';
   const resultBoxDynamic = (!hasError && !ok && timerColor) ? {
     borderColor: withAlpha(timerColor, 0.82),
     backgroundColor: withAlpha(timerColor, 0.3),
   } : null;
-  const resultTextColor = ok ? '#FFF' : (timerColor ?? '#FFD700');
+  const resultTextColor = ok ? '#FFF' : (timerColor ?? '#7C3AED');
 
   // ── Render helpers ──
   const renderDiceSlot = (slotValue: number | null, slotNum: 1 | 2 | 3) => (
@@ -5590,10 +5590,10 @@ const eqS = StyleSheet.create({
   opBtnFilled: { backgroundColor: '#F9A825', ...Platform.select({ ios: { shadowColor: 'rgba(249,168,37,0.3)', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 6 }, android: { elevation: 4 } }) },
   opBtnEmptyTxt: { fontSize: 26, fontWeight: '800', color: '#F9A825', textAlign: 'center' as const },
   opBtnFilledTxt: { fontSize: 28, fontWeight: Platform.OS === 'android' ? '800' : '900', color: '#FFFFFF', textAlign: 'center' as const, includeFontPadding: false, lineHeight: 32 },
-  eqEquals: { fontSize: 24, fontWeight: '800', color: '#FFD700', marginHorizontal: 2 },
-  resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,215,0,0.15)', backgroundColor: 'rgba(255,215,0,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  resultVal: { fontSize: 26, fontWeight: '800', color: '#FFD700' },
-  resultPlaceholder: { fontSize: 26, fontWeight: '800', color: 'rgba(255,215,0,0.25)' },
+  eqEquals: { fontSize: 24, fontWeight: '800', color: '#7C3AED', marginHorizontal: 2 },
+  resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(124,58,237,0.15)', backgroundColor: 'rgba(124,58,237,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  resultVal: { fontSize: 26, fontWeight: '800', color: '#7C3AED' },
+  resultPlaceholder: { fontSize: 26, fontWeight: '800', color: 'rgba(124,58,237,0.25)' },
   resultError: { fontSize: 20, fontWeight: '900', color: '#EA4335' },
   hint: { color: '#6B7280', fontSize: 12, textAlign: 'center' },
 });
