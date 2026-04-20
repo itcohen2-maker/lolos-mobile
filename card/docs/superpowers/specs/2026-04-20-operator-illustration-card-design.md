@@ -22,10 +22,7 @@ No new mockup visuals. No duplication of the `OperationCard` styling. The tutori
 
 **Rendered component:** `OperationCard` from `src/components/cards/OperationCard.tsx` — unchanged.
 
-**Wrapping:** A `View` sized to present the card at ≥120px tall (target 130px). Options:
-
-- Use `OperationCard` with `small={false}` (default) and verify natural rendered height meets ≥120px. If the game's default is smaller, wrap in an `Animated.View` with `transform: [{ scale: 1.4 }]` (or similar ratio) until the rendered height is in the 120–140px band.
-- No CSS/style edits to `OperationCard` itself.
+**Wrapping:** `OperationCard` with `small={false}` (default) renders the underlying `Card` at 72×104. To reach the ≥120px spec, wrap in an `Animated.View` with `transform: [{ scale: 1.25 }]` → effective 90×130. No CSS/style edits to `OperationCard` or `Card` themselves.
 
 **Card data shape:** Identical to what the legacy `L5OpCard` produced:
 
@@ -57,10 +54,10 @@ The illustration stays visible during `celebrate` so the learner sees the last-c
 
 ## Layout & sizing
 
-- **Position:** `position: 'absolute'`, horizontally centered.
-- **Vertical anchor:** Aligned with the fan's visual top — reuse the existing constant `FAN_VISUAL_TOP_FROM_BOTTOM` (already defined and used elsewhere in `InteractiveTutorialScreen.tsx`). Use `bottom: FAN_VISUAL_TOP_FROM_BOTTOM - N` where `N` centers the card inside the fan's band.
-- **Size:** target height 130px, width follows card's aspect ratio (roughly 90px wide at that height).
-- **z-index:** 9100. This sits above the cover layer (9050, see below) and below the speech bubble (9200) and exit/skip controls (9600).
+- **Position:** `position: 'absolute'`, horizontally centered (`left: 0, right: 0, alignItems: 'center'`).
+- **Vertical anchor:** Centered inside the fan strip band. Using the existing constants (`FAN_BOTTOM = 195`, `FAN_STRIP_H = 140`), compute `bottom: FAN_BOTTOM + (FAN_STRIP_H - 130) / 2 ≈ 200`. In practice: `bottom: 200`.
+- **Size:** rendered height 130px (`Card` 104px × scale 1.25), width 90px.
+- **z-index:** 9100 — above the cover layer (9050), below the speech bubble (9200) and exit/skip controls (9600).
 
 ## Fan handling during step 5a
 
@@ -69,7 +66,7 @@ The illustration stays visible during `celebrate` so the learner sees the last-c
 **Solution:** An opaque cover view, same background as the game screen (`#0a1628`).
 
 - `position: 'absolute'`, full width (`left: 0, right: 0`).
-- Vertical: `bottom: 0` to `bottom: FAN_VISUAL_TOP_FROM_BOTTOM + FAN_HEIGHT_BAND` (where `FAN_HEIGHT_BAND` covers the entire fan's area — to be measured if a constant is not already available; otherwise use a generous fixed height like `220px`).
+- Vertical: `bottom: 0, height: FAN_VISUAL_TOP_FROM_BOTTOM` (= 365) — covers the entire fan band including the card bleed margin (`FAN_BOTTOM 195 + FAN_STRIP_H 140 + 30` margin).
 - `z-index: 9050`.
 - `pointerEvents: 'auto'` — catches accidental taps so the learner cannot interact with the hidden fan.
 - Active only when `showOpIllustration` evaluates true (see State wiring).
@@ -84,15 +81,16 @@ Unchanged. The existing `l5SlotPulse` (InteractiveTutorialScreen.tsx:305, driven
 
 ### Card swap animation (when operator cycles)
 
-When `l5SelectedOp` changes from one non-null value to another, the card should animate a brief "flip" to emphasize the change:
+When `l5SelectedOp` changes between non-null values, the card animates a brief "flip" to emphasize the change:
 
-- `useEffect` on `[l5SelectedOp]` within the illustration view.
-- Sequence: `Animated.timing(anim, { toValue: 0, duration: 120 })` (fade/scale to 0.3 opacity + 0.9 scale), then `Animated.timing(anim, { toValue: 1, duration: 180 })` back to 1.0.
-- Uses `useNativeDriver: true` — the underlying props are `opacity` and `transform.scale`, both native-driver-safe.
+- A single `Animated.Value` named `cardAnim` driven by a `useEffect` on `[l5SelectedOp]`.
+- Sequence: `Animated.sequence([ timing(cardAnim, { toValue: 0, duration: 120 }), timing(cardAnim, { toValue: 1, duration: 180 }) ])`.
+- `cardAnim` drives both `opacity` (interpolated 0 → 1, full range) and `transform.scale` (interpolated to `[0.85, 1.25]` so the resting scale stays at the 1.25 target).
+- Uses `useNativeDriver: true` — `opacity` and `transform.scale` are both native-driver-safe.
 
 ### First appearance
 
-When `l5SelectedOp` transitions from `null` to its first non-null value, the same swap animation runs — giving the card a gentle entrance rather than a hard pop-in.
+When `l5SelectedOp` transitions from `null` to its first non-null value, the card mounts and `cardAnim` starts at 0 → animates to 1 (180ms via `timing`, no preceding down-leg since it's already at 0). This yields a gentle scale/fade-in entrance rather than a hard pop-in.
 
 ## Copy (i18n)
 
