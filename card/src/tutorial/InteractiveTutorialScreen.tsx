@@ -853,6 +853,20 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     setL5PendingJokerOp(null);
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
+  // ── Lesson 5a: listen for cycleOp → opSelected events from index.tsx so the
+  //    local `l5SelectedOp` state reflects the current operator in the `?`
+  //    slot. This wire-up was previously missing — without it, the illustration
+  //    card never appears (gate is `l5SelectedOp !== null`). The reducer-level
+  //    tracking in index.tsx owns truth; we mirror it here for rendering. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) return;
+    return tutorialBus.subscribeUserEvent((evt) => {
+      if (evt.kind === 'opSelected' && evt.via === 'cycle') {
+        setL5SelectedOp(evt.op);
+      }
+    });
+  }, [engine.lessonIndex, engine.stepIndex]);
+
   // ── Lesson 5: pulse the `?` slot whenever nothing is selected yet so the
   //    learner's eye is drawn to the interactive spot. Stops the instant an
   //    op is chosen. useNativeDriver is intentionally FALSE: the pulse feeds
