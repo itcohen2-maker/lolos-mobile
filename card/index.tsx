@@ -6657,6 +6657,13 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   }, [soundOn]);
 
   const tap = (card:Card) => {
+    // L5a: swallow operation-card fan taps and let InteractiveTutorialScreen
+    // show guidance. Joker taps (step 5b) are NOT blocked — the flag is off
+    // by then (set/cleared by InteractiveTutorialScreen's useEffect).
+    if (state.isTutorial && tutorialBus.getL5aBlockFanTaps() && card.type === 'operation') {
+      tutorialBus.emitUserEvent({ kind: 'cardTapped', cardId: card.id });
+      return;
+    }
     if (isOnlineWaiting) {
       // #region agent log
       fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H3',location:'index.tsx:PlayerHand.tap',message:'Tap blocked by online waiting',data:{cardId:card.id,cardType:card.type,phase:state.phase,currentPlayerIndex:state.currentPlayerIndex,handPlayerIndex},timestamp:Date.now()})}).catch(()=>{});

@@ -267,6 +267,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const [wrongAttemptTick, setWrongAttemptTick] = useState(0);
   const wrongShakeAnim = useRef(new Animated.Value(0)).current;
 
+  // L5a wrong-tap feedback: bumps when the learner taps a fan card during 5a
+  // (when they should be tapping the equation operator slot instead).
+  const [l5aWrongTapTick, setL5aWrongTapTick] = useState(0);
+  const eqHighlightPulse = useRef(new Animated.Value(0)).current;
+
   // ── Lesson 4 step 3 (guided full build) sub-phase ──
   // Drives the dynamic speech bubble + arrow position during the learner's
   // solo run of a full equation. Transitions:
@@ -306,12 +311,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   // ── Lesson 5c (solve-for-op) state ──
   // Two pre-generated exercises; learner must pick the sign that makes each
   // equation true and press "Confirm". `l5ExIndex` is the 0-based pointer
-  // (2 = both solved, outcome fires). `l5ExWrongTick` triggers the
-  // already-existing shake animation when the learner confirms a wrong sign.
+  // (2 = both solved, outcome fires). Wrong-confirm feedback rides on the
+  // shared `wrongAttemptTick` shake/bubble wiring used by earlier lessons.
   type L5Ex = { a: number; b: number; op: L5Op; result: number };
   const [l5Exercises, setL5Exercises] = useState<L5Ex[]>([]);
   const [l5ExIndex, setL5ExIndex] = useState<0 | 1 | 2>(0);
-  const [l5ExWrongTick, setL5ExWrongTick] = useState(0);
 
   // Curated (a, b) pairs where all 4 operations yield integers. Pick one at
   // random when lesson 5 starts so the learner sees different numbers each
@@ -567,6 +571,45 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     tutorialBus.setL5GuidedMode(on);
     return () => tutorialBus.setL5GuidedMode(false);
   }, [engine.lessonIndex, engine.phase]);
+
+  // L5a (step 5a): block fan card taps so learner is guided to tap the
+  // equation's operator slot instead.
+  useEffect(() => {
+    const on =
+      engine.lessonIndex === 4 &&
+      engine.stepIndex === 0 &&
+      (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
+    tutorialBus.setL5aBlockFanTaps(on);
+    return () => tutorialBus.setL5aBlockFanTaps(false);
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
+  // L5a wrong-tap: subscribe to cardTapped events while in L5a and bump the
+  // tick so the guidance bubble + equation highlight appear.
+  useEffect(() => {
+    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) return;
+    return tutorialBus.subscribeUserEvent((evt) => {
+      if (evt.kind !== 'cardTapped') return;
+      setL5aWrongTapTick((t) => t + 1);
+    });
+  }, [engine.lessonIndex, engine.stepIndex]);
+
+  // Auto-dismiss the L5a wrong-tap bubble after 2.5s.
+  useEffect(() => {
+    if (l5aWrongTapTick === 0) return;
+    const timer = setTimeout(() => setL5aWrongTapTick(0), 2500);
+    return () => clearTimeout(timer);
+  }, [l5aWrongTapTick]);
+
+  // L5a equation highlight pulse: runs an opacity 0→0.7→0 animation over
+  // ~1500ms each time a wrong fan tap fires.
+  useEffect(() => {
+    if (l5aWrongTapTick === 0) return;
+    eqHighlightPulse.setValue(0);
+    Animated.sequence([
+      Animated.timing(eqHighlightPulse, { toValue: 0.7, duration: 300, useNativeDriver: true }),
+      Animated.timing(eqHighlightPulse, { toValue: 0, duration: 1200, useNativeDriver: true }),
+    ]).start();
+  }, [l5aWrongTapTick, eqHighlightPulse]);
 
   // Optional fractions module: emit bus events for scripted outcomes.
   useEffect(() => {
@@ -1254,7 +1297,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
             }
           } else {
             tutorialBus.emitUserEvent({ kind: 'l5OpSolveWrong' });
-            setL5ExWrongTick((n) => n + 1);
+            setWrongAttemptTick((n) => n + 1);
           }
         };
         const onSlotTap = () => {
@@ -1307,7 +1350,15 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
                   backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
                 }}
               >
-                <L5cOperand value={current.a} />
+                <View
+                  style={{
+                    width: 62, height: 78, borderRadius: 14, borderWidth: 2,
+                    borderColor: '#60A5FA', backgroundColor: '#EFF6FF',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ fontSize: 32, fontWeight: '900', color: '#1D4ED8' }}>{String(current.a)}</Text>
+                </View>
                 <TouchableOpacity activeOpacity={0.85} onPress={onSlotTap}>
                   <View
                     style={{
@@ -1322,7 +1373,15 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
                     </Text>
                   </View>
                 </TouchableOpacity>
-                <L5cOperand value={current.b} />
+                <View
+                  style={{
+                    width: 62, height: 78, borderRadius: 14, borderWidth: 2,
+                    borderColor: '#60A5FA', backgroundColor: '#EFF6FF',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ fontSize: 32, fontWeight: '900', color: '#1D4ED8' }}>{String(current.b)}</Text>
+                </View>
                 <Text style={{ fontSize: 32, fontWeight: '900', color: '#FDE68A' }}>=</Text>
                 <View
                   style={{
@@ -1572,6 +1631,42 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
               {locale === 'he' ? '✗ לא נכון — נסה שוב' : '✗ Not quite — try again'}
             </Text>
           </Animated.View>
+        </View>
+      ) : null}
+
+      {/* L5a wrong-tap: amber pulse ring around the equation row to draw the
+          learner's eye toward the operator slot they should be tapping. */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: 120,
+          left: 20,
+          right: 20,
+          height: 100,
+          borderRadius: 16,
+          borderWidth: 4,
+          borderColor: '#FBBF24',
+          opacity: eqHighlightPulse,
+          zIndex: 9250,
+          ...Platform.select({
+            ios: { shadowColor: '#FBBF24', shadowOpacity: 0.6, shadowRadius: 12 },
+            android: { elevation: 10 },
+          }),
+        }}
+      />
+
+      {/* L5a wrong-tap: guidance bubble telling the learner to tap the sign
+          in the equation instead of a card in the fan. */}
+      {l5aWrongTapTick > 0 ? (
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', top: 130, left: 0, right: 0, alignItems: 'center', zIndex: 9300 }}
+        >
+          <HappyBubble
+            text={locale === 'he' ? 'לחץ על הסימן במשוואה ↑' : 'Tap the sign in the equation ↑'}
+            tone="turn"
+          />
         </View>
       ) : null}
 

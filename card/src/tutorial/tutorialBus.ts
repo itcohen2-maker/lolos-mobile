@@ -105,6 +105,9 @@ let l5GuidedMode = false;
 /** While true + L5 guided: hide the hand strip (step 5a — signs only; step 5b shows hand for joker). */
 let l5HideFan = false;
 
+/** While true, fan card taps during L5a are swallowed before reaching SELECT_EQ_OP. */
+let l5aBlockFanTaps = false;
+
 /** While true, fraction PLAY/DEFEND taps emit tutorial user events for outcomes. */
 let fracGuidedMode = false;
 
@@ -235,6 +238,13 @@ export const tutorialBus = {
     return l5HideFan;
   },
 
+  setL5aBlockFanTaps(on: boolean): void {
+    l5aBlockFanTaps = on;
+  },
+  getL5aBlockFanTaps(): boolean {
+    return l5aBlockFanTaps;
+  },
+
   setFracGuidedMode(on: boolean): void {
     fracGuidedMode = on;
   },
@@ -277,6 +287,7 @@ export const tutorialBus = {
     l4Step3Mode = false;
     l5GuidedMode = false;
     l5HideFan = false;
+    l5aBlockFanTaps = false;
     fracGuidedMode = false;
     l5UiListeners.clear();
     lastEquationResult = null;
