@@ -5730,6 +5730,28 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     loop.start();
     return () => loop.stop();
   }, [waitingMode, waitingPulse]);
+  // Tutorial L5a emphasis: scale+lift the op card matching the learner's
+  // current cycle selection. Clears when lesson 5a unmounts.
+  const [emphasizedCardPrefix, setEmphasizedCardPrefix] = React.useState<string | null>(
+    tutorialBus.getEmphasizedCardId(),
+  );
+  React.useEffect(() => {
+    return tutorialBus.subscribeEmphasizedCard(setEmphasizedCardPrefix);
+  }, []);
+  const emphasisPulse = useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    if (!emphasizedCardPrefix) {
+      emphasisPulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(emphasisPulse, { toValue: 1, duration: 650, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+      Animated.timing(emphasisPulse, { toValue: 0, duration: 650, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [emphasizedCardPrefix, emphasisPulse]);
+
   const botScanOffset = useRef(new Animated.Value(0)).current;
   const botScanAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const botPickAnimRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -6186,14 +6208,24 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
         const distFromCenter = Math.abs(i - centerIdx);
         const zBase = (count - distFromCenter) * 10 + i;
+        const isEmphasized = !!emphasizedCardPrefix && card.id.startsWith(emphasizedCardPrefix);
         const zIndex = isBotCandidate
           ? 120000 + zBase
-          : pressedCardId === card.id
-            ? 100000 + zBase
-            : zBase;
+          : isEmphasized
+            ? 20000 + zBase
+            : pressedCardId === card.id
+              ? 100000 + zBase
+              : zBase;
         const edgeHitSlop = distFromCenter >= 2
           ? { top: 14, bottom: 14, left: 22, right: 22 }
           : { top: 10, bottom: 10, left: 10, right: 10 };
+
+        // Emphasis lift: -18px translateY when this card is the emphasized op card.
+        const emphasisLift = isEmphasized ? -18 : 0;
+        // Emphasis scale boost: pulses between 1.15 and 1.15*1.08 ≈ 1.24.
+        const emphasisScaleBoost = isEmphasized
+          ? emphasisPulse.interpolate({ inputRange: [0, 1], outputRange: [1.15, 1.15 * 1.08] })
+          : 1;
 
         return (
           <Animated.View
@@ -6206,12 +6238,12 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
               height: FAN_CARD_H,
               transform: [
                 { translateX },
-                { translateY: Animated.add(arcY, candidateLift) },
+                { translateY: Animated.add(arcY, candidateLift + emphasisLift) },
                 { rotate: rotateStr },
                 {
                   scale: pressedCardId === card.id
-                    ? Animated.multiply(scale, 1.06 * candidateScaleBoost)
-                    : Animated.multiply(scale, candidateScaleBoost),
+                    ? Animated.multiply(Animated.multiply(scale, 1.06 * candidateScaleBoost), emphasisScaleBoost)
+                    : Animated.multiply(Animated.multiply(scale, candidateScaleBoost), emphasisScaleBoost),
                 },
               ],
               opacity,

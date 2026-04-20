@@ -846,6 +846,27 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     setL5PendingJokerOp(null);
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
+  // ── Lesson 5a: when the learner cycles the `?` slot, publish the matching
+  //    op card id prefix to tutorialBus so the fan can emphasize it. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) return;
+    const unsubscribe = tutorialBus.subscribeUserEvent((evt) => {
+      if (evt.kind !== 'opSelected' || evt.via !== 'cycle') return;
+      const cardIdByOp: Record<'+' | '-' | 'x' | '÷', string> = {
+        '+': 'tut-l5-op-plus',
+        '-': 'tut-l5-op-minus',
+        'x': 'tut-l5-op-times',
+        '÷': 'tut-l5-op-divide',
+      };
+      tutorialBus.setEmphasizedCardId(cardIdByOp[evt.op]);
+      setL5SelectedOp(evt.op);
+    });
+    return () => {
+      unsubscribe();
+      tutorialBus.setEmphasizedCardId(null);
+    };
+  }, [engine.lessonIndex, engine.stepIndex]);
+
   // ── Lesson 5: pulse the `?` slot whenever nothing is selected yet so the
   //    learner's eye is drawn to the interactive spot. Stops the instant an
   //    op is chosen. useNativeDriver is intentionally FALSE: the pulse feeds
