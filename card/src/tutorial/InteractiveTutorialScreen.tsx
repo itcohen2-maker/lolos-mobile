@@ -753,13 +753,13 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   //    game is in `building` with visible dice and a hand that includes a joker. ──
   useEffect(() => {
     if (engine.lessonIndex !== 4) return;
-    if (!gameState?.players || gameState.players.length < 2) return;
     if (engine.phase === 'intro') {
       l5LessonAdvancedRef.current = false;
       l5LessonHandRiggedRef.current = false;
       l5EquationPrefilledRef.current = false;  // NEW
       return;
     }
+    if (!gameState?.players || gameState.players.length < 2) return;
     if (gameState.phase === 'turn-transition' && !l5LessonAdvancedRef.current) {
       l5LessonAdvancedRef.current = true;
       gameDispatch({ type: 'BEGIN_TURN' });
@@ -811,14 +811,23 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     l5EquationPrefilledRef.current = true;
     // Stagger by a frame so React's commit completes and the EquationBuilder's
     // useEffect that registers subscribeFanDemo has definitely run.
-    const timer = setTimeout(() => {
+    // Stagger the two picks so React commits the first setDice1 before
+    // the second call runs. Without the gap, hDice reads stale `dice1`
+    // and the second pick clobbers the first — result: only one number
+    // lands in the equation.
+    const timer1 = setTimeout(() => {
+      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
+    }, 50);
+    const timer2 = setTimeout(() => {
       // Only d1 and d2 go into the equation; d3 stays as an unplaced
       // dice button at top (learner doesn't need it in L5a — the lesson
       // is about cycling a single operator).
-      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-    }, 50);
-    return () => clearTimeout(timer);
+    }, 200);
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
   }, [engine.lessonIndex, engine.stepIndex, gameState?.phase]);
 
   // ── If the user skipped the dice lesson without rolling, fabricate
