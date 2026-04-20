@@ -5773,6 +5773,21 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     return () => loop.stop();
   }, [emphasizedCardPrefix, emphasisPulse]);
 
+  // Scroll the fan to bring the emphasized card to the center when the
+  // learner cycles ops in L5a. scrollX maps 1:1 to card index, so
+  // toValue === matchingIdx centers that card.
+  React.useEffect(() => {
+    if (!emphasizedCardPrefix) return;
+    const matchingIdx = cards.findIndex((c) => c.id.startsWith(emphasizedCardPrefix));
+    if (matchingIdx < 0) return;
+    Animated.spring(scrollX, {
+      toValue: matchingIdx,
+      tension: 60,
+      friction: 10,
+      useNativeDriver: true,
+    }).start();
+  }, [emphasizedCardPrefix, cards, scrollX]);
+
   const botScanOffset = useRef(new Animated.Value(0)).current;
   const botScanAnimRef = useRef<Animated.CompositeAnimation | null>(null);
   const botPickAnimRef = useRef<Animated.CompositeAnimation | null>(null);
