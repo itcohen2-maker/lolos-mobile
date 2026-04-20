@@ -696,6 +696,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const eqLessonHandRiggedRef = useRef(false);
   const l5LessonAdvancedRef = useRef(false);
   const l5LessonHandRiggedRef = useRef(false);
+  const l5EquationPrefilledRef = useRef(false);
   const rigL4 = () => {
     // Use rollL4Dice values as-is — NO re-derivation. This guarantees
     // perfect consistency: the dice, pickA/pickB, target, hand, and
@@ -756,6 +757,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     if (engine.phase === 'intro') {
       l5LessonAdvancedRef.current = false;
       l5LessonHandRiggedRef.current = false;
+      l5EquationPrefilledRef.current = false;  // NEW
       return;
     }
     if (gameState.phase === 'turn-transition' && !l5LessonAdvancedRef.current) {
@@ -785,20 +787,31 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5-bot-joker-${ts}`, type: 'joker' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
-      // Pre-fill equation slots 1 and 2 with die indices 0 and 1 (d1=6, d2=6),
-      // via the tutorialBus eq* commands that index.tsx listens to. The operator
-      // slot stays null and keeps pulsing until the learner cycles it. d3 stays
-      // unused, visible as a spare die above the equation.
-      // Small rAF delay: the fan-demo bus fires synchronously, but the game
-      // reducer needs the ROLL_DICE and TUTORIAL_SET_HANDS actions to land
-      // first. A single microtask ensures the picks target the freshly-rigged
-      // equation builder.
-      queueMicrotask(() => {
-        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
-        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-      });
     }
   }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
+
+  // ── Lesson 5a: pre-fill equation slots 0, 1, 2 with dice indices so the
+  //    learner sees "6 _ 6 _ 8 = ?" the moment they enter the lesson. Only
+  //    the operator slot(s) stay empty and pulsing. This fires once per
+  //    lesson entry, after the game has transitioned to `building` so the
+  //    EquationBuilder is mounted and its fan-demo subscriber is active.
+  //    Running it here (not in the pre-roll rigging block) avoids a race
+  //    where the picks land before the subscriber registers. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== 4) return;
+    if (engine.stepIndex !== 0) return;
+    if (gameState?.phase !== 'building') return;
+    if (l5EquationPrefilledRef.current) return;
+    l5EquationPrefilledRef.current = true;
+    // Stagger by a frame so React's commit completes and the EquationBuilder's
+    // useEffect that registers subscribeFanDemo has definitely run.
+    const timer = setTimeout(() => {
+      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
+      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
+      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [engine.lessonIndex, engine.stepIndex, gameState?.phase]);
 
   // ── If the user skipped the dice lesson without rolling, fabricate
   //    dice values when celebrate begins so the "these are the numbers"
