@@ -5176,7 +5176,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     borderColor: withAlpha(timerColor, 0.82),
     backgroundColor: withAlpha(timerColor, 0.3),
   } : null;
-  const resultTextColor = ok ? '#FFF' : (timerColor ?? '#7C3AED');
+  const resultTextColor = ok ? '#FFF' : (timerColor ?? (state.isTutorial ? '#FFD700' : '#7C3AED'));
 
   // ── Render helpers ──
   const renderDiceSlot = (slotValue: number | null, slotNum: 1 | 2 | 3) => (
@@ -5519,8 +5519,8 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             <Animated.View style={[
               {
                 minWidth: 76, height: 48, borderRadius: 12, borderWidth: 2,
-                borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : '#A16207',
-                backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : '#854D0E',
+                borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : (state.isTutorial ? 'rgba(124,58,237,0.95)' : '#A16207'),
+                backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : (state.isTutorial ? 'rgba(124,58,237,0.45)' : '#854D0E'),
                 alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
               },
               resultBoxDynamic,
@@ -5538,7 +5538,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                     : [],
                 }}>{finalResult}</Animated.Text>
               ) : (
-                <Text allowFontScaling={false} style={{ fontSize: 24, fontWeight: '800', color: 'rgba(255,255,255,0.4)' }}>?</Text>
+                <Text allowFontScaling={false} style={{ fontSize: 24, fontWeight: '800', color: state.isTutorial ? 'rgba(255,215,0,0.4)' : 'rgba(255,255,255,0.4)' }}>?</Text>
               )}
             </Animated.View>
           </View>
@@ -5612,9 +5612,9 @@ const eqS = StyleSheet.create({
   opBtnEmptyTxt: { fontSize: 26, fontWeight: '800', color: '#F9A825', textAlign: 'center' as const },
   opBtnFilledTxt: { fontSize: 28, fontWeight: Platform.OS === 'android' ? '800' : '900', color: '#FFFFFF', textAlign: 'center' as const, includeFontPadding: false, lineHeight: 32 },
   eqEquals: { fontSize: 24, fontWeight: '800', color: '#FFD700', marginHorizontal: 2 },
-  resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(124,58,237,0.15)', backgroundColor: 'rgba(124,58,237,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  resultVal: { fontSize: 26, fontWeight: '800', color: '#7C3AED' },
-  resultPlaceholder: { fontSize: 26, fontWeight: '800', color: 'rgba(124,58,237,0.25)' },
+  resultBox: { minWidth: 48, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(124,58,237,0.95)', backgroundColor: 'rgba(124,58,237,0.45)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  resultVal: { fontSize: 26, fontWeight: '800', color: '#FFD700' },
+  resultPlaceholder: { fontSize: 26, fontWeight: '800', color: 'rgba(255,215,0,0.4)' },
   resultError: { fontSize: 20, fontWeight: '900', color: '#EA4335' },
   hint: { color: '#6B7280', fontSize: 12, textAlign: 'center' },
 });
