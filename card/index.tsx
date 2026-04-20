@@ -4625,6 +4625,29 @@ function CelebrationFlash({ onDone }: { onDone: () => void }) {
 //  EQUATION BUILDER
 // ═══════════════════════════════════════════════════════════════
 
+// Module-level one-shot dice-roll sound for use inside EquationBuilder
+// (EquationBuilder doesn't own the main diceSoundRef, so we use a simple
+// fire-and-forget helper here).
+async function _playDiceRollOneShot(): Promise<void> {
+  try {
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    });
+    const { sound } = await Audio.Sound.createAsync(require('./assets/dice_roll.m4a'));
+    await sound.playAsync();
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        sound.unloadAsync().catch(() => {});
+      }
+    });
+  } catch (_e) {
+    // silent fail — sound is non-critical
+  }
+}
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const v = hex.replace('#', '');
   return {
@@ -4836,6 +4859,10 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const cycleOp = (which: 1 | 2) => {
     if (!interactive) return;
     if (isSolved) return;
+    // Play the dice-roll sample on each successful cycle for tactile feedback.
+    if (state.soundsEnabled !== false) {
+      void _playDiceRollOneShot();
+    }
     const cur = which === 1 ? op1 : op2;
     const idx = eqOpChoices.indexOf(cur);
     const safeIdx = idx === -1 ? 0 : idx;
