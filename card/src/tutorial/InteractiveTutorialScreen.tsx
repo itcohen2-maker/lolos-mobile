@@ -303,6 +303,9 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const [l5CycledSigns, setL5CycledSigns] = useState<Set<L5Op>>(() => new Set());
   // Sign picked in the joker modal but not yet placed in the slot.
   const [l5PendingJokerOp, setL5PendingJokerOp] = useState<L5Op | null>(null);
+  // L5.1 wrong-card feedback: shown 2s then auto-cleared.
+  const [l5PlaceWrong, setL5PlaceWrong] = useState(false);
+  const l5PlaceWrongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
   const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' | 'placeSign'>('tapJoker');
 
@@ -701,6 +704,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     const on =
       engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX &&
       engine.phase !== 'post-signs-choice' &&
+      engine.phase !== 'core-complete' &&
       engine.phase !== 'all-done' &&
       engine.phase !== 'idle';
     tutorialBus.setFracGuidedMode(on);
@@ -1035,9 +1039,69 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5b-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+      // Scroll the fan so Slinda (index 2 of 5) is centred immediately when
+      // the step loads — before the bot demo does its own scroll.
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'scrollToIdx', idx: 2, durationMs: 350, easing: 'settle' }), 60);
       setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
       setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
+  // ── Lesson 6 (possible-results) rigging: on entry, the learner sees a
+  //    fully-filled equation and a full hand — the green ResultsChip pulses
+  //    strongly to draw attention. We rig a deterministic setup (dice 2,3,4
+  //    + both op slots = `+`) so the chip has possible targets to show, and
+  //    enable showPossibleResults on the game state (the boot defaults it
+  //    to false so the chip stays hidden during earlier lessons). Runs once
+  //    per L6 entry (reset on lesson exit via the ref below). ──
+  const l6RiggedRef = useRef(false);
+  useEffect(() => {
+    if (engine.lessonIndex !== 5) {
+      l6RiggedRef.current = false;
+      return;
+    }
+    if (engine.phase !== 'bot-demo' || engine.stepIndex !== 0) return;
+    if (l6RiggedRef.current) return;
+    l6RiggedRef.current = true;
+
+    // Fresh dice — pick values that generate plenty of valid targets so the
+    // mini-card strip isn't empty when the chip opens.
+    gameDispatch({ type: 'TUTORIAL_SET_DICE', values: { die1: 2, die2: 3, die3: 4 } });
+
+    // Full hand — mix of numbers + operators so the hand visually looks
+    // "loaded" (per the user's spec: "הכפתור הירוק פועם... היד מלאה").
+    const ts = Date.now();
+    const playerHand = [
+      { id: `tut-l6-num-5-${ts}`, type: 'number' as const, value: 5 },
+      { id: `tut-l6-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+      { id: `tut-l6-num-6-${ts}`, type: 'number' as const, value: 6 },
+      { id: `tut-l6-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+      { id: `tut-l6-num-9-${ts}`, type: 'number' as const, value: 9 },
+    ];
+    const botHand = [
+      { id: `tut-l6-bot-num-5-${ts}`, type: 'number' as const, value: 5 },
+      { id: `tut-l6-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+      { id: `tut-l6-bot-num-6-${ts}`, type: 'number' as const, value: 6 },
+      { id: `tut-l6-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+      { id: `tut-l6-bot-num-9-${ts}`, type: 'number' as const, value: 9 },
+    ];
+    gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+
+    // Enable the ResultsChip (boot defaults it to false so it stays hidden
+    // in L1–L5). Must be dispatched after the dice so validTargets is ready.
+    gameDispatch({ type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS', value: true });
+
+    // Fill the EquationBuilder completely via the fan-demo channel. Stagger
+    // the emissions slightly so the EquationBuilder's subscribe effect has
+    // time to process each one (same pattern as L5b above). Both op slots
+    // are set to `+` giving "2 + 3 + 4 = 9".
+    tutorialBus.emitFanDemo({ kind: 'eqReset' });
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 120);
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 1, op: '+' }), 200);
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 2, op: '+' }), 360);
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 }), 440);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
@@ -1061,6 +1125,20 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       tutorialBus.setEmphasizedCardId(null);
     };
   }, [engine.lessonIndex, engine.stepIndex]);
+
+  // ── L5.1 wrong-card feedback: when a non-`+` op card is placed in the slot,
+  //    show an error bubble for 2s then revert to the normal hint. ──
+  useEffect(() => {
+    setL5PlaceWrong(false);
+    if (l5PlaceWrongTimerRef.current) clearTimeout(l5PlaceWrongTimerRef.current);
+    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0 || engine.phase !== 'await-mimic') return;
+    return tutorialBus.subscribeUserEvent((evt) => {
+      if (evt.kind !== 'l5OperatorPlaced' || evt.op === '+') return;
+      setL5PlaceWrong(true);
+      if (l5PlaceWrongTimerRef.current) clearTimeout(l5PlaceWrongTimerRef.current);
+      l5PlaceWrongTimerRef.current = setTimeout(() => setL5PlaceWrong(false), 2000);
+    });
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
   // ── Lesson 5: pulse the `?` slot whenever nothing is selected yet so the
   //    learner's eye is drawn to the interactive spot. Stops the instant an
@@ -1122,27 +1200,23 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
        : l5FlowHintPhase === 'placeSign' ? 'tutorial.l5b.hintPlaceSign'
        : 'tutorial.l5b.hintTapJoker')
     : null;
-  // Lesson 5 step 5.1 (place-op, stepIndex 0): a single bubble all the way
-  // through — "pick an operation card that matches the exercise". The
-  // target (`= 7`) is already shown in the result box, and the empty op
-  // slot is the only drop target, so the learner doesn't need a separate
-  // "now place it" hint after picking a card.
+  // Three-phase hint for L5.1 (place-op):
+  //   1. no card selected yet → "choose an op card that solves {{result}}"
+  //   2. card selected (equationHandPick set) → "now press in the exercise to place it"
+  //   3. wrong card placed → error message (auto-clears after 2s)
   const isL5PlaceAwait = engine.lessonIndex === 4 && engine.stepIndex === 0 && engine.phase === 'await-mimic';
-  const l5PlaceHintKey: string | null = isL5PlaceAwait
-    ? 'tutorial.l5a.hintChooseCard'
-    : null;
-  // Lesson 5.1 injects the target result into the hint via `{{result}}` so
-  // the bubble reads "…תרגיל שתוצאתו 7". Keeping it alongside the target
-  // rendered in the result box removes any ambiguity about what number the
-  // learner's card needs to produce. The target is hardcoded for L5.1
-  // (`4 + 3 = 7`) so we use it directly instead of reading the bus —
-  // avoids a one-frame gap while the bus effect catches up with the
-  // lesson/phase change on entry.
   const L5A_TARGET_RESULT = 7;
+  const l5PlaceHintKey: string | null = isL5PlaceAwait
+    ? (l5PlaceWrong
+        ? 'tutorial.l5op.wrong'
+        : (gameState?.equationHandPick != null
+            ? 'tutorial.l5a.hintPressEquation'
+            : 'tutorial.l5a.hintChooseCard'))
+    : null;
   const l5PlaceHintParams: Record<string, string> | undefined =
-    l5PlaceHintKey ? { result: String(L5A_TARGET_RESULT) } : undefined;
+    l5PlaceHintKey === 'tutorial.l5a.hintChooseCard' ? { result: String(L5A_TARGET_RESULT) } : undefined;
   const bubbleText: string | null =
-    engine.phase === 'post-signs-choice' ? null
+    engine.phase === 'post-signs-choice' || engine.phase === 'core-complete' ? null
     : engine.phase === 'bot-demo' ? (currentStep?.botHintKey ? t(currentStep.botHintKey) : t('tutorial.engine.botDemoLabel'))
     : engine.phase === 'await-mimic' ? (l4Step3HintKey ? t(l4Step3HintKey) : l5PlaceHintKey ? t(l5PlaceHintKey, l5PlaceHintParams) : l5bHintKey ? t(l5bHintKey) : (currentStep?.hintKey ? t(currentStep.hintKey) : t('tutorial.engine.yourTurnLabel')))
     : engine.phase === 'celebrate' ? (currentStep?.celebrateKey ? t(currentStep.celebrateKey) : t('tutorial.engine.celebrate'))
@@ -1197,6 +1271,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       case 'await-mimic': dispatchEngine({ type: 'OUTCOME_MATCHED' }); break;
       case 'celebrate': dispatchEngine({ type: 'CELEBRATE_DONE' }); break;
       case 'lesson-done': dispatchEngine({ type: 'DISMISS_LESSON_DONE' }); break;
+      case 'core-complete': dispatchEngine({ type: 'DISMISS_CORE_COMPLETE' }); break;
       case 'post-signs-choice': dispatchEngine({ type: 'CHOOSE_FINISH_TUTORIAL' }); break;
       case 'all-done': onExit(); break;
       default: break;
@@ -1679,6 +1754,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         const bubbleAtTop =
           isEquationLesson ||
           isOpCycleLesson ||
+          isPossibleResultsLesson ||
           isFracLesson ||
           (isDiceLesson && engine.phase !== 'bot-demo');
         return (
@@ -1816,6 +1892,69 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         >
           <Text style={{ fontSize: 36, lineHeight: 36, color: '#FDE047', fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6, transform: [{ rotate: '180deg' }] }}>➜</Text>
         </Animated.View>
+      ) : null}
+
+      {/* Core tutorial finished — celebratory "10 coins" popup that precedes
+          the fractions-branch choice. Warm palette + coin emoji + single
+          "הבנתי" button. Tapping it dispatches DISMISS_CORE_COMPLETE, which
+          transitions the engine to post-signs-choice. */}
+      {engine.phase === 'core-complete' ? (
+        <View
+          pointerEvents="auto"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9400,
+            paddingHorizontal: 20,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: '#78350F',
+              borderRadius: 22,
+              paddingVertical: 28,
+              paddingHorizontal: 24,
+              borderWidth: 3,
+              borderColor: '#FACC15',
+              maxWidth: 380,
+              width: '100%',
+              alignItems: 'center',
+              shadowColor: '#FACC15',
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.6,
+              shadowRadius: 18,
+              elevation: 10,
+            }}
+          >
+            <Text style={{ color: '#FEF3C7', fontSize: 28, fontWeight: '900', textAlign: 'center', marginBottom: 14 }}>
+              {t('tutorial.coreComplete.title')}
+            </Text>
+            <Text style={{ color: '#FDE68A', fontSize: 22, fontWeight: '800', textAlign: 'center', marginBottom: 22 }}>
+              {t('tutorial.coreComplete.body')}
+            </Text>
+            <TouchableOpacity
+              onPress={() => dispatchEngine({ type: 'DISMISS_CORE_COMPLETE' })}
+              style={{
+                paddingVertical: 14,
+                paddingHorizontal: 36,
+                borderRadius: 16,
+                backgroundColor: '#F59E0B',
+                borderWidth: 2,
+                borderColor: '#FCD34D',
+              }}
+            >
+              <Text style={{ color: '#431407', fontWeight: '900', fontSize: 17 }}>
+                {t('tutorial.coreComplete.ack')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       ) : null}
 
       {/* Optional fractions: choice after core tutorial */}

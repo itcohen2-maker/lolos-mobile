@@ -12,14 +12,19 @@ const SHAPES_CORE = [
   { id: 'c', stepCount: 1 },
   { id: 'd', stepCount: 1 },
   { id: 'op-cycle-basics', stepCount: 2 },
+  { id: 'possible-results-basics', stepCount: 3 },
 ];
 const SHAPES_WITH_FRAC = [...SHAPES_CORE, { id: 'fractions-advanced', stepCount: 6 }];
 
 describe('mimicReducer fractions branch', () => {
-  it('after last core lesson goes to post-signs-choice instead of all-done', () => {
+  it('after last core lesson goes to core-complete, then DISMISS_CORE_COMPLETE → post-signs-choice', () => {
     let s = mimicReducer(INITIAL_MIMIC_STATE, { type: 'START' }, SHAPES_WITH_FRAC);
     s = { ...s, lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX, stepIndex: 1, phase: 'lesson-done' };
     s = mimicReducer(s, { type: 'DISMISS_LESSON_DONE' }, SHAPES_WITH_FRAC);
+    expect(s.phase).toBe('core-complete');
+    expect(s.lessonIndex).toBe(MIMIC_LAST_CORE_LESSON_INDEX);
+
+    s = mimicReducer(s, { type: 'DISMISS_CORE_COMPLETE' }, SHAPES_WITH_FRAC);
     expect(s.phase).toBe('post-signs-choice');
     expect(s.lessonIndex).toBe(MIMIC_LAST_CORE_LESSON_INDEX);
   });
@@ -70,7 +75,8 @@ describe('mimicReducer fractions branch', () => {
     const s = mimicReducer(s0, { type: 'GO_BACK' }, SHAPES_WITH_FRAC);
     expect(s.phase).toBe('intro');
     expect(s.lessonIndex).toBe(MIMIC_LAST_CORE_LESSON_INDEX);
-    expect(s.stepIndex).toBe(1);
+    // possible-results-basics has 3 steps; GO_BACK returns to last step (idx 2).
+    expect(s.stepIndex).toBe(2);
   });
 
   it('after optional lesson completes, DISMISS_LESSON_DONE goes to all-done', () => {

@@ -35,8 +35,8 @@ export const en: Record<string, string> = {
   'equation.commitCardNotInHand': 'Equation card not found in hand',
   'equation.invalidCommitCard': 'Invalid card for equation',
   'equation.invalidOpPosition': 'Invalid operator slot',
-  'equation.chooseJokerOp': 'Choose an operation for the Joker',
-  'equation.regularOpNoJoker': 'A regular operation card does not need Joker choice',
+  'equation.chooseJokerOp': 'Choose an operation for Slinda',
+  'equation.regularOpNoJoker': 'A regular operation card does not need Slinda choice',
   'equation.tooManyCommits': 'Too many operation cards in the equation',
   'equation.duplicateOpPosition': 'Duplicate operator slot in equation',
   'equation.duplicateCommitCard': 'Same card committed twice',
@@ -74,13 +74,13 @@ export const en: Record<string, string> = {
   'draw.cannotDrawNow': 'Cannot draw a card now',
 
   'operation.onlyInEquation': 'Operation cards are only used inside the equation',
-  'joker.onlyInEquation': 'The Joker is only used inside the equation',
+  'joker.onlyInEquation': 'Slinda is only used inside the equation',
 
   'call.notAvailable': 'This action is not available',
 
   'labels.player': 'Player',
   'labels.wild': 'Wild',
-  'labels.joker': 'Joker',
+  'labels.joker': 'Slinda',
   'labels.wildWithValue': 'Wild ({{value}})',
 
   'toast.threeCardsLeft': '⚠️ {{name}} has only 3 cards left!',
@@ -261,7 +261,7 @@ export const en: Record<string, string> = {
   'gameTip.fractionDefend': 'Tip: Play a card divisible by {{d}} (or a wild with that value), a matching fraction, or draw {{d}} cards.',
   'gameTip.identical': 'Tip: Matching top card skips rolling! ★ Wild counts as the same number when the top is a number.',
   'gameTip.rollOrMatch': 'Tip: Roll dice or play a matching top card (if you can).',
-  'gameTip.opInEquation': 'Tip: Use an operation / Joker inside the equation to discard it.',
+  'gameTip.opInEquation': 'Tip: Use an operation / Slinda inside the equation to discard it.',
   'gameTip.buildEquation': 'Tip: Build an exercise from the dice (2 or 3 dice).',
   'gameTip.pickSum': 'Tip: Pick cards that sum to {{n}} and tap "Done".',
   'gameTip.defaultGuide': 'The game will guide you each turn.',
@@ -270,8 +270,8 @@ export const en: Record<string, string> = {
   'catalog.numberBody': 'Each card shows a value in {{range}}. Used in equations or to defend a fraction attack.',
   'catalog.opTitle': '➕ Operation card (+, −, ×, ÷)',
   'catalog.opBody': 'Place the sign in the equation to discard the card.',
-  'catalog.jokerTitle': '🃏 Joker',
-  'catalog.jokerBody': 'Choose which operation it represents. Use it in the equation to discard it. Cannot defend a fraction attack.',
+  'catalog.jokerTitle': '🃏 Slinda',
+  'catalog.jokerBody': 'Choose which operation Slinda represents. Use her in the equation to discard the card. Cannot defend a fraction attack.',
   'catalog.wildTitle': '★ Wild',
   'catalog.wildBody': 'Counts as any value in the active range (beginner tracks: 0–12 or 0–25). Choose its value in the equation; it can also be played as a matching card.',
   'catalog.fracTitle': '½ ⅓ ¼ ⅕ Fraction',
@@ -280,7 +280,7 @@ export const en: Record<string, string> = {
   'rulesLine.numCard': '🃏 Number — for equations or fraction defense.',
   'rulesLine.fracCard': '½ ⅓ ¼ ⅕ Fraction — attack: next player needs a divisible card, another fraction, or penalty draw.',
   'rulesLine.opCard': '➕ Operation — place the sign in the equation to discard.',
-  'rulesLine.jokerCard': '🃏 Joker — pick its operation; use in the equation to discard. No fraction defense.',
+  'rulesLine.jokerCard': '🃏 Slinda — pick her operation; use in the equation to discard. No fraction defense.',
   'rulesLine.wildCard': '★ Wild — any value in the active range (0–12/0–25 for beginners); can match when top is a number.',
 
   'ui.gotIt': 'Got it',
@@ -296,11 +296,11 @@ export const en: Record<string, string> = {
   'game.playersHeading': 'Players',
   'game.cardsCount': '{{n}} cards',
   'game.opChallenge': 'Operation challenge: {{op}}',
-  'game.opChallengeHint': 'Defend with a matching operation or Joker from your hand, or take a 2-card penalty.',
+  'game.opChallengeHint': 'Defend with a matching operation or Slinda from your hand, or take a 2-card penalty.',
   'game.takePenalty': 'Take penalty',
   'game.drawCard': 'Draw card',
   'game.endTurn': 'End turn',
-  'game.pickJokerOp': 'Choose Joker operation',
+  'game.pickJokerOp': 'Choose Slinda operation',
   'game.yourHand': "{{name}}'s hand",
   'game.discardPile': 'Discard',
   'game.discardEmpty': 'Empty',
@@ -326,7 +326,7 @@ export const en: Record<string, string> = {
   'cardLabel.number': 'Number',
   'cardLabel.fraction': 'Fraction',
   'cardLabel.operation': 'Op',
-  'cardLabel.joker': 'Joker',
+  'cardLabel.joker': 'Slinda',
   'sound.demoTitle': 'Sound demo',
   'sound.demoSubtitle': 'Lightweight sounds, strong feedback',
   'sound.back': 'Back',
@@ -348,7 +348,7 @@ export const en: Record<string, string> = {
   'startScreen.cardTypes': 'Card types',
   'startScreen.rule8': '8. Fraction: divides the top value by the denominator.',
   'startScreen.rule9': '9. Operation: adds (+, −, ×, ÷) to the equation.',
-  'startScreen.rule10': '10. Joker: choose a sign; acts as a flexible operation card.',
+  'startScreen.rule10': '10. Slinda: choose her sign; she acts as a flexible operation card.',
 
   'local.fractionRoundEndedRoll': 'Fraction round ended — roll the dice',
   'local.solvedEquationPickCards':
@@ -463,7 +463,7 @@ export const en: Record<string, string> = {
   'demoSim.logOpen': 'Opened teacher control screen',
 
   'legacy.opChallengeDefend':
-    '{{op}} challenge! Play a matching operation card or a Joker to defend, or end turn to draw 2 cards.',
+    '{{op}} challenge! Play a matching operation card or Slinda to defend, or end turn to draw 2 cards.',
   'legacy.opChallengePenalty':
     'No defense against {{op}}! Drew 2 penalty cards. Roll the dice now.',
   'legacy.diceNoValidTargets': 'No valid totals from the dice. Play special cards or draw.',
@@ -480,7 +480,7 @@ export const en: Record<string, string> = {
   'legacy.notOperationCard': 'That is not an operation card!',
   'legacy.operationPlayed': 'Played operation {{op}}! End your turn.',
   'legacy.fractionPlayedMath': 'Played {{frac}}! {{top}} ÷ {{denom}} = {{result}}. End your turn.',
-  'legacy.jokerPlayedAs': 'Joker played as {{op}}! End your turn.',
+  'legacy.jokerPlayedAs': 'Slinda played as {{op}}! End your turn.',
   'legacy.endTurnAfterPlay': 'You already played this turn! End your turn.',
   'legacy.noCardsToDraw': 'No cards left to draw!',
   'legacy.drewCardCount': 'Drew a card ({{n}} in hand)',
@@ -490,7 +490,7 @@ export const en: Record<string, string> = {
   'sound.play': 'Play',
   'sound.stopAll': 'Stop all',
 
-  'joker.banner': '★ Joker! ★',
+  'joker.banner': '★ Slinda! ★',
 
   'wildModal.title': 'Wild — pick a value divisible by the denominator',
   'game.placeCards': 'Done',
@@ -528,7 +528,7 @@ export const en: Record<string, string> = {
   'fraction.defenseNoSolution': "🤷 We don't have a solution this time",
   'fraction.counterHint': 'A counter fraction is a valid defense — the challenge passes to the next player.',
   'fraction.counterHintDetail':
-    'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or take the penalty draw. Joker does not defend a fraction attack.',
+    'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or take the penalty draw. Slinda does not defend a fraction attack.',
   'notification.fractionAttack.titleSelf': 'You were challenged with a fraction card',
   'notification.fractionAttack.bodySelf':
     'Defense:\n• Play a fraction card to pass the turn\n• Or play a number divisible by {{penalty}} that matches the fraction rule\n\nActive challenge number: {{target}}',
@@ -777,7 +777,7 @@ export const en: Record<string, string> = {
   'lab.stats.title': '📊 Probability & statistics',
   'lab.stats.desc': 'A “stats & probability” screen — model explanation, Monte Carlo outputs, charts.',
   'lab.stats.d1':
-    'Deck: numbers 0–25 ×4 (104), fractions ½–⅕ (18), operations (16), jokers (4) — 142 cards. 10 per player; win at 2 cards left.',
+    'Deck: numbers 0–25 ×4 (104), fractions ½–⅕ (18), operations (16), Slinda cards (4) — 142 cards. 10 per player; win at 2 cards left.',
   'lab.stats.d2':
     'Why no closed formula: huge state space (hands, dice, choices) and strategy — exact math is impractical; use simulation.',
   'lab.stats.d3':
@@ -820,7 +820,7 @@ export const en: Record<string, string> = {
 
   'lab.zero.title': '0️⃣ Zero card',
   'lab.zero.desc': 'Zeros the equation result or sets the required value to 0.',
-  'lab.zero.d1': 'Variant A: equation result becomes 0 — next play needs 0 or joker.',
+  'lab.zero.d1': 'Variant A: equation result becomes 0 — next play needs 0 or Slinda.',
   'lab.zero.d2': 'Variant B: “required number” becomes 0 for the turn — control/blocking.',
   'lab.zero.d3': 'Balance: limit to one per game or per turn so it does not dominate.',
 
@@ -886,7 +886,7 @@ export const en: Record<string, string> = {
   'botOffline.explain.defendWild': '{{name}} chose wild {{card}} (value {{value}}) divisible by {{penalty}}.',
   'botOffline.explain.defendPenalty': '{{name}} has no valid defense and draws {{penalty}} penalty cards.',
   'botOffline.explain.confirmEquation': '{{name}} built an equation: {{equation}} (target {{target}}).',
-  'botOffline.explain.confirmEquationJoker': '{{name}} uses a joker as {{op}} in the equation.',
+  'botOffline.explain.confirmEquationJoker': '{{name}} uses Slinda as {{op}} in the equation.',
   'botOffline.explain.confirmEquationOperation': '{{name}} includes an operation card {{op}} in the equation.',
   'botOffline.explain.stageCard': '{{name}} places {{card}} from hand for the solved target.',
   'botOffline.explain.stageNumber': '{{name}} chooses number card {{card}} for the solved target.',
@@ -933,8 +933,8 @@ export const en: Record<string, string> = {
   'tutorial.lesson1.desc': 'Roll the dice, find a target number, and place cards that add up to it.',
   'tutorial.lesson2.title': 'Operation Cards',
   'tutorial.lesson2.desc': 'Use operation cards (+, -, x) in the equation to unlock more targets',
-  'tutorial.lesson3.title': 'The Joker',
-  'tutorial.lesson3.desc': 'The joker can be any operation. Place it and choose what it becomes',
+  'tutorial.lesson3.title': 'Slinda',
+  'tutorial.lesson3.desc': 'Slinda can be any operation. Place her and choose what she becomes',
   'tutorial.lesson4.title': 'Wild Card',
   'tutorial.lesson4.desc': 'The wild card can be any number 0-25. Use it to complete tricky equations',
   'tutorial.lesson5.title': 'Identical & Fractions',
@@ -949,7 +949,7 @@ export const en: Record<string, string> = {
   'tutorial.bot.staging': 'Now I place my cards to match the target.',
   'tutorial.bot.endTurn': 'Done Your turn next.',
   'tutorial.bot.useOperation': 'I have an operation card I can place it in the equation for more options.',
-  'tutorial.bot.useJoker': 'My joker can be any operation I choose the one I need.',
+  'tutorial.bot.useJoker': 'Slinda can be any operation — I choose the one I need.',
   'tutorial.bot.useWild': 'My wild card can be any number I set it to the value I need.',
 
   // User hints
@@ -960,7 +960,7 @@ export const en: Record<string, string> = {
   'tutorial.hint.confirmStaged': 'Tap Confirm to place your cards.',
   'tutorial.hint.endTurn': 'Tap End Turn to finish.',
   'tutorial.hint.placeOperation': 'Tap your operation card, then place it in an equation slot.',
-  'tutorial.hint.useJoker': 'Tap your joker card and choose an operation for it',
+  'tutorial.hint.useJoker': 'Tap Slinda and choose an operation for her',
   'tutorial.hint.useWild': 'Tap your wild card — it can be any number you need',
   'tutorial.hint.playIdentical': 'You have a card matching the pile Tap it to play before rolling.',
   'tutorial.hint.wrongAction': 'Not quite — try the highlighted action instead',
@@ -1029,15 +1029,27 @@ export const en: Record<string, string> = {
 
   // Lesson 5 — Operation cards + joker
   'tutorial.l5.title': 'Operation signs',
-  'tutorial.l5.desc': 'Pick an operation sign for the exercise — the joker works too.',
-  'tutorial.l5a.botIntro': "Let's try all the signs...",
+  'tutorial.l5.desc': 'Pick an operation sign for the exercise — Slinda works too.',
+  // Step 5.1 (place-op): the equation is pre-filled with `+` on the
+  // operator slot. Learner picks an operation card from the hand and
+  // drops it on the slot to swap the sign.
+  'tutorial.l5a.botIntro': "Let's place an operation-sign card in the exercise",
+  'tutorial.l5a.hintChooseCard': 'Pick an operation card that makes the exercise equal {{result}}',
+  'tutorial.l5a.hintPressEquation': 'Now choose a spot in the equation to place the operation card',
+  'tutorial.l5a.celebrate': 'Nice — you dropped an operation card into the exercise. Next up: Salinda',
+  // (Legacy — kept in case anything still points at it.)
   'tutorial.l5a.hintCycle': 'Tap the sign button in the equation — each tap switches the sign; cycle through all four',
-  'tutorial.l5a.celebrate': 'See? Each sign gives a different result',
-  'tutorial.l5b.botIntro': 'The joker has all the signs — let us try it.',
-  'tutorial.l5b.hintTapJoker': 'Tap the joker card',
+  'tutorial.l5op.botIntro': "Now let's practice — pick the matching card from your fan and place it in the exercise",
+  'tutorial.l5op.hintPlaceMinus': 'Tap the minus (−) card in the fan, then tap the sign slot in the equation',
+  'tutorial.l5op.hintPlacePlus': 'Now tap the plus (+) card and drop it in the slot',
+  'tutorial.l5op.wrong': 'Wrong sign — try a different card',
+  'tutorial.l5op.correctOne': 'Nice! One more exercise',
+  'tutorial.l5op.celebrate': 'Great — you picked the right card',
+  'tutorial.l5b.botIntro': 'Meet Slinda — she has all the signs.',
+  'tutorial.l5b.hintTapJoker': 'Tap Slinda',
   'tutorial.l5b.hintPickInModal': 'Pick a sign',
   'tutorial.l5b.hintPlaceSign': 'Now tap the sign slot in the exercise',
-  'tutorial.l5b.celebrate': 'Great — you got the joker',
+  'tutorial.l5b.celebrate': 'Great — you met Slinda',
   'tutorial.l5c.botIntro': "Now let's practice — sometimes you get the result and pick the sign",
   'tutorial.l5c.hintSolve': 'Pick the sign that solves the exercise and press Confirm',
   'tutorial.l5c.correctOne': 'Nice — now one more',
@@ -1048,38 +1060,61 @@ export const en: Record<string, string> = {
   'tutorial.l5.opCardLabel.minus': 'Minus',
   'tutorial.l5.opCardLabel.mul': 'Times',
   'tutorial.l5.opCardLabel.div': 'Divide',
-  'tutorial.l5.jokerLabel': 'Joker',
+  'tutorial.l5.jokerLabel': 'Slinda',
+
+  // Core tutorial complete — celebratory popup before the fractions branch
+  'tutorial.coreComplete.title': '🎉 You did it!',
+  'tutorial.coreComplete.body': 'You earned 10 coins 🪙',
+  'tutorial.coreComplete.ack': 'Got it',
 
   // After signs — optional fractions branch
-  'tutorial.fracBranch.title': 'Fraction cards?',
+  'tutorial.fracBranch.title': 'Want to earn more coins?',
   'tutorial.fracBranch.body':
-    'You finished the basics. Want a short lesson on fraction cards like 1/2 and 1/3 — attack and defense — or go play?',
+    'Continue to the advanced tutorial (fraction cards — halves and thirds) or return to the start menu.',
   'tutorial.fracBranch.prompt': 'Choose what to do next.',
-  'tutorial.fracBranch.advancedBtn': 'Continue — fractions (½ & ⅓)',
-  'tutorial.fracBranch.finishBtn': 'Finish tutorial & play',
+  'tutorial.fracBranch.advancedBtn': 'Continue to advanced tutorial',
+  'tutorial.fracBranch.finishBtn': 'Back to start menu',
 
-  // Lesson 6 — Optional fractions (½ & ⅓)
-  'tutorial.l6.title': 'Fraction cards (advanced)',
-  'tutorial.l6.desc': 'How ½ and ⅓ challenge the pile and how you defend.',
-  'tutorial.l6.intro.bot': 'New idea: a fraction card (like 1/2, 1/3) divides the top of the pile — that is my power',
-  'tutorial.l6.intro.hint': 'Tap Continue when you are ready.',
-  'tutorial.l6.intro.celebrate': 'Nice — let us go on.',
-  'tutorial.l6.theory.bot':
+  // Lesson 6 — Possible outcomes (green chip + mini-cards + red solve chip)
+  'tutorial.l6.title': 'Possible outcomes',
+  'tutorial.l6.desc': 'Tap the green button to see every result you can build from the dice — then copy one into the equation.',
+  // 6.1 — open the green chip
+  'tutorial.l6a.botIntro': 'See the green button? It is here to help us',
+  'tutorial.l6a.hintTapChip': 'Now tap it',
+  'tutorial.l6a.celebrate': 'Here they are! Each mini card is a possible result',
+  // 6.2 — tap a mini card to see the red solve chip
+  'tutorial.l6b.botIntro': 'The mini cards show some of the options you can solve for',
+  'tutorial.l6b.hintTapMini': 'Tap a mini card and you will discover the way too',
+  'tutorial.l6b.celebrate': 'That is the exercise! Now you see both the result and how to build it',
+  // 6.3 — copy the red equation into the equation builder
+  'tutorial.l6c.botIntro': 'Your turn — copy the red equation into the equation builder',
+  'tutorial.l6c.hintCopy': 'Rebuild the red equation: dice and an operation',
+  'tutorial.l6c.hintConfirm': 'Tap "Confirm equation" to finish',
+  'tutorial.l6c.mismatch': 'Almost — the result has to match the red equation. Try again',
+  'tutorial.l6c.celebrate': 'Great — you copied the exercise',
+
+  // Lesson 7 — Optional fractions (½ & ⅓)
+  'tutorial.l7.title': 'Fraction cards (advanced)',
+  'tutorial.l7.desc': 'How ½ and ⅓ challenge the pile and how you defend.',
+  'tutorial.l7.intro.bot': 'New idea: a fraction card (like 1/2, 1/3) divides the top of the pile — that is my power',
+  'tutorial.l7.intro.hint': 'Tap Continue when you are ready.',
+  'tutorial.l7.intro.celebrate': 'Nice — let us go on.',
+  'tutorial.l7.theory.bot':
     'Attack: play ½ or ⅓ on a pile number that divides by 2 or 3 (e.g. 12). Defense: play a number that divides by the penalty (shown on the challenge).',
-  'tutorial.l6.theory.hint': 'Tap Continue to try it on the real board.',
-  'tutorial.l6.theory.celebrate': 'Let us practice',
-  'tutorial.l6.attackHalf.bot': 'The pile shows 12 — it divides by 2. Play your ½ card on it',
-  'tutorial.l6.attackHalf.hint': 'Tap the ½ card to attack the pile.',
-  'tutorial.l6.attackHalf.celebrate': 'Great — that was a ½ attack',
-  'tutorial.l6.attackThird.bot': 'Again: 12 divides by 3. Play your ⅓ card',
-  'tutorial.l6.attackThird.hint': 'Tap the ⅓ card on the 12.',
-  'tutorial.l6.attackThird.celebrate': 'Nice — ⅓ works too',
-  'tutorial.l6.defendHalf.bot': 'A ½ attack is active — defend with a number divisible by 2 (e.g. 4, 6, 8).',
-  'tutorial.l6.defendHalf.hint': 'Tap a valid number card to defend.',
-  'tutorial.l6.defendHalf.celebrate': 'Solid defense',
-  'tutorial.l6.defendThird.bot': 'Now a ⅓ attack — defend with a number divisible by 3 (e.g. 6, 9, 12).',
-  'tutorial.l6.defendThird.hint': 'Tap a number that divides by 3.',
-  'tutorial.l6.defendThird.celebrate': 'You did it — fractions unlocked',
+  'tutorial.l7.theory.hint': 'Tap Continue to try it on the real board.',
+  'tutorial.l7.theory.celebrate': 'Let us practice',
+  'tutorial.l7.attackHalf.bot': 'The pile shows 12 — it divides by 2. Play your ½ card on it',
+  'tutorial.l7.attackHalf.hint': 'Tap the ½ card to attack the pile.',
+  'tutorial.l7.attackHalf.celebrate': 'Great — that was a ½ attack',
+  'tutorial.l7.attackThird.bot': 'Again: 12 divides by 3. Play your ⅓ card',
+  'tutorial.l7.attackThird.hint': 'Tap the ⅓ card on the 12.',
+  'tutorial.l7.attackThird.celebrate': 'Nice — ⅓ works too',
+  'tutorial.l7.defendHalf.bot': 'A ½ attack is active — defend with a number divisible by 2 (e.g. 4, 6, 8).',
+  'tutorial.l7.defendHalf.hint': 'Tap a valid number card to defend.',
+  'tutorial.l7.defendHalf.celebrate': 'Solid defense',
+  'tutorial.l7.defendThird.bot': 'Now a ⅓ attack — defend with a number divisible by 3 (e.g. 6, 9, 12).',
+  'tutorial.l7.defendThird.hint': 'Tap a number that divides by 3.',
+  'tutorial.l7.defendThird.celebrate': 'You did it — fractions unlocked',
 
   // ── Auth ──
   'auth.signUpTitle': 'Sign Up',

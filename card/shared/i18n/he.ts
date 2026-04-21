@@ -4,9 +4,9 @@ const heLateOverrides: Record<string, string> = {
   'guidance.welcomeBody': 'רוצים שאציג הדרכה והסברים תוך כדי המשחק, או להמשיך בלי הדרכה?',
   'guidance.skip': 'בלי הדרכה',
   'guidance.need': 'כן, עם הדרכה',
-  'start.wheel.beginnerStage': 'מסלול תרגול',
+  'start.wheel.beginnerStage': 'רמת תרגול (A-H)',
   'start.wheel.beginnerStageHelp':
-    'בחרו מסלול לפי רמת קושי וטווח מספרים. השורה מתחת לכפתורים מסכמת את הבחירה — אין צורך לזכור בעל פה.',
+    'A–D: חיבור וחיסור — A/B על קלפים 0–12, C/D על 0–25. E–H: כפל וחילוק — E/F על 0–12, G/H על 0–25. השורה מתחת לכפתורים מסכמת את הבחירה.',
 };
 
 export const he: Record<string, string> = {
@@ -85,13 +85,13 @@ export const he: Record<string, string> = {
   'draw.cannotDrawNow': 'לא ניתן לשלוף קלף כעת',
 
   'operation.onlyInEquation': 'קלף סימן משולב רק בתוך התרגיל',
-  'joker.onlyInEquation': 'ג׳וקר משולב רק בתוך התרגיל',
+  'joker.onlyInEquation': 'סלינדה משולבת רק בתוך התרגיל',
 
   'call.notAvailable': 'פעולה זו אינה זמינה במשחק',
 
   'labels.player': 'שחקן',
   'labels.wild': 'פרא',
-  'labels.joker': 'ג׳וקר',
+  'labels.joker': 'סלינדה',
   'labels.wildWithValue': 'פרא ({{value}})',
 
   // ── Toasts / status messages ──
@@ -207,7 +207,7 @@ export const he: Record<string, string> = {
   'lobby.copyFail': 'לא ניתן היה להעתיק. נסה דרך "שתף קישור".',
   'lobby.timerFmtMinSec': '{{m}} דק׳ {{s}} שנ׳',
 
-  'start.title': 'Salinda / סלינדה',
+  'start.title': 'סלינדה',
   'start.subtitle': 'סלינדה · משחק חשבוני חינוכי',
   'start.playerCount': 'מספר שחקנים',
   'start.playerNames': 'שמות השחקנים',
@@ -266,7 +266,7 @@ export const he: Record<string, string> = {
   'gameTip.fractionDefend': 'טיפ: הנח קלף שמתחלק ב־{{d}} (או פרא עם ערך כזה), שבר מתאים, או שלוף {{d}} קלפים.',
   'gameTip.identical': 'טיפ: יש לך קלף זהה לערימה — הנח אותו כדי לדלג על הקוביות! ★ יש לך פרא? אפשר להניחו כזהה כשראש הערימה מספר.',
   'gameTip.rollOrMatch': 'טיפ: הטל קוביות או הנח קלף זהה לערימה (אם יש).',
-  'gameTip.opInEquation': 'טיפ: קלף סימן/ג׳וקר משולב בתוך התרגיל כדי להיפטר מהקלף.',
+  'gameTip.opInEquation': 'טיפ: קלף סימן/סלינדה משולב בתוך התרגיל כדי להיפטר מהקלף.',
   'gameTip.buildEquation': 'טיפ: בנה תרגיל ממספרי הקוביות (אפשר 2 או 3 קוביות).',
   'gameTip.pickSum': 'טיפ: בחר קלפים שסכומם {{n}} ולחץ "בחרתי".',
   'gameTip.defaultGuide': 'המשחק ינחה אותך בכל תור.',
@@ -301,11 +301,11 @@ export const he: Record<string, string> = {
   'game.playersHeading': 'שחקנים',
   'game.cardsCount': '{{n}} קלפים',
   'game.opChallenge': 'אתגר פעולה: {{op}}',
-  'game.opChallengeHint': "הגן/י עם קלף פעולה תואם או ג'וקר מהיד שלך, או קבל/י עונש של 2 קלפים.",
+  'game.opChallengeHint': 'הגן/י עם קלף פעולה תואם או סלינדה מהיד שלך, או קבל/י עונש של 2 קלפים.',
   'game.takePenalty': 'קבל/י עונש',
   'game.drawCard': 'שלוף קלף',
   'game.endTurn': 'סיים תור',
-  'game.pickJokerOp': "בחר/י פעולה לג'וקר",
+  'game.pickJokerOp': 'בחר/י פעולה לסלינדה',
   'game.yourHand': 'היד של {{name}}',
   'game.discardPile': 'ערימה',
   'game.discardEmpty': 'ריק',
@@ -313,7 +313,7 @@ export const he: Record<string, string> = {
   'game.rolling': 'מגלגל...',
   'game.rollDice': 'הטל קוביות',
   'game.diceLine': 'תוצאה: {{d1}}, {{d2}}, {{d3}}',
-  'game.logo': 'לולוס',
+  'game.logo': 'סלינדה',
   'game.turnOf': 'תורו/ה של {{name}}',
   'game.passDevice': 'העבר/י את המכשיר ל',
   'game.imReady': 'אני מוכן/ה',
@@ -353,7 +353,7 @@ export const he: Record<string, string> = {
   'startScreen.cardTypes': 'סוגי קלפים',
   'startScreen.rule8': '8. קלף שבר: מחלק את הקלף העליון במכנה השבר.',
   'startScreen.rule9': "9. קלף פעולה: מוסיף סימן (+, -, x, ÷) לתרגיל.",
-  'startScreen.rule10': "10. ג'וקר: בוחרים סימן והוא פועל כקלף פעולה גמיש.",
+  'startScreen.rule10': '10. סלינדה: בוחרים סימן והיא פועלת כקלף פעולה גמיש.',
 
   // index.tsx local reducer / toasts
   'local.fractionRoundEndedRoll': 'סבב השברים הסתיים — הטל קוביות',
@@ -467,7 +467,7 @@ export const he: Record<string, string> = {
   'demoSim.logOpen': 'פתיחת מסך שליטה למורה',
 
   // Legacy src/context/GameContext (simplified ruleset)
-  'legacy.opChallengeDefend': "פעולת {{op}}! שחק/י קלף פעולה תואם או ג'וקר כדי להגן, או סיים/י תור כדי לשלוף 2 קלפים.",
+  'legacy.opChallengeDefend': 'פעולת {{op}}! שחק/י קלף פעולה תואם או סלינדה כדי להגן, או סיים/י תור כדי לשלוף 2 קלפים.',
   'legacy.opChallengePenalty': "אין הגנה מפני {{op}}! שלפת 2 קלפי עונשין. עכשיו הטל/י קוביות.",
   'legacy.diceNoValidTargets': 'אין מספרים תקינים מהקוביות. שחק/י קלפים מיוחדים או שלוף/י.',
   'legacy.playedThisTurn': 'כבר שיחקת קלפים בתור הזה!',
@@ -483,7 +483,7 @@ export const he: Record<string, string> = {
   'legacy.notOperationCard': 'זה לא קלף פעולה!',
   'legacy.operationPlayed': 'שוחק קלף פעולה {{op}}! סיים/י את התור.',
   'legacy.fractionPlayedMath': 'שוחק {{frac}}! {{top}} ÷ {{denom}} = {{result}}. סיים/י את התור.',
-  'legacy.jokerPlayedAs': "ג'וקר שוחק כ-{{op}}! סיים/י את התור.",
+  'legacy.jokerPlayedAs': 'סלינדה שוחקה כ-{{op}}! סיים/י את התור.',
   'legacy.endTurnAfterPlay': 'כבר שיחקת קלפים בתור הזה! סיים/י את התור.',
   'legacy.noCardsToDraw': 'אין קלפים לשליפה!',
   'legacy.drewCardCount': 'נשלף קלף. ({{n}} קלפים ביד)',
@@ -493,7 +493,7 @@ export const he: Record<string, string> = {
   'sound.play': 'Play',
   'sound.stopAll': 'Stop all',
 
-  'joker.banner': "★ ג'וקר! ★",
+  'joker.banner': '★ סלינדה! ★',
 
   'wildModal.title': 'פרא — בחר/י ערך מתחלק במכנה',
   'game.placeCards': 'בחרתי',
@@ -660,7 +660,7 @@ export const he: Record<string, string> = {
   'start.advancedSetup.sectionHelpersHeading': '3. עזרה במהלך המשחק',
   'start.advancedSetup.sectionTimerHeading': '4. זמן לתור',
   'start.advancedSetup.hint.numberRangeRow':
-    '0–12: מספרים על הקלפים עד 12. 0–25: עד 25.',
+    '0–12 מגביל את המספרים על הקלפים ל־12; 0–25 מאפשר עד 25. אפשר לכוונן ידנית גם אחרי בחירת שלב A–H.',
   'start.advancedSetup.hint.fractionsRow':
     'עם שברים: אפשר לבחור אילו שברים ישתתפו במשחק.',
   'start.advancedSetup.fractionsLockedLowRange':
@@ -723,7 +723,7 @@ export const he: Record<string, string> = {
     'קלפי מספרים 0–25. כפל וחילוק.',
   'start.wheel.beginnerStage': 'רמת תרגול',
   'start.wheel.beginnerStageHelp':
-    'בחירת רמת התרגול מגדירה אילו סימנים פעילים וטווח המספרים. השורה מתחת מסכמת את הבחירה.',
+    'A–D: חיבור וחיסור — A/B על קלפים 0–12, C/D על 0–25. E–H: כפל וחילוק — E/F על 0–12, G/H על 0–25. השורה מתחת לכפתורים מסכמת את הבחירה.',
   'start.wheel.operators': 'סימנים במשחק',
   'start.wheel.timerRow': 'טיימר',
   'start.wheel.guidanceRow': 'הדרכה והסברים',
@@ -784,7 +784,7 @@ export const he: Record<string, string> = {
   'lab.stats.d2':
     'למה אין נוסחה סגורה: מרחב מצבים ענק (חלוקות קלפים, קוביות, בחירות); התנהגות אסטרטגית. חישוב מדויק לא מעשי — רק סימולציה.',
   'lab.stats.d3':
-    'רובוט: משוואה תקפה מהקוביות והיד → משחק; קלף זהה לערימה → הנחה; אחרת שולף. לולוס ב־2 קלפים. ניצחון כשנשארים עם 2 קלפים ביד.',
+    'רובוט: משוואה תקפה מהקוביות והיד → משחק; קלף זהה לערימה → הנחה; אחרת שולף. הכרזה ב־2 קלפים. ניצחון כשנשארים עם 2 קלפים ביד.',
   'lab.stats.d4':
     'פלט: P(סיום) = שיעור ריצות שניצחו; ממוצע וחציון תורות; אופציונלי — התפלגות אורך משחק. סקריפטים: card/scripts/ (למשל simulate-lolos.js, simulate-variants.js).',
   'lab.stats.d5':
@@ -821,7 +821,7 @@ export const he: Record<string, string> = {
   'lab.power.d1': '"כפול תוצאה" — מניחים קלפים לפי 2×תוצאת המשוואה (למשל תוצאה 5 מאפשרת להניח קלפים שערכם 10).',
   'lab.power.d2': '"משולש תוצאה" (3×) — אותו עיקרון עם הכפלה פי 3.',
   'lab.power.d3': 'אפשרות אחרת: קלף שמאפשר להניח שני קלפים במכה אחת אם שניהם מתאימים לתוצאה.',
-  'lab.power.d4': 'משפיע על קצב ריקון היד ואסטרטגיה — מתאים למי שמגיע ללולוס ורוצה לזרז סיום.',
+  'lab.power.d4': 'משפיע על קצב ריקון היד ואסטרטגיה — שימושי סמוך לסיום.',
 
   'lab.zero.title': '0️⃣ קלף אפס',
   'lab.zero.desc': 'מאפס את תוצאת המשוואה או משנה את המספר המבוקש ל־0.',
@@ -839,7 +839,7 @@ export const he: Record<string, string> = {
   'lab.steal.title': '🤲 גניבה',
   'lab.steal.desc': 'לקיחת קלף מיד יריב — מגדיל אינטראקציה ואיום בין שחקנים.',
   'lab.steal.d1': 'מנגנון: קלף אחד מיד יריב — נבחר אקראית, או השחקן בוחר קלף גלוי (לפי חוקים).',
-  'lab.steal.d2': 'משפיע על אסטרטגיית "לולוס" — סיכון שגונבים קלף טוב לפני סיום; או גניבה מקלפים חלשים.',
+  'lab.steal.d2': 'משפיע על אסטרטגיית ההכרזה — סיכון שגונבים קלף טוב לפני הסיום; או גניבה מקלפים חלשים.',
   'lab.steal.d3': 'אפשר לשלב עם קלף מגן (שמירה) — הגנה מפני גניבה באותו תור (ראה מסמך shield-card-design).',
   'game.botAlreadyHasOpponent': 'כבר יש יריב אמיתי בחדר',
   'lobby.botBadge': 'בוט',
@@ -858,7 +858,7 @@ export const he: Record<string, string> = {
   'start.botMedium': 'בינוני',
   'start.botHard': 'קשה',
   'start.botNameLabel': 'שם לבוט (אופציונלי)',
-  'start.botNamePlaceholder': 'למשל רובי-בוט',
+  'start.botNamePlaceholder': 'למשל סלינדה-בוט',
   'start.advancedSettings': 'הגדרות מתקדמות',
 
   // vs-bot feature — runtime strings (M6.1)
@@ -896,10 +896,10 @@ export const he: Record<string, string> = {
   'botOffline.explain.playIdenticalCard': '{{name}} מניח קלף זהה: {{card}}.',
   'botOffline.explain.fractionBlock': '{{name}} בחר קלף שבר {{card}} וחסם.',
   'botOffline.explain.defendNumber': '{{name}} בחר מספר {{card}} — מתחלק ב־{{penalty}}.',
-  'botOffline.explain.defendWild': '{{name}} בחר פרא ({{value}}) — מתחלק ב־{{penalty}}.',
+  'botOffline.explain.defendWild': '{{name}} בחר פרא {{card}} (ערך {{value}}) — מתחלק ב־{{penalty}}.',
   'botOffline.explain.defendPenalty': '{{name}} בלי הגנה מתאימה — שולף {{penalty}} קלפי עונש.',
   'botOffline.explain.confirmEquation': '{{name}} בנה תרגיל: {{equation}} (יעד {{target}}).',
-  'botOffline.explain.confirmEquationJoker': '{{name}} משתמש בג׳וקר בתור {{op}} בתוך התרגיל.',
+  'botOffline.explain.confirmEquationJoker': '{{name}} משתמש/ת בסלינדה בתור {{op}} בתוך התרגיל.',
   'botOffline.explain.confirmEquationOperation': '{{name}} משלב בתרגיל קלף פעולה מסוג {{op}}.',
   'botOffline.explain.stageCard': '{{name}} מניח מהיד את הקלף {{card}} לתוצאת התרגיל.',
   'botOffline.explain.stageNumber': '{{name}} בוחר קלף מספר {{card}} ומניח לתוצאת התרגיל.',
@@ -928,7 +928,7 @@ export const he: Record<string, string> = {
   'tutorial.attackSubtitle': 'שחקו קלפי תקיפה כדי לאתגר יריבים — גרמו להם לשלוף קלפים נוספים או לדלג על תור',
   'tutorial.gotIt': 'הבנתי',
   'tutorial.letsPlay': 'בואו נשחק',
-  'tutorial.howToPlay': '?איך משחקים',
+  'tutorial.howToPlay': 'איך משחקים?',
 
   // ── טוטוריאל אינטראקטיבי ──
   'tutorial.lessonProgress': 'שיעור {{current}}/{{total}}',
@@ -1036,17 +1036,28 @@ export const he: Record<string, string> = {
   'tutorial.l4c.hintPressPlay': 'לחצו "בחרתי" לסיום',
   'tutorial.l4c.celebrate': 'כל הכבוד — סיימתם לבד',
 
-  // שיעור 5 — קלפי פעולה והג'וקר
+  // שיעור 5 — קלפי פעולה וסלינדה
   'tutorial.l5.title': 'סימני הפעולה',
-  'tutorial.l5.desc': '.בוחרים סימן פעולה לתרגיל — אפשר גם להשתמש בג׳וקר',
-  'tutorial.l5a.botIntro': '...ננסה את כל הסימנים',
+  'tutorial.l5.desc': '.בוחרים סימן פעולה לתרגיל — אפשר גם להשתמש בסלינדה',
+  // Step 5.1 (place-op): המישוואה מלאה עם + מוצב מראש בסלוט הסימן.
+  // השחקן בוחר קלף פעולה מהיד ומניח אותו במקום כדי להחליף את הסימן.
+  'tutorial.l5a.botIntro': 'בואו נניח קלף סימן פעולה בתרגיל',
+  'tutorial.l5a.hintChooseCard': 'בחרו קלף פעולה מתאים לתרגיל שתוצאתו {{result}}',
+  'tutorial.l5a.hintPressEquation': 'עכשיו בחרו מקום בתרגיל כדי להניח את קלף הפעולה',
+  'tutorial.l5a.celebrate': 'יופי — הנחתם קלף פעולה בתרגיל. נמשיך לסלינדה',
+  // (ישנים — נשמרים למקרה של קישורים חיצוניים, אבל לא בשימוש בצעדים הנוכחיים.)
   'tutorial.l5a.hintCycle': 'לחצו על כפתור הסימן במשוואה — כל לחיצה מחליפה סימן; עברו על כל ארבעת הסימנים',
-  'tutorial.l5a.celebrate': 'ראיתם? כל סימן נותן תוצאה אחרת',
-  'tutorial.l5b.botIntro': 'בג׳וקר יש את כל הסימנים — בואו ננסה',
-  'tutorial.l5b.hintTapJoker': 'בג׳וקר יש את כל הסימנים — לחצו עליו',
+  'tutorial.l5op.botIntro': 'עכשיו נתרגל — בחרו את הקלף המתאים מהמניפה והניחו אותו בתרגיל',
+  'tutorial.l5op.hintPlaceMinus': 'לחצו על קלף המינוס (−) במניפה, ואז על מקום הסימן בתרגיל',
+  'tutorial.l5op.hintPlacePlus': 'עכשיו לחצו על קלף החיבור (+) והניחו אותו במקום',
+  'tutorial.l5op.wrong': 'לא הסימן הזה — נסו קלף אחר',
+  'tutorial.l5op.correctOne': 'יופי! עכשיו עוד תרגיל',
+  'tutorial.l5op.celebrate': 'מצוין — בחרת את הקלף הנכון',
+  'tutorial.l5b.botIntro': 'הכירו את סלינדה — יש לה את כל הסימנים',
+  'tutorial.l5b.hintTapJoker': 'לחצו על סלינדה',
   'tutorial.l5b.hintPickInModal': 'בחרו סימן',
   'tutorial.l5b.hintPlaceSign': 'עכשיו לחצו על המיקום בתרגיל',
-  'tutorial.l5b.celebrate': 'כל הכבוד — הבנת את הג׳וקר',
+  'tutorial.l5b.celebrate': 'כל הכבוד — הכרתם את סלינדה',
   'tutorial.l5c.botIntro': 'עכשיו נתרגל — לפעמים נותנים תרגיל עם תוצאה ואתם בוחרים את הסימן',
   'tutorial.l5c.hintSolve': 'בחרו את הסימן שמשלים את התרגיל ולחצו אשר',
   'tutorial.l5c.correctOne': 'יופי — ועכשיו עוד תרגיל',
@@ -1057,38 +1068,61 @@ export const he: Record<string, string> = {
   'tutorial.l5.opCardLabel.minus': 'חיסור',
   'tutorial.l5.opCardLabel.mul': 'כפל',
   'tutorial.l5.opCardLabel.div': 'חילוק',
-  'tutorial.l5.jokerLabel': 'ג׳וקר',
+  'tutorial.l5.jokerLabel': 'סלינדה',
+
+  // סיום הדרכת ליבה — בועת חגיגה לפני ענף השברים
+  'tutorial.coreComplete.title': '🎉 סיימתם!',
+  'tutorial.coreComplete.body': 'קיבלתם 10 מטבעות 🪙',
+  'tutorial.coreComplete.ack': 'הבנתי',
 
   // אחרי סימנים — ענף שברים אופציונלי
-  'tutorial.fracBranch.title': 'קלפי שבר?',
+  'tutorial.fracBranch.title': 'רוצים להרוויח עוד מטבעות?',
   'tutorial.fracBranch.body':
-    'סיימתם את הבסיס. רוצים שיעור קצר על קלפי שברים כמו 1/2 ו-1/3 — התקפה והגנה — או לחזור למשחק?',
+    'המשיכו להדרכת מתקדמים (קלפי שברים — חצי ושליש) או חזרה לתפריט ההתחלה.',
   'tutorial.fracBranch.prompt': 'בחרו מה לעשות הלאה.',
-  'tutorial.fracBranch.advancedBtn': 'המשך — שברים (חצי ושליש)',
-  'tutorial.fracBranch.finishBtn': 'סיום הדרכה ומשחק',
+  'tutorial.fracBranch.advancedBtn': 'המשיכו להדרכת מתקדמים',
+  'tutorial.fracBranch.finishBtn': 'חזרה לתפריט ההתחלה',
 
-  // שיעור 6 — שברים מתקדמים (חצי ושליש)
-  'tutorial.l6.title': 'קלפי שבר (מתקדמים)',
-  'tutorial.l6.desc': 'איך חצי ושליש מאתגרים את הערימה ואיך מגנים.',
-  'tutorial.l6.intro.bot': 'רעיון חדש: קלף שבר (כמו 1/2, 1/3) מחלק את המספר בראש הערימה — זה כוחי',
-  'tutorial.l6.intro.hint': 'לחצו "המשך" כשאתם מוכנים.',
-  'tutorial.l6.intro.celebrate': 'יפה — ממשיכים.',
-  'tutorial.l6.theory.bot':
+  // שיעור 6 — תוצאות אפשריות (כפתור ירוק + מיני־קלפים + תרגיל אדום)
+  'tutorial.l6.title': 'תוצאות אפשריות',
+  'tutorial.l6.desc': 'לוחצים על הכפתור הירוק, רואים אילו תוצאות אפשר להכין עם הקוביות — ומעתיקים תרגיל.',
+  // 6.1 — פותחים את הכפתור הירוק
+  'tutorial.l6a.botIntro': 'רואים את הכפתור הירוק? הוא בא לעזור לנו',
+  'tutorial.l6a.hintTapChip': 'עכשיו לחצו עליו',
+  'tutorial.l6a.celebrate': 'זה מה שיצא! כל מיני־קלף הוא תוצאה אפשרית',
+  // 6.2 — לוחצים על מיני־קלף ורואים את התרגיל האדום
+  'tutorial.l6b.botIntro': 'המיני־קלפים מראים חלק מהאפשרויות שאפשר לפתור',
+  'tutorial.l6b.hintTapMini': 'לחצו על מיני־קלף ותגלו גם את הדרך',
+  'tutorial.l6b.celebrate': 'זה התרגיל! עכשיו רואים גם את התוצאה וגם איך בונים אותה',
+  // 6.3 — מעתיקים את התרגיל האדום לבונה המשוואה
+  'tutorial.l6c.botIntro': 'עכשיו תורכם — העתיקו את התרגיל שבאדום אל בונה המשוואה',
+  'tutorial.l6c.hintCopy': 'הרכיבו את התרגיל שבאדום: קוביות וסימן פעולה',
+  'tutorial.l6c.hintConfirm': 'לחצו "אשר את התרגיל" כדי לסיים',
+  'tutorial.l6c.mismatch': 'כמעט — התוצאה חייבת להתאים לתרגיל האדום. ננסה שוב',
+  'tutorial.l6c.celebrate': 'כל הכבוד — העתקתם את התרגיל',
+
+  // שיעור 7 — שברים מתקדמים (חצי ושליש)
+  'tutorial.l7.title': 'קלפי שבר (מתקדמים)',
+  'tutorial.l7.desc': 'איך חצי ושליש מאתגרים את הערימה ואיך מגנים.',
+  'tutorial.l7.intro.bot': 'רעיון חדש: קלף שבר (כמו 1/2, 1/3) מחלק את המספר בראש הערימה — זה כוחי',
+  'tutorial.l7.intro.hint': 'לחצו "המשך" כשאתם מוכנים.',
+  'tutorial.l7.intro.celebrate': 'יפה — ממשיכים.',
+  'tutorial.l7.theory.bot':
     'התקפה: משחקים חצי או שליש על מספר שמתחלק ב־2 או ב־3 (למשל 12). הגנה: משחקים מספר שמתחלק בעונש (מוצג באתגר).',
-  'tutorial.l6.theory.hint': 'לחצו "המשך" כדי לנסות על הלוח האמיתי.',
-  'tutorial.l6.theory.celebrate': 'בואו נתרגל',
-  'tutorial.l6.attackHalf.bot': 'בערימה יש 12 — מתחלק ב־2. שחקו את קלף החצי עליו',
-  'tutorial.l6.attackHalf.hint': 'לחצו על קלף החצי כדי לתקוף את הערימה.',
-  'tutorial.l6.attackHalf.celebrate': 'מעולה — זו הייתה התקפת חצי',
-  'tutorial.l6.attackThird.bot': 'שוב: 12 מתחלק ב־3. שחקו את קלף השליש',
-  'tutorial.l6.attackThird.hint': 'לחצו על קלף השליש על ה־12.',
-  'tutorial.l6.attackThird.celebrate': 'נחמד — גם שליש עובד',
-  'tutorial.l6.defendHalf.bot': 'התקפת חצי פעילה — הגנו עם מספר שמתחלק ב־2 (למשל 4, 6, 8).',
-  'tutorial.l6.defendHalf.hint': 'לחצו על קלף מספר מתאים להגנה.',
-  'tutorial.l6.defendHalf.celebrate': 'הגנה מצוינת',
-  'tutorial.l6.defendThird.bot': 'עכשיו התקפת שליש — הגנו עם מספר שמתחלק ב־3 (למשל 6, 9, 12).',
-  'tutorial.l6.defendThird.hint': 'לחצו על מספר שמתחלק ב־3.',
-  'tutorial.l6.defendThird.celebrate': 'עשיתם את זה — שברים נפתחו',
+  'tutorial.l7.theory.hint': 'לחצו "המשך" כדי לנסות על הלוח האמיתי.',
+  'tutorial.l7.theory.celebrate': 'בואו נתרגל',
+  'tutorial.l7.attackHalf.bot': 'בערימה יש 12 — מתחלק ב־2. שחקו את קלף החצי עליו',
+  'tutorial.l7.attackHalf.hint': 'לחצו על קלף החצי כדי לתקוף את הערימה.',
+  'tutorial.l7.attackHalf.celebrate': 'מעולה — זו הייתה התקפת חצי',
+  'tutorial.l7.attackThird.bot': 'שוב: 12 מתחלק ב־3. שחקו את קלף השליש',
+  'tutorial.l7.attackThird.hint': 'לחצו על קלף השליש על ה־12.',
+  'tutorial.l7.attackThird.celebrate': 'נחמד — גם שליש עובד',
+  'tutorial.l7.defendHalf.bot': 'התקפת חצי פעילה — הגנו עם מספר שמתחלק ב־2 (למשל 4, 6, 8).',
+  'tutorial.l7.defendHalf.hint': 'לחצו על קלף מספר מתאים להגנה.',
+  'tutorial.l7.defendHalf.celebrate': 'הגנה מצוינת',
+  'tutorial.l7.defendThird.bot': 'עכשיו התקפת שליש — הגנו עם מספר שמתחלק ב־3 (למשל 6, 9, 12).',
+  'tutorial.l7.defendThird.hint': 'לחצו על מספר שמתחלק ב־3.',
+  'tutorial.l7.defendThird.celebrate': 'עשיתם את זה — שברים נפתחו',
 
   // ── Auth ──
   'auth.signUpTitle': 'הרשמה',
