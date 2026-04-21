@@ -659,17 +659,18 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     return () => tutorialBus.setL5BlockOpCycle(false);
   }, [engine.lessonIndex, engine.phase]);
 
-  // L5.1 (place-op) ONLY: lock the pre-filled dice slots so the learner
-  // can't accidentally empty the equation while searching for the operator
-  // slot. `setL5aBlockFanTaps` drives that lock in renderDiceSlot /
-  // unplaced-dice-button onPress. Leaves fan card taps untouched — the
-  // learner still needs to pick an operation card from the fan.
+  // L5.1 (place-op) AND L5.2 (joker-place): lock the pre-filled dice slots
+  // so the learner can't accidentally empty the equation while searching
+  // for the operator slot. `setL5aBlockFanTaps` drives that lock in
+  // renderDiceSlot / unplaced-dice-button onPress. Leaves fan card taps
+  // untouched — the learner still needs to pick an operation card (or
+  // Slinda) from the fan.
   // `setL5aTargetResult` pushes the target (7 for `4 + 3`) into the result
-  // box so the learner sees what they're aiming for before picking an op.
+  // box so both steps show the same goal: sign slot empty, target `= 7`.
   useEffect(() => {
     const on =
       engine.lessonIndex === 4 &&
-      engine.stepIndex === 0 &&
+      engine.stepIndex <= 1 &&
       (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
     tutorialBus.setL5aBlockFanTaps(on);
     tutorialBus.setL5aTargetResult(on ? 7 : null);
