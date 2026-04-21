@@ -267,10 +267,8 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const [wrongAttemptTick, setWrongAttemptTick] = useState(0);
   const wrongShakeAnim = useRef(new Animated.Value(0)).current;
 
-  // L5a wrong-tap feedback: bumps when the learner taps a fan card during 5a
-  // (when they should be tapping the equation operator slot instead).
-  const [l5aWrongTapTick, setL5aWrongTapTick] = useState(0);
-  const eqHighlightPulse = useRef(new Animated.Value(0)).current;
+  // (L5a wrong-tap feedback was removed when the lesson was rebuilt
+  // around card placement — fan taps are now the correct first action.)
 
   // ── Lesson 4 step 3 (guided full build) sub-phase ──
   // Drives the dynamic speech bubble + arrow position during the learner's
@@ -316,6 +314,69 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   type L5Ex = { a: number; b: number; op: L5Op; result: number };
   const [l5Exercises, setL5Exercises] = useState<L5Ex[]>([]);
   const [l5ExIndex, setL5ExIndex] = useState<0 | 1 | 2>(0);
+
+  // ── Lesson 5.2 (operator pick & place) state ──
+  // Two exercises: first minus (e.g. 6−3), then plus (e.g. 4+5), with fresh
+  // random numbers each run. The learner has to pick the matching operator
+  // card from the fan and drop it on the op1 slot — same mechanic as in the
+  // real game (PLACE_EQ_OP). `l5OpPickIndex` is the 0-based pointer
+  // (2 = both solved → step outcome fires). The transient feedback banner
+  // mirrors solve-for-op but is scoped to pick-place so the two steps don't
+  // share state.
+  type L5OpPickEx = { a: number; b: number; op: '+' | '-' };
+  const [l5OpPickExercises, setL5OpPickExercises] = useState<L5OpPickEx[]>([]);
+  const [l5OpPickIndex, setL5OpPickIndex] = useState<0 | 1 | 2>(0);
+  const [l5OpPickFeedback, setL5OpPickFeedback] = useState<null | 'correct' | 'wrong'>(null);
+
+  // Random exercise generator — minus first (a ≥ b + 1, result ≥ 1) then plus
+  // (1..6 both). Operations are fixed per slot (the lesson teaches minus AND
+  // plus card placement specifically — see spec in docs).
+  const generateL5OpPickExercises = (): L5OpPickEx[] => {
+    const aMinus = 3 + Math.floor(Math.random() * 7); // 3..9
+    const bMinus = 1 + Math.floor(Math.random() * (aMinus - 1)); // 1..aMinus-1 → a-b ≥ 1
+    const aPlus = 1 + Math.floor(Math.random() * 6); // 1..6
+    const bPlus = 1 + Math.floor(Math.random() * 6); // 1..6
+    return [
+      { a: aMinus, b: bMinus, op: '-' },
+      { a: aPlus, b: bPlus, op: '+' },
+    ];
+  };
+
+  // Rig the underlying game for a single pick-place exercise: clear the
+  // equation, roll dice to the exercise's (a, b) + a random d3, give the
+  // learner a fresh 4-card hand with all four operator cards, then pre-
+  // fill the two dice slots so the equation shows `[a] [?] [b] … = ?`.
+  // The learner's job is to drop the matching operator on the `?` slot.
+  const rigL5OpPickExercise = (ex: L5OpPickEx): void => {
+    // Clear any leftover placement from a prior exercise (PLACE_EQ_OP still
+    // holds the card reference in equationHandSlots even after eqReset).
+    gameDispatch({ type: 'CLEAR_EQ_HAND' });
+    tutorialBus.emitFanDemo({ kind: 'eqReset' });
+    const d3 = 1 + Math.floor(Math.random() * 6);
+    gameDispatch({
+      type: 'TUTORIAL_SET_DICE',
+      values: { die1: ex.a, die2: ex.b, die3: d3 },
+    });
+    const ts = Date.now();
+    const playerHand = [
+      { id: `tut-l5op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+      { id: `tut-l5op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+      { id: `tut-l5op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+      { id: `tut-l5op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
+    ];
+    const botHand = [
+      { id: `tut-l5op-bot-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+      { id: `tut-l5op-bot-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+      { id: `tut-l5op-bot-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+      { id: `tut-l5op-bot-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
+    ];
+    gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+    // Pre-fill d1 and d2 after React commits TUTORIAL_SET_DICE — without the
+    // gap, eqPickDice reads stale dice values and the picks clobber each
+    // other (see L5a prefill logic).
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
+    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
+  };
 
   // Curated (a, b) pairs where all 4 operations yield integers. Pick one at
   // random when lesson 5 starts so the learner sees different numbers each
@@ -401,6 +462,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
     tutorialBus.emitFanDemo({ kind: 'clearCardFrame' });
     tutorialBus.emitFanDemo({ kind: 'eqReset' });
+    // eqReset only clears the EquationBuilder's local dice/op state. Any
+    // operator or joker card the learner placed into equationHandSlots in
+    // the previous step (e.g. L5.2's joker on an op slot) is still held in
+    // game state, and the L5.1 self-prefill bails out while any slot is
+    // non-null — producing the "empty equation, `?` sign" on GO_BACK into
+    // L5.1. CLEAR_EQ_HAND is idempotent for lessons that don't populate
+    // these slots, so it's safe to always dispatch on lesson-intro.
+    gameDispatch({ type: 'CLEAR_EQ_HAND' });
     if (!isFracLesson && gameState?.phase === 'solved') {
       gameDispatch({ type: 'REVERT_TO_BUILDING' });
     }
@@ -534,6 +603,10 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     const step = lesson?.steps[engine.stepIndex];
     if (!step) return;
     const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 2;
+    // Lesson 5 is a two-step placement lesson — fan taps are always the
+    // intended first action (pick an operator card in 5.1, tap the joker
+    // in 5.2), so they should NEVER trigger the "wrong answer" shake.
+    const isL5 = engine.lessonIndex === 4;
     return tutorialBus.subscribeUserEvent((evt) => {
       if (step.outcome(evt)) {
         dispatchEngine({ type: 'OUTCOME_MATCHED' });
@@ -542,6 +615,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       // Lesson-4 step-3 taps are staging actions, not "wrong answers" — the
       // step advances when the learner hits "בחרתי", so suppress the shake.
       if (isL4Step3) return;
+      if (isL5) return;
       // A WRONG card pick — only flash "try again" for cardTapped events
       // that didn't match. Die picks (eqUserPickedDice) are valid
       // intermediate actions and should NEVER trigger "wrong".
@@ -572,44 +646,48 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     return () => tutorialBus.setL5GuidedMode(false);
   }, [engine.lessonIndex, engine.phase]);
 
-  // L5a (step 5a): block fan card taps so learner is guided to tap the
-  // equation's operator slot instead.
+  // L5 is now a pure "place an operator card" lesson — no cycle-on-tap. The
+  // fan is the PRIMARY interaction target (learner picks a card from it), so
+  // we explicitly DO NOT block fan taps. Cycling the `?` slot is blocked in
+  // BOTH L5 steps so tapping the operator slot either places a held card or
+  // does nothing — it never flips the sign.
+  useEffect(() => {
+    const on =
+      engine.lessonIndex === 4 &&
+      (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
+    tutorialBus.setL5BlockOpCycle(on);
+    return () => tutorialBus.setL5BlockOpCycle(false);
+  }, [engine.lessonIndex, engine.phase]);
+
+  // L5.1 (place-op) ONLY: lock the pre-filled dice slots so the learner
+  // can't accidentally empty the equation while searching for the operator
+  // slot. `setL5aBlockFanTaps` drives that lock in renderDiceSlot /
+  // unplaced-dice-button onPress. Leaves fan card taps untouched — the
+  // learner still needs to pick an operation card from the fan.
+  // `setL5aTargetResult` pushes the target (7 for `4 + 3`) into the result
+  // box so the learner sees what they're aiming for before picking an op.
   useEffect(() => {
     const on =
       engine.lessonIndex === 4 &&
       engine.stepIndex === 0 &&
       (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
     tutorialBus.setL5aBlockFanTaps(on);
-    return () => tutorialBus.setL5aBlockFanTaps(false);
+    tutorialBus.setL5aTargetResult(on ? 7 : null);
+    return () => {
+      tutorialBus.setL5aBlockFanTaps(false);
+      tutorialBus.setL5aTargetResult(null);
+    };
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
-  // L5a wrong-tap: subscribe to cardTapped events while in L5a and bump the
-  // tick so the guidance bubble + equation highlight appear.
-  useEffect(() => {
-    if (engine.lessonIndex !== 4 || engine.stepIndex !== 0) return;
-    return tutorialBus.subscribeUserEvent((evt) => {
-      if (evt.kind !== 'cardTapped') return;
-      setL5aWrongTapTick((t) => t + 1);
-    });
-  }, [engine.lessonIndex, engine.stepIndex]);
+  // L5.1 (place-op) outcome wiring lives in the lesson definition
+  // (lesson-05-op-cycle.ts) — `outcome: event.kind === 'l5OperatorPlaced'`.
+  // The engine subscribes to user events globally; index.tsx emits the
+  // event from renderOpBtn.onPress → PLACE_EQ_OP, so nothing else is
+  // needed here.
 
-  // Auto-dismiss the L5a wrong-tap bubble after 2.5s.
-  useEffect(() => {
-    if (l5aWrongTapTick === 0) return;
-    const timer = setTimeout(() => setL5aWrongTapTick(0), 2500);
-    return () => clearTimeout(timer);
-  }, [l5aWrongTapTick]);
-
-  // L5a equation highlight pulse: runs an opacity 0→0.7→0 animation over
-  // ~1500ms each time a wrong fan tap fires.
-  useEffect(() => {
-    if (l5aWrongTapTick === 0) return;
-    eqHighlightPulse.setValue(0);
-    Animated.sequence([
-      Animated.timing(eqHighlightPulse, { toValue: 0.7, duration: 300, useNativeDriver: true }),
-      Animated.timing(eqHighlightPulse, { toValue: 0, duration: 1200, useNativeDriver: true }),
-    ]).start();
-  }, [l5aWrongTapTick, eqHighlightPulse]);
+  // (L5a wrong-tap wiring was removed — the new L5.1 flow MAKES fan taps
+  // the correct first action, so there's nothing "wrong" about tapping a
+  // card during this step.)
 
   // Optional fractions module: emit bus events for scripted outcomes.
   useEffect(() => {
@@ -623,6 +701,10 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   }, [engine.lessonIndex, engine.phase]);
 
   useEffect(() => {
+    // Joker-place is now stepIndex 1 (the new place-op step took over
+    // stepIndex 0 and the old cycle-signs / pick-place / solve-for-op
+    // steps were retired). Sub-hint flow: tap joker → pick sign in modal
+    // → place on slot.
     const isL5bAwait = engine.lessonIndex === 4 && engine.stepIndex === 1 && engine.phase === 'await-mimic';
     if (!isL5bAwait) return;
     setL5FlowHintPhase('tapJoker');
@@ -752,7 +834,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const eqLessonHandRiggedRef = useRef(false);
   const l5LessonAdvancedRef = useRef(false);
   const l5LessonHandRiggedRef = useRef(false);
-  const l5EquationPrefilledRef = useRef(false);
   const rigL4 = () => {
     // Use rollL4Dice values as-is — NO re-derivation. This guarantees
     // perfect consistency: the dice, pickA/pickB, target, hand, and
@@ -812,7 +893,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     if (engine.phase === 'intro') {
       l5LessonAdvancedRef.current = false;
       l5LessonHandRiggedRef.current = false;
-      l5EquationPrefilledRef.current = false;  // NEW
       return;
     }
     if (!gameState?.players || gameState.players.length < 2) return;
@@ -828,9 +908,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // has no phase restriction. Run the rigging once per lesson entry.
     if (!l5LessonHandRiggedRef.current) {
       l5LessonHandRiggedRef.current = true;
-      // L5a pedagogy: fixed dice so each op produces a visually distinct result
-      // (6+6=12, 6−6=0, 6×6=36, 6÷6=1). Not rolled randomly.
-      const FIXED_L5_DICE = { d1: 6, d2: 6, d3: 8 };
+      // L5.1 pedagogy: the learner sees `4 ? 3 = 7` and must pick the `+`
+      // card to complete it. Dice are fixed (not rolled) so the exercise
+      // stays deterministic; d1 and d2 are intentionally distinct and the
+      // target (7 = 4+3) maps to exactly one correct operator.
+      // No joker in this hand — the joker is introduced in step 5.2, and
+      // exposing it here would let the learner bypass the "pick the right
+      // operation card" decision that step 5.1 is teaching.
+      const FIXED_L5_DICE = { d1: 4, d2: 3, d3: 9 };
       gameDispatch({ type: 'ROLL_DICE', values: { die1: FIXED_L5_DICE.d1, die2: FIXED_L5_DICE.d2, die3: FIXED_L5_DICE.d3 } });
       const ts = Date.now();
       const playerHand = [
@@ -838,60 +923,25 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
         { id: `tut-l5-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
         { id: `tut-l5-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
-        { id: `tut-l5-joker-${ts}`, type: 'joker' as const },
       ];
       const botHand = [
         { id: `tut-l5-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
         { id: `tut-l5-bot-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
         { id: `tut-l5-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
         { id: `tut-l5-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
-        { id: `tut-l5-bot-joker-${ts}`, type: 'joker' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
     }
   }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
 
-  // ── Lesson 5a: pre-fill equation slots 0 and 1 with dice indices so the
-  //    learner sees "6 _ 6 = ?" the moment they enter the lesson. d3
-  //    remains a rolled-but-unplaced dice button at top. Only the
-  //    the operator slot(s) stay empty and pulsing. This fires once per
-  //    lesson entry, after the game has transitioned to `building` so the
-  //    EquationBuilder is mounted and its fan-demo subscriber is active.
-  //    Running it here (not in the pre-roll rigging block) avoids a race
-  //    where the picks land before the subscriber registers. ──
-  useEffect(() => {
-    if (engine.lessonIndex !== 4) return;
-    if (engine.stepIndex !== 0) return;
-    if (gameState?.phase !== 'building') return;
-    if (l5EquationPrefilledRef.current) return;
-    l5EquationPrefilledRef.current = true;
-    // Stagger by a frame so React's commit completes and the EquationBuilder's
-    // useEffect that registers subscribeFanDemo has definitely run.
-    // Stagger the two picks so React commits the first setDice1 before
-    // the second call runs. Without the gap, hDice reads stale `dice1`
-    // and the second pick clobbers the first — result: only one number
-    // lands in the equation.
-    // Clear any stale dice/op state from a prior lesson before we place
-    // our picks. Without this, stray dice3/op values can leak into the
-    // equation when the learner re-enters lesson 5 via skip.
-    const timerReset = setTimeout(() => {
-      tutorialBus.emitFanDemo({ kind: 'eqReset' });
-    }, 20);
-    const timer1 = setTimeout(() => {
-      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
-    }, 120);
-    const timer2 = setTimeout(() => {
-      // Only d1 and d2 go into the equation; d3 stays as an unplaced
-      // dice button at top (learner doesn't need it in L5a — the lesson
-      // is about cycling a single operator).
-      tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-    }, 280);
-    return () => {
-      clearTimeout(timerReset);
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-    };
-  }, [engine.lessonIndex, engine.stepIndex, gameState?.phase]);
+  // ── Lesson 5.1 (place-op): only the first two number slots (d1, d2) are
+  //    prefilled BY the EquationBuilder itself — the operator slot stays
+  //    empty so the learner drops a card there. See the self-prefill
+  //    useEffect in index.tsx that triggers off of
+  //    `tutorialBus.getL5aBlockFanTaps()`. Doing the prefill inside the
+  //    owner of the slot state removes the emit-vs-subscribe race that
+  //    previously left the equation empty ("המישוואה תקועה ואין שני
+  //    מיספרים"). Nothing to do here.
 
   // ── If the user skipped the dice lesson without rolling, fabricate
   //    dice values when celebrate begins so the "these are the numbers"
@@ -940,22 +990,44 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex]);
 
-  // ── Between lesson-5 steps (cycle → joker → solve), reset sub-state so
-  //    each step starts on a clean slate (`?` slot empty, modal closed,
-  //    no pending joker pick). `l5Config` and `l5Exercises` stay — they
-  //    were set on lesson entry. ──
+  // ── Between lesson-5 steps (place-op → joker), reset per-step state so
+  //    each step starts on a clean slate (modal closed, no pending joker
+  //    pick). Step 0 (place-op) rigging — full 3-dice layout with `+` on
+  //    both operator slots — lives in the lesson-entry rigging block (see
+  //    the L5 dice/hand useEffect above). ──
   useEffect(() => {
     if (engine.lessonIndex !== 4) return;
     if (engine.phase !== 'bot-demo') return;
-    if (engine.stepIndex === 1 || engine.stepIndex === 2) {
-      setL5SelectedOp(null);
+    if (engine.stepIndex > 0) {
       setL5JokerOpen(false);
       setL5PendingJokerOp(null);
     }
-    if (engine.stepIndex === 2) {
-      // Step 5c — rearm the pair of exercises + index at the top of the run.
-      setL5Exercises(generateL5Exercises());
-      setL5ExIndex(0);
+    if (engine.stepIndex === 1) {
+      // Step 5.2 (joker-place — "meet Slinda"): fresh roll + rearrange the
+      // hand so the joker sits in the centre of the fan. First clear any
+      // leftover equation state from 5.1 (dice slots, placed operator
+      // card, op1/op2 cycle), then swap in new dice values and re-rig the
+      // hand with the joker at index 2.
+      gameDispatch({ type: 'CLEAR_EQ_HAND' });
+      tutorialBus.emitFanDemo({ kind: 'eqReset' });
+      const L5B_DICE = { d1: 4, d2: 8, d3: 2 };
+      gameDispatch({ type: 'TUTORIAL_SET_DICE', values: { die1: L5B_DICE.d1, die2: L5B_DICE.d2, die3: L5B_DICE.d3 } });
+      const ts = Date.now();
+      const playerHand = [
+        { id: `tut-l5b-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+        { id: `tut-l5b-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+        { id: `tut-l5b-joker-${ts}`, type: 'joker' as const },
+        { id: `tut-l5b-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+        { id: `tut-l5b-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
+      ];
+      const botHand = [
+        { id: `tut-l5b-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
+        { id: `tut-l5b-bot-op-minus-${ts}`, type: 'operation' as const, operation: '-' as const },
+        { id: `tut-l5b-bot-joker-${ts}`, type: 'joker' as const },
+        { id: `tut-l5b-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
+        { id: `tut-l5b-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
+      ];
+      gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
@@ -1016,11 +1088,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     if (engine.phase !== 'celebrate') return;
     const lesson = LESSONS[engine.lessonIndex];
     const step = lesson?.steps[engine.stepIndex];
-    // Lesson 5 step 5a (sign cycle): no auto-advance — learner reads the
-    // celebrate line and taps "הבנתי" to move on. Matches presentation-style
-    // pacing (manual advance, no auto-play).
-    const isL5aCelebrate = engine.lessonIndex === 4 && engine.stepIndex === 0;
-    if (isL5aCelebrate) return;
     // Dice lesson → equation: instant transition, no celebration pause.
     const ms = step?.celebrateKey ? 2600 : CELEBRATE_MS;
     const id = setTimeout(() => dispatchEngine({ type: 'CELEBRATE_DONE' }), ms);
@@ -1038,17 +1105,37 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
        : l4Step3Phase === 'pick' ? 'tutorial.l4c.hintPickCards'
        : 'tutorial.l4c.hintPressPlay')
     : null;
-  // Lesson 5 step 5b dynamic bubble — tap joker → pick → place.
+  // Lesson 5 step 5b (joker-place, now stepIndex 1) dynamic bubble:
+  // tap joker → pick → place.
   const isL5bAwait = engine.lessonIndex === 4 && engine.stepIndex === 1 && engine.phase === 'await-mimic';
   const l5bHintKey: string | null = isL5bAwait
     ? (l5FlowHintPhase === 'pickModal' ? 'tutorial.l5b.hintPickInModal'
        : l5FlowHintPhase === 'placeSign' ? 'tutorial.l5b.hintPlaceSign'
        : 'tutorial.l5b.hintTapJoker')
     : null;
+  // Lesson 5 step 5.1 (place-op, stepIndex 0): a single bubble all the way
+  // through — "pick an operation card that matches the exercise". The
+  // target (`= 7`) is already shown in the result box, and the empty op
+  // slot is the only drop target, so the learner doesn't need a separate
+  // "now place it" hint after picking a card.
+  const isL5PlaceAwait = engine.lessonIndex === 4 && engine.stepIndex === 0 && engine.phase === 'await-mimic';
+  const l5PlaceHintKey: string | null = isL5PlaceAwait
+    ? 'tutorial.l5a.hintChooseCard'
+    : null;
+  // Lesson 5.1 injects the target result into the hint via `{{result}}` so
+  // the bubble reads "…תרגיל שתוצאתו 7". Keeping it alongside the target
+  // rendered in the result box removes any ambiguity about what number the
+  // learner's card needs to produce. The target is hardcoded for L5.1
+  // (`4 + 3 = 7`) so we use it directly instead of reading the bus —
+  // avoids a one-frame gap while the bus effect catches up with the
+  // lesson/phase change on entry.
+  const L5A_TARGET_RESULT = 7;
+  const l5PlaceHintParams: Record<string, string> | undefined =
+    l5PlaceHintKey ? { result: String(L5A_TARGET_RESULT) } : undefined;
   const bubbleText: string | null =
     engine.phase === 'post-signs-choice' ? null
     : engine.phase === 'bot-demo' ? (currentStep?.botHintKey ? t(currentStep.botHintKey) : t('tutorial.engine.botDemoLabel'))
-    : engine.phase === 'await-mimic' ? (l4Step3HintKey ? t(l4Step3HintKey) : l5bHintKey ? t(l5bHintKey) : (currentStep?.hintKey ? t(currentStep.hintKey) : t('tutorial.engine.yourTurnLabel')))
+    : engine.phase === 'await-mimic' ? (l4Step3HintKey ? t(l4Step3HintKey) : l5PlaceHintKey ? t(l5PlaceHintKey, l5PlaceHintParams) : l5bHintKey ? t(l5bHintKey) : (currentStep?.hintKey ? t(currentStep.hintKey) : t('tutorial.engine.yourTurnLabel')))
     : engine.phase === 'celebrate' ? (currentStep?.celebrateKey ? t(currentStep.celebrateKey) : t('tutorial.engine.celebrate'))
     // lesson-done has no bubble — celebrate already said its piece, and a
     // generic "you finished the lesson" right after every action is noise.
@@ -1264,15 +1351,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         </>
       ) : null}
 
-      {/* Lesson 5 runs on the real game UI (EquationBuilder + hand) —
-          the legacy scratch canvas was removed. Sign cycling is wired via
-          index.tsx:cycleOp and emits `l5AllSignsCycled` / joker events. */}
+      {/* Lesson 5 runs on the real game UI (EquationBuilder + hand).
+          Step 5.1 (place-op) pre-fills the full equation + sets `+` on both
+          operator slots; the learner drops an operation card on op1.
+          Step 5.2 (joker-place) introduces Slinda the joker. */}
 
-      {/* Lesson 5c (solve-for-op) — a self-contained puzzle: two exercises
-          of `[a] [?] [b] = [result]` where the learner picks the sign that
-          makes the equation true and confirms. Covers the real game UI with
-          a dark backdrop so only the puzzle is visible. */}
-      {isOpCycleLesson && engine.stepIndex === 2 && l5Exercises.length === 2 && l5ExIndex < 2 ? (() => {
+      {/* (Legacy solve-for-op puzzle kept commented out — the step was
+          retired when the lesson was reduced to two screens.) */}
+      {false ? (() => {
         const current = l5Exercises[l5ExIndex];
         if (!current) return null;
         const displayOp: L5Op | null = l5PendingJokerOp ?? l5SelectedOp;
@@ -1634,41 +1720,9 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         </View>
       ) : null}
 
-      {/* L5a wrong-tap: amber pulse ring around the equation row to draw the
-          learner's eye toward the operator slot they should be tapping. */}
-      <Animated.View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: 120,
-          left: 20,
-          right: 20,
-          height: 100,
-          borderRadius: 16,
-          borderWidth: 4,
-          borderColor: '#FBBF24',
-          opacity: eqHighlightPulse,
-          zIndex: 9250,
-          ...Platform.select({
-            ios: { shadowColor: '#FBBF24', shadowOpacity: 0.6, shadowRadius: 12 },
-            android: { elevation: 10 },
-          }),
-        }}
-      />
-
-      {/* L5a wrong-tap: guidance bubble telling the learner to tap the sign
-          in the equation instead of a card in the fan. */}
-      {l5aWrongTapTick > 0 ? (
-        <View
-          pointerEvents="none"
-          style={{ position: 'absolute', top: 130, left: 0, right: 0, alignItems: 'center', zIndex: 9300 }}
-        >
-          <HappyBubble
-            text={locale === 'he' ? 'לחץ על הסימן במשוואה ↑' : 'Tap the sign in the equation ↑'}
-            tone="turn"
-          />
-        </View>
-      ) : null}
+      {/* (L5a wrong-tap amber ring + "tap the sign" bubble were removed
+          when cycle-signs was retired — in the new L5.1 (place-op) flow,
+          fan taps are the CORRECT first action.) */}
 
       {/* Green V flash when the bot taps the equation confirm button —
           centered on the measured confirm button (same rect as the hint arrow). */}
