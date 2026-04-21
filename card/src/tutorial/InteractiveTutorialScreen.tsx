@@ -573,8 +573,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     const lesson = LESSONS[engine.lessonIndex];
     const step = lesson?.steps[engine.stepIndex];
     if (!step) return;
-    const demo = createBotDemonstrator();
+    // Pass the `cancelled` flag through so bus emits from a skipped-past
+    // bot-demo (e.g. L4's eqPickDice chain still waiting out a 2800ms
+    // pause) cannot leak forward into the next step's UI after the user
+    // hits "דלג". Without this, L4's `eqPickDice(pickA)` / `eqPickDice(pickB)`
+    // could fire while the learner is already on L5.1, clobbering its
+    // pre-filled `4 ? 3 = 7` with stale indices (producing e.g. `4 + 9 = 13`).
     let cancelled = false;
+    const demo = createBotDemonstrator(() => cancelled);
     let fired = false;
     const fireOnce = () => {
       if (cancelled || fired) return;
@@ -1004,15 +1010,15 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       setL5PendingJokerOp(null);
     }
     if (engine.stepIndex === 1) {
-      // Step 5.2 (joker-place — "meet Slinda"): fresh roll + rearrange the
-      // hand so the joker sits in the centre of the fan. First clear any
-      // leftover equation state from 5.1 (dice slots, placed operator
-      // card, op1/op2 cycle), then swap in new dice values and re-rig the
-      // hand with the joker at index 2.
+      // Step 5.2 (joker-place — "meet Slinda"): mirror 5.1. Keep the 5.1
+      // dice (4, 3, 9) on the table; clear the placed `+` card and the
+      // op/result state; swap in a 5-card hand with Slinda centred at
+      // index 2; then re-pre-fill d1 and d2 so the equation reads
+      // `4 ? 3 = 7` with the sign slot empty. The staged delays mirror
+      // `rigL5OpPickExercise`'s pattern — without them, eqPickDice races
+      // the eqReset commit.
       gameDispatch({ type: 'CLEAR_EQ_HAND' });
       tutorialBus.emitFanDemo({ kind: 'eqReset' });
-      const L5B_DICE = { d1: 4, d2: 8, d3: 2 };
-      gameDispatch({ type: 'TUTORIAL_SET_DICE', values: { die1: L5B_DICE.d1, die2: L5B_DICE.d2, die3: L5B_DICE.d3 } });
       const ts = Date.now();
       const playerHand = [
         { id: `tut-l5b-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
@@ -1029,6 +1035,8 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5b-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
@@ -1168,6 +1176,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const isDiceLesson = engine.lessonIndex === 2;
   const isEquationLesson = engine.lessonIndex === 3;
   const isOpCycleLesson = engine.lessonIndex === 4;
+  const isPossibleResultsLesson = engine.lessonIndex === 5;
   const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
@@ -1233,7 +1242,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
             zIndex: 9000,
           }}
         />
-      ) : (isEquationLesson || isOpCycleLesson || isFracLesson) ? (
+      ) : (isEquationLesson || isOpCycleLesson || isPossibleResultsLesson || isFracLesson) ? (
         null
       ) : (
         <View
