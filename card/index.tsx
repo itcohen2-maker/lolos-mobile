@@ -234,6 +234,8 @@ interface GameState {
       on the next TurnTransition screen so the player understands the reward.
       Cleared when the next turn actually begins (BEGIN_TURN). */
   lastCourageRewardReason: string | null;
+  /** True for exactly one turn after the excellence meter fills and grants 5 coins. */
+  lastCourageCoinsAwarded: boolean;
   identicalAlert: { playerName: string; cardDisplay: string; consecutive: number } | null;
   jokerModalOpen: boolean;
   /** משבצות 0/1 — קלפים מהיד בתרגיל הקוביות */
@@ -1154,7 +1156,7 @@ const initialState: GameState = {
   fractionPenalty: 0, fractionAttackResolved: false, hasPlayedCards: false, hasDrawnCard: false, lastCardValue: null,
   consecutiveIdenticalPlays: 0, identicalAlert: null, jokerModalOpen: false, equationHandSlots: [null, null], equationHandPick: null,
   courageMeterPercent: 0, courageMeterStep: 0, courageDiscardSuccessStreak: 0, courageRewardPulseId: 0, courageCoins: 0,
-  lastCourageRewardReason: null,
+  lastCourageRewardReason: null, lastCourageCoinsAwarded: false,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
   difficulty: 'full', diceMode: '3', showFractions: true, fractionKinds: [...ALL_FRACTION_KINDS],
   showPossibleResults: true, showSolveExercise: true,
@@ -1315,6 +1317,7 @@ function applyCourageStepReward(st: GameState, reason: string): GameState {
     courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
     courageCoins: (st.courageCoins ?? 0) + (isFull ? 5 : 0),
     lastCourageRewardReason: reason,
+    lastCourageCoinsAwarded: isFull,
   };
 }
 
@@ -1509,6 +1512,7 @@ function gameReducer(
           lastDiscardCount: 0,
           lastEquationDisplay: null,
           lastCourageRewardReason: null,
+          lastCourageCoinsAwarded: false,
           turnStartedAt: Date.now(),
           botFractionDefenseTicks: currentIsBot ? 2 : 0,
           botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null },
@@ -1526,11 +1530,11 @@ function gameReducer(
       if (topDiscard && topDiscard.type === 'fraction' && !st.fractionAttackResolved) {
         const denom = fractionDenominator(topDiscard.fraction!);
 
-        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
+        return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, lastCourageCoinsAwarded: false, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
       }
       // Normal turn — reset; clear last-move display (הודעת עדכון רק במסך השחקן); notify if fraction chain just ended
       const fracChainEnded = st.fractionAttackResolved && topDiscard?.type === 'fraction';
-      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, lastCourageCoinsAwarded: false, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
     }
     case 'ROLL_DICE': {
       // In tutorial mode, allow ROLL_DICE from any phase so the lesson can
@@ -4984,6 +4988,22 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     setOp1(null);
     setOp2(null);
   }, [state.isTutorial, state.phase, state.dice, l5UiTick, dice1, dice2, dice3, op1, op2, state.equationHandSlots]);
+
+  // L6 (possible-results guided): pre-fill all three dice so the learner can
+  // see the dice values while exploring mini cards.
+  useEffect(() => {
+    if (!state.isTutorial) return;
+    if (state.phase !== 'building') return;
+    if (!state.dice) return;
+    if (!tutorialBus.getL6GuidedMode()) return;
+    if (dice1 !== null || dice2 !== null || dice3 !== null) return;
+    setDice1(0); dice1Ref.current = 0;
+    setDice2(1); dice2Ref.current = 1;
+    setDice3(2); dice3Ref.current = 2;
+    setOp1(null);
+    setOp2(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.isTutorial, state.phase, state.dice, l5UiTick, dice1, dice2, dice3]);
 
   // Remove dice from a specific slot
   const removeDice = (slot: 1 | 2 | 3) => {
@@ -10452,6 +10472,23 @@ function TurnTransition() {
               >
                 {state.lastCourageRewardReason}
               </Text>
+            </View>
+          </View>
+        )}
+
+        {/* +5 coins animated notification — shown only when meter fills and resets */}
+        {!!state.lastCourageCoinsAwarded && !state.players[lastPlayerIndex]?.isBot && !state.isTutorial && (
+          <View style={{ alignSelf: 'center', marginBottom: 8, maxWidth: 360, width: '100%', alignItems: 'center' }}>
+            <View style={[alertBubbleStyle.box, { paddingVertical: 12, paddingHorizontal: 20, maxWidth: 340, backgroundColor: '#854D0E', borderColor: '#FDE68A', borderWidth: 3, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+              <SlindaCoin size={28} spin pulseKey={state.courageRewardPulseId} />
+              <View style={{ flex: 1 }}>
+                <Text style={[alertBubbleStyle.title, { fontSize: 18, color: '#FEF3C7', marginBottom: 2, textAlign: isRTL ? 'right' : 'left' }]}>
+                  {t('courage.coinAward.title')}
+                </Text>
+                <Text style={{ color: '#FDE68A', fontSize: 13, textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }}>
+                  {t('courage.coinAward.body')}
+                </Text>
+              </View>
             </View>
           </View>
         )}
