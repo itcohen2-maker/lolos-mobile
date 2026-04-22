@@ -24,6 +24,33 @@ export const supabaseAdmin = createClient(url, serviceRoleKey, {
   },
 });
 
+// ── Coin helpers ──
+
+export type CoinSource = 'game_courage' | 'tutorial_core' | 'tutorial_advanced' | 'tutorial_legacy';
+
+/**
+ * Award coins to a player via the award_coins_for_player Postgres function.
+ * Idempotent: safe to call twice for the same (player, source, match) combination.
+ */
+export async function awardCoinsForPlayer(opts: {
+  playerId: string;
+  amount: number;
+  source: CoinSource;
+  matchId?: string;
+}): Promise<void> {
+  try {
+    const { error } = await supabaseAdmin.rpc('award_coins_for_player', {
+      p_player_id: opts.playerId,
+      p_amount: opts.amount,
+      p_source: opts.source,
+      p_match_id: opts.matchId ?? null,
+    });
+    if (error) console.error('[supabaseAdmin] awardCoinsForPlayer:', error.message);
+  } catch (err) {
+    console.error('[supabaseAdmin] awardCoinsForPlayer exception:', err);
+  }
+}
+
 // ── Rating helpers ──
 
 const RATING_WIN = 15;
