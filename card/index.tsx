@@ -637,6 +637,7 @@ type GameAction =
   | { type: 'SET_MESSAGE'; message: string }
   | { type: 'OPEN_JOKER_MODAL'; card: Card }
   | { type: 'CLOSE_JOKER_MODAL' }
+  | { type: 'ADD_SLINDA_TO_HAND' }
   | { type: 'DISMISS_IDENTICAL_ALERT' }
   | { type: 'SUPPRESS_ONLINE_IDENTICAL_OVERLAY' }
   | { type: 'CLEAR_ONLINE_IDENTICAL_SUPPRESS' }
@@ -1939,6 +1940,14 @@ function gameReducer(
     }
     case 'OPEN_JOKER_MODAL': return { ...st, jokerModalOpen: true, selectedCards: [action.card] };
     case 'CLOSE_JOKER_MODAL': return { ...st, jokerModalOpen: false, selectedCards: [] };
+    case 'ADD_SLINDA_TO_HAND': {
+      const cpIdx = st.currentPlayerIndex;
+      const newCard: Card = { id: makeId(), type: 'joker' };
+      const updatedPlayers = st.players.map((p, i) =>
+        i === cpIdx ? { ...p, hand: [...p.hand, newCard] } : p,
+      );
+      return { ...st, players: updatedPlayers };
+    }
     case 'PLAY_JOKER': {
       return { ...st, jokerModalOpen: false, selectedCards: [], message: tf('joker.onlyInEquation') };
     }
@@ -10257,6 +10266,16 @@ function TurnTransition() {
                 pulseKey={state.courageRewardPulseId}
                 spin={!!state.lastCourageRewardReason && !state.players[lastPlayerIndex]?.isBot && !state.isTutorial}
               />
+              {profile?.slinda_owned && !isOnlineSpectator &&
+               (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building') && (
+                <TouchableOpacity
+                  onPress={() => dispatch({ type: 'ADD_SLINDA_TO_HAND' })}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(234,179,8,0.18)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#EAB308', marginTop: 4 }}
+                >
+                  <SlindaCoin size={14} />
+                  <Text style={{ color: '#FCD34D', fontSize: 11, fontWeight: '800' }}>{t('slindaBank.addToHand')}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>
@@ -10993,6 +11012,7 @@ async function clearAllLulosOnboardingKeys(): Promise<void> {
 function GameScreen() {
   const { state, dispatch } = useGame();
   const { t, isRTL } = useLocale();
+  const { profile } = useAuth();
   const safe = useGameSafeArea();
   const soundOn = state.soundsEnabled !== false;
   // Parens-right טוגל — מצב גלובלי לבנאי המשוואה (מוצג כטוגל חיצוני מעל השולחן)
