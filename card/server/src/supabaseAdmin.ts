@@ -66,6 +66,7 @@ interface RatingUpdate {
   playerId: string;
   delta: number;
   abandoned?: boolean;
+  coinsEarned?: number;
 }
 
 /**
@@ -120,6 +121,7 @@ export async function recordMatch(opts: {
         rating_before: ratingBefore,
         rating_after: ratingAfter,
         abandoned: p.abandoned ?? false,
+        coins_earned: p.coinsEarned ?? 0,
       });
 
       // Update profile
@@ -132,6 +134,15 @@ export async function recordMatch(opts: {
         .from('profiles')
         .update(updates)
         .eq('id', p.playerId);
+
+      if ((p.coinsEarned ?? 0) > 0) {
+        await awardCoinsForPlayer({
+          playerId: p.playerId,
+          amount: p.coinsEarned!,
+          source: 'game_courage',
+          matchId: match.id,
+        });
+      }
     }
   } catch (err) {
     console.error('[supabaseAdmin] recordMatch exception:', err);
