@@ -6,6 +6,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 
 export interface PlayerProfile {
@@ -15,6 +16,7 @@ export interface PlayerProfile {
   wins: number;
   losses: number;
   abandons: number;
+  total_coins: number;
   created_at: string;
 }
 
@@ -41,6 +43,36 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const TUTORIAL_COINS_KEY = 'lulos_tutorial_coins_earned_count';
+const TUTORIAL_COINS_SYNCED_KEY = 'lulos_tutorial_coins_synced';
+
+/** Migrate tutorial coins from AsyncStorage to Supabase. One-time, idempotent. */
+export async function syncTutorialCoins(): Promise<void> {
+  try {
+    const [countStr, synced] = await Promise.all([
+      AsyncStorage.getItem(TUTORIAL_COINS_KEY),
+      AsyncStorage.getItem(TUTORIAL_COINS_SYNCED_KEY),
+    ]);
+    if (synced === 'true') return;
+
+    const count = parseInt(countStr ?? '0', 10);
+    if (isNaN(count) || count <= 0) return;
+
+    if (count === 1) {
+      await supabase.rpc('award_coins', { p_amount: 10, p_source: 'tutorial_core' });
+    } else if (count === 2) {
+      await supabase.rpc('award_coins', { p_amount: 10, p_source: 'tutorial_core' });
+      await supabase.rpc('award_coins', { p_amount: 20, p_source: 'tutorial_advanced' });
+    } else {
+      await supabase.rpc('award_coins', { p_amount: count * 10, p_source: 'tutorial_legacy' });
+    }
+
+    await AsyncStorage.setItem(TUTORIAL_COINS_SYNCED_KEY, 'true');
+  } catch (err) {
+    console.warn('[auth] syncTutorialCoins failed, retrying on next login:', err);
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -62,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(null);
       } else {
         setProfile(data as PlayerProfile);
+        void syncTutorialCoins(); // fire-and-forget migration
       }
     } catch (e) {
       console.warn('[auth] fetchProfile exception:', e);
