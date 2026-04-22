@@ -22,6 +22,10 @@ export interface Room {
   disconnectDeadlineAt: number | null;
   disconnectedPlayerId: string | null;
   disconnectTimer?: ReturnType<typeof setTimeout> | null;
+  /** Epoch ms when startGame was called — used as startedAt for match recording */
+  gameStartedAt?: number;
+  /** Guard: true once recordMatch has been called for this game session */
+  matchRecorded?: boolean;
 }
 
 const rooms = new Map<string, Room>();

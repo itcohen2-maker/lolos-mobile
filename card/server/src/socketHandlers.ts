@@ -72,6 +72,7 @@ import type { Room } from './roomManager';
 import { migrateDifficultyStage } from '../../shared/difficultyStages';
 import { normalizeOperationToken } from '../../shared/equationOpCycle';
 import { botNarrationToastText, renderBotNarration, type BotNarrationInput } from '../../shared/botNarration';
+import { recordMatch, RATING_WIN, RATING_LOSS, RATING_ABANDON_PENALTY } from './supabaseAdmin';
 
 type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -382,6 +383,7 @@ function applyAction(
     room.state = { ...room.state, identicalCelebration: null };
     broadcastState(io, room);
   }
+  maybeRecordMatch(room);
   scheduleRoomTurnTimer(io, room);
   scheduleBotAction(io, room);
 }
@@ -410,6 +412,7 @@ function applyBotState(
     room.state = { ...room.state, identicalCelebration: null };
     broadcastState(io, room);
   }
+  maybeRecordMatch(room);
   scheduleRoomTurnTimer(io, room);
   return true;
 }
@@ -432,7 +435,7 @@ function canPlayerAct(room: Room, playerId: string): { ok: true } | { ok: false;
   return { ok: true };
 }
 
-/** בוט משתמש לכל היותר בקלף פעולה/ג'וקר אחד במשבצת 0 */
+/** בוט משתמש לכל היותר בקלף פעולה/סלינדה אחד במשבצת 0 */
 function buildBotCommits(state: ServerGameState): EquationCommitPayload[] {
   const hand = state.players[state.currentPlayerIndex]?.hand ?? [];
   const operationCard = hand.find((card) => card.type === 'operation');
@@ -687,6 +690,43 @@ function scheduleBotAction(io: IOServer, room: Room): void {
   room.botActionTimer = setTimeout(() => runBotStep(io, room), delay);
 }
 
+/**
+ * Fire-and-forget: persist match result to Supabase when the game reaches
+ * 'game-over'. Idempotent via `room.matchRecorded` guard.
+ */
+function maybeRecordMatch(room: Room): void {
+  if (!room.state || room.state.phase !== 'game-over') return;
+  if (room.matchRecorded) return;
+  room.matchRecorded = true;
+
+  const state = room.state;
+  const humanPlayers = room.players.filter((p) => !p.isBot);
+  if (humanPlayers.length === 0) return; // solo-bot practice — nothing to record
+
+  const winnerId = state.winner?.id ?? null;
+  const coinsEarned = state.courageCoins ?? 0;
+
+  const participants = humanPlayers.map((p) => {
+    const isWinner = p.id === winnerId;
+    const abandoned = !p.isConnected && p.id !== winnerId;
+    const delta = abandoned
+      ? -RATING_ABANDON_PENALTY
+      : isWinner
+        ? RATING_WIN
+        : -RATING_LOSS;
+    return { playerId: p.id, delta, abandoned, coinsEarned };
+  });
+
+  recordMatch({
+    roomCode: room.code,
+    difficulty: state.difficulty ?? null,
+    playerCount: humanPlayers.length,
+    startedAt: new Date(room.gameStartedAt ?? room.createdAt),
+    winnerId,
+    participants,
+  }).catch((err) => console.error('[socketHandlers] maybeRecordMatch failed:', err));
+}
+
 function startRoomGame(
   io: IOServer,
   room: Room,
@@ -694,6 +734,8 @@ function startRoomGame(
   gameSettings?: Partial<HostGameSettings>,
 ): void {
   room.state = startGame(room, difficulty, gameSettings);
+  room.gameStartedAt = Date.now();
+  room.matchRecorded = false;
   room.lastActivity = Date.now();
   clearRoomDisconnectGrace(room);
   room.lobbyStatus = hasBot(room) ? 'bot_game_started' : 'waiting_for_player';
@@ -773,6 +815,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
         clearBotActionTimer(room);
         broadcastState(io, room);
         emitRoomToasts(io, room);
+        maybeRecordMatch(room);
       }
     }
     if (room.players.length > 0) {
@@ -1239,6 +1282,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
               timerRoom.state = tvResult;
               broadcastState(io, timerRoom);
               emitRoomToasts(io, timerRoom);
+              maybeRecordMatch(timerRoom);
               return;
             }
           }
