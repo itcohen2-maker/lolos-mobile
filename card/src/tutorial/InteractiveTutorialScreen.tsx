@@ -8,6 +8,7 @@
 
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import { useLocale } from '../i18n/LocaleContext';
 import { HappyBubble } from '../components/HappyBubble';
@@ -15,6 +16,7 @@ import { GoldDieFace } from '../../AnimatedDice';
 import { GoldDiceButton } from '../../components/GoldDiceButton';
 import { initializeSfx, isSfxMuted, setSfxMuted } from '../audio/sfx';
 import { generateTutorialHand } from './generateTutorialHand';
+import { supabase } from '../lib/supabase';
 
 
 const diceRollSound = require('../../assets/dice_roll.m4a');
@@ -51,6 +53,7 @@ import {
   INITIAL_MIMIC_STATE,
   mimicReducer,
   MIMIC_FIRST_FRACTION_LESSON_INDEX,
+  MIMIC_LAST_CORE_LESSON_INDEX,
 } from './MimicEngine';
 import type { Card, Fraction } from '../../shared/types';
 import { createBotDemonstrator } from './BotDemonstrator';
@@ -72,7 +75,32 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
   const third: Card = { id: `tut-frac-third-${ts}`, type: 'fraction', fraction: '1/3' };
   const botMirror = (hand: Card[]) => hand.map((c, i) => ({ ...c, id: `bot-${c.id}-${i}` }));
 
-  if (stepIndex <= 1) {
+  if (stepIndex === 0) {
+    // Step 0 (frac-intro): theory screen — both ½ and ⅓ in hand so the
+    // learner can see them as examples. Pile = 5 (prime, not divisible
+    // by 2 or 3) so accidental fraction taps are blocked by the intercept.
+    const discard5: Card = { id: `tut-frac-disc5-${ts}`, type: 'number', value: 5 };
+    const ph: Card[] = [half, third, { id: `tut-n4-${ts}`, type: 'number', value: 4 }, { id: `tut-n8-${ts}`, type: 'number', value: 8 }, { id: `tut-n9-${ts}`, type: 'number', value: 9 }];
+    return {
+      type: 'TUTORIAL_FRACTION_SETUP' as const,
+      slice: {
+        currentPlayerIndex: 1,
+        phase: 'building' as const,
+        hands: [botMirror(ph), ph],
+        discardPile: [discard5],
+        dice,
+        pendingFractionTarget: null,
+        fractionPenalty: 0,
+        fractionAttackResolved: false,
+        showFractions: true,
+        fractionKinds: [...FRAC_KINDS],
+      },
+    };
+  }
+  if (stepIndex === 1) {
+    // Step 1 (attack-half): pile shows 8 (even, divisible by 2 only).
+    // Learner taps 1/2 to play + advance.
+    const discard8: Card = { id: `tut-frac-disc8-${ts}`, type: 'number', value: 8 };
     const ph: Card[] = [half, third, { id: `tut-n5-${ts}`, type: 'number', value: 5 }, { id: `tut-n7-${ts}`, type: 'number', value: 7 }, { id: `tut-n8-${ts}`, type: 'number', value: 8 }];
     return {
       type: 'TUTORIAL_FRACTION_SETUP' as const,
@@ -80,7 +108,7 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
         currentPlayerIndex: 1,
         phase: 'building' as const,
         hands: [botMirror(ph), ph],
-        discardPile: [discard12],
+        discardPile: [discard8],
         dice,
         pendingFractionTarget: null,
         fractionPenalty: 0,
@@ -90,7 +118,9 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
       },
     };
   }
-  if (stepIndex === 2 || stepIndex === 3) {
+  if (stepIndex === 2) {
+    // Step 2 (attack-third): pile shows 9 (odd, divisible by 3 only).
+    const discard9: Card = { id: `tut-frac-disc9-${ts}`, type: 'number', value: 9 };
     const ph: Card[] = [half, third, { id: `tut-n4-${ts}`, type: 'number', value: 4 }, { id: `tut-n6-${ts}`, type: 'number', value: 6 }, { id: `tut-n9-${ts}`, type: 'number', value: 9 }];
     return {
       type: 'TUTORIAL_FRACTION_SETUP' as const,
@@ -98,7 +128,7 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
         currentPlayerIndex: 1,
         phase: 'building' as const,
         hands: [botMirror(ph), ph],
-        discardPile: [discard12],
+        discardPile: [discard9],
         dice,
         pendingFractionTarget: null,
         fractionPenalty: 0,
@@ -108,7 +138,9 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
       },
     };
   }
-  if (stepIndex === 4) {
+  if (stepIndex === 3) {
+    // Step 3 (defend-half): bot attacked with 1/2; learner must defend
+    // with a number divisible by 2.
     const fracOnPile: Card = { id: `tut-frac-pile-half-${ts}`, type: 'fraction', fraction: '1/2' };
     const ph: Card[] = [
       { id: `tut-d6-${ts}`, type: 'number', value: 6 },
@@ -133,7 +165,9 @@ function buildFractionTutorialSetup(stepIndex: number, ts: number) {
       },
     };
   }
-  if (stepIndex === 5) {
+  if (stepIndex === 4) {
+    // Step 4 (defend-third): bot attacked with 1/3; learner must defend
+    // with a number divisible by 3.
     const fracOnPile: Card = { id: `tut-frac-pile-third-${ts}`, type: 'fraction', fraction: '1/3' };
     const ph: Card[] = [
       { id: `tut-d9-${ts}`, type: 'number', value: 9 },
@@ -195,43 +229,55 @@ function rollThree(): { d1: number; d2: number; d3: number } {
 
 // Generate 3 random dice (any 1–6). The hand includes ALL 3 possible
 // 2-die sums so the learner can pick ANY pair and always find a matching
-// card. Two random filler cards complete the hand to 5.
+// card. For L4.3 the hint reads "pick one card OR several whose sum
+// matches the result" — so the hand MUST contain BOTH the single target
+// card AND a distinct pair of cards summing to target. If the dice roll
+// makes a distinct pair impossible (target=2 requires 1+1, same value),
+// we re-roll until both options are guaranteed.
 function rollL4Dice(): {
   d1: number; d2: number; d3: number;
   pickA: number; pickB: number; target: number;
   hand: number[]; validSums: number[];
 } {
-  const d1 = Math.floor(Math.random() * 6) + 1;
-  const d2 = Math.floor(Math.random() * 6) + 1;
-  const d3 = Math.floor(Math.random() * 6) + 1;
-  const dice = [d1, d2, d3];
-  // All 2-die + sums.
+  // Re-roll until the chosen target supports a DISTINCT pair (two cards
+  // with different values that sum to target). Only failure case is
+  // target < 3, which happens when the two picked dice are both 1.
+  let d1 = 0, d2 = 0, d3 = 0;
+  let pickA = 0, pickB = 0, target = 0;
+  let attempts = 0;
+  while (attempts < 20) {
+    attempts += 1;
+    d1 = Math.floor(Math.random() * 6) + 1;
+    d2 = Math.floor(Math.random() * 6) + 1;
+    d3 = Math.floor(Math.random() * 6) + 1;
+    const sums: [number, number, number][] = [
+      [0, 1, d1 + d2],
+      [0, 2, d1 + d3],
+      [1, 2, d2 + d3],
+    ];
+    const sorted = [...sums].sort((a, b) => Math.abs(a[2] - 7) - Math.abs(b[2] - 7));
+    [pickA, pickB, target] = sorted[0];
+    if (target >= 3) break;
+  }
   const sums: [number, number, number][] = [
     [0, 1, d1 + d2],
     [0, 2, d1 + d3],
     [1, 2, d2 + d3],
   ];
-  // Pick the sum closest to the middle of [2..12] for the bot demo.
-  const sorted = [...sums].sort((a, b) => Math.abs(a[2] - 7) - Math.abs(b[2] - 7));
-  const [pickA, pickB, target] = sorted[0];
   // Hand must contain ALL valid equation results — 2-die AND 3-die sums —
   // so the learner always finds a matching card no matter how they build.
   const threeSum = d1 + d2 + d3;
   const validSums = [...new Set([...sums.map((s) => s[2]), threeSum])];
   const hand = new Set<number>(validSums);
-  // Advanced option for step 4.3: add a pair of cards that SUMS to the target
-  // so the learner can play two cards (e.g. target 9 → 6 + 3) instead of just
-  // the single matching card. Pair values are kept distinct so the fan shows
-  // them as separate cards.
-  if (target >= 3) {
-    const maxPairA = Math.max(1, Math.floor((target - 1) / 2));
-    const pairA = 1 + Math.floor(Math.random() * maxPairA);
-    const pairB = target - pairA;
-    if (pairA >= 1 && pairB >= 1 && pairA !== pairB && pairA <= 12 && pairB <= 12) {
-      hand.add(pairA);
-      hand.add(pairB);
-    }
-  }
+  // Guaranteed distinct pair (pairA, pairB) where pairA + pairB = target.
+  // For target ≥ 3 we can always pick pairA in [1..floor((target-1)/2)] so
+  // pairB = target - pairA is different from pairA. Both values stay
+  // within [1..12] because target ≤ 12 (two dice each ≤ 6).
+  const maxPairA = Math.floor((target - 1) / 2);
+  const pairA = 1 + Math.floor(Math.random() * maxPairA);
+  const pairB = target - pairA;
+  hand.add(pairA);
+  hand.add(pairB);
   while (hand.size < 6) {
     const v = Math.floor(Math.random() * 12) + 1;
     hand.add(v);
@@ -279,12 +325,8 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   //   play   →  (step ends)— user tapped "בחרתי" (userPlayedCards → outcome)
   type L4Step3Phase = 'build' | 'confirm' | 'pick' | 'play';
   const [l4Step3Phase, setL4Step3Phase] = useState<L4Step3Phase>('build');
-  // Pulsing ▼ arrow animation — matches the existing tutorial arrow style
-  // used elsewhere in the game (fades + bobs up). Loops continuously while
-  // the arrow is visible over the target button.
-  const l4ArrowPulse = useRef(new Animated.Value(0)).current;
   // Measured rects of the "אשר את התרגיל" / "בחרתי" buttons — updated by the
-  // real game UI via tutorialBus.setLayout. Used to position the arrow.
+  // real game UI via tutorialBus.setLayout.
   const [confirmBtnRect, setConfirmBtnRect] = useState<LayoutRect | null>(null);
   const [playCardsBtnRect, setPlayCardsBtnRect] = useState<LayoutRect | null>(null);
 
@@ -303,11 +345,57 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const [l5CycledSigns, setL5CycledSigns] = useState<Set<L5Op>>(() => new Set());
   // Sign picked in the joker modal but not yet placed in the slot.
   const [l5PendingJokerOp, setL5PendingJokerOp] = useState<L5Op | null>(null);
+  // Random dice for L5.1+L5.2 — generated once per lesson entry.
+  const l5DiceRef = useRef<{ d1: number; d2: number; d3: number }>({ d1: 4, d2: 3, d3: 9 });
   // L5.1 wrong-card feedback: shown 2s then auto-cleared.
   const [l5PlaceWrong, setL5PlaceWrong] = useState(false);
   const l5PlaceWrongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const l5SlotPulse = useRef(new Animated.Value(0)).current;
+  // Fractions lesson — pulse halo around the discard pile so the learner's
+  // eye lands on the pile card (8 → 9 → fraction attack → fraction attack)
+  // before reading the bubble.
+  const fracPilePulse = useRef(new Animated.Value(0)).current;
   const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' | 'placeSign'>('tapJoker');
+  // L6.3 mismatch feedback: shown 2s when confirmed equation doesn't match the red chip.
+  const [l6Mismatch, setL6Mismatch] = useState(false);
+  // Skip counter: counts presses of "דלג" during bot-demo or await-mimic phases
+  // (the two phases where the learner is expected to watch or act). If > 2,
+  // the core-complete popup shows "no coins" instead of the 10-coin reward.
+  const [skipCount, setSkipCount] = useState(0);
+  // Persistent count of tutorial runs where coins were actually earned.
+  // Caps at 2 — registered-user infrastructure: once a user has earned
+  // tutorial coins twice, subsequent completions show "no coins".
+  const TUTORIAL_COINS_KEY = 'lulos_tutorial_coins_earned_count';
+  const [tutorialCoinsEarnedCount, setTutorialCoinsEarnedCount] = useState(0);
+  const coreCompleteProcessedRef = useRef(false);
+  useEffect(() => {
+    void AsyncStorage.getItem(TUTORIAL_COINS_KEY).then((val) => {
+      const n = parseInt(val ?? '0', 10);
+      setTutorialCoinsEarnedCount(isNaN(n) ? 0 : n);
+    });
+  }, []);
+  useEffect(() => {
+    if (engine.phase === 'idle') coreCompleteProcessedRef.current = false;
+  }, [engine.phase]);
+  useEffect(() => {
+    if (engine.phase !== 'core-complete') return;
+    if (coreCompleteProcessedRef.current) return;
+    coreCompleteProcessedRef.current = true;
+    if (skipCount > 2) return;
+    setTutorialCoinsEarnedCount((prev) => {
+      if (prev >= 2) return prev;
+      const next = prev + 1;
+      void AsyncStorage.setItem(TUTORIAL_COINS_KEY, String(next));
+      if (next === 1) {
+        void supabase.rpc('award_coins', { p_amount: 10, p_source: 'tutorial_core' });
+      } else if (next === 2) {
+        void supabase.rpc('award_coins', { p_amount: 20, p_source: 'tutorial_advanced' });
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.phase]);
+  const l6MismatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Lesson 5c (solve-for-op) state ──
   // Two pre-generated exercises; learner must pick the sign that makes each
@@ -476,10 +564,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     if (!isFracLesson && gameState?.phase === 'solved') {
       gameDispatch({ type: 'REVERT_TO_BUILDING' });
     }
-    // Clear any lingering "which cards were played" messages from the
-    // previous step — BEGIN_TURN normally clears these, but the tutorial
-    // skips normal turn flow.
-    if (!isFracLesson && (gameState?.lastMoveMessage || gameState?.lastDiscardCount)) {
+    // If GO_BACK left the game in turn-transition, push it forward so the
+    // equation builder becomes visible again. Calling BEGIN_TURN from
+    // 'building' would wrongly advance the turn and hide the equation —
+    // so we only trigger this when already in turn-transition.
+    if (!isFracLesson && gameState?.phase === 'turn-transition') {
       gameDispatch({ type: 'BEGIN_TURN' });
     }
     // Reset dice lesson state so the gold button re-appears on GO_BACK.
@@ -616,6 +705,11 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // intended first action (pick an operator card in 5.1, tap the joker
     // in 5.2), so they should NEVER trigger the "wrong answer" shake.
     const isL5 = engine.lessonIndex === 4;
+    // Lesson 7 (fractions): card taps flow through a separate validator
+    // that emits `fracAttackPlayed`/`fracDefenseSolved` on success — the
+    // raw `cardTapped` event fires either way, so suppressing the shake
+    // prevents a "try again" flash on what turned out to be a legal play.
+    const isL7 = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
     return tutorialBus.subscribeUserEvent((evt) => {
       if (step.outcome(evt)) {
         dispatchEngine({ type: 'OUTCOME_MATCHED' });
@@ -625,6 +719,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       // step advances when the learner hits "בחרתי", so suppress the shake.
       if (isL4Step3) return;
       if (isL5) return;
+      if (isL7) return;
       // A WRONG card pick — only flash "try again" for cardTapped events
       // that didn't match. Die picks (eqUserPickedDice) are valid
       // intermediate actions and should NEVER trigger "wrong".
@@ -674,17 +769,26 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   // renderDiceSlot / unplaced-dice-button onPress. Leaves fan card taps
   // untouched — the learner still needs to pick an operation card (or
   // Slinda) from the fan.
-  // `setL5aTargetResult` pushes the target (7 for `4 + 3`) into the result
-  // box so both steps show the same goal: sign slot empty, target `= 7`.
+  // `setL5aTargetResult` pushes the target (d1+d2) into the result box so
+  // both steps show the same goal: sign slot empty, target `= d1+d2`.
+  // Note: this effect fires before the L5 rigging effect (declaration order),
+  // so it reads the PREVIOUS run's l5DiceRef values. The L5 rigging corrects
+  // this immediately after by calling setL5aTargetResult with the fresh dice.
   useEffect(() => {
     const on =
       engine.lessonIndex === 4 &&
       engine.stepIndex <= 1 &&
       (engine.phase === 'bot-demo' || engine.phase === 'await-mimic' || engine.phase === 'celebrate');
+    // Step 0 is now pre-filled via explicit eqPickDice+eqSetOp emits in the
+    // rigging block — diceUnlocked stays false so the self-prefill effect
+    // in index.tsx does not interfere (it would clear the slots on re-run).
+    const diceUnlocked = false;
     tutorialBus.setL5aBlockFanTaps(on);
-    tutorialBus.setL5aTargetResult(on ? 7 : null);
+    tutorialBus.setL5aDiceUnlocked(diceUnlocked);
+    tutorialBus.setL5aTargetResult(on ? (l5DiceRef.current.d1 + l5DiceRef.current.d2) : null);
     return () => {
       tutorialBus.setL5aBlockFanTaps(false);
+      tutorialBus.setL5aDiceUnlocked(false);
       tutorialBus.setL5aTargetResult(null);
     };
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
@@ -711,6 +815,55 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     return () => tutorialBus.setFracGuidedMode(false);
   }, [engine.lessonIndex, engine.phase]);
 
+  // Reset residual L6 UI state when entering the fractions lesson. L6 leaves
+  // the green-chip strip open + the red SolveExerciseChip visible + the fan
+  // dimmed + state.showPossibleResults still true (which keeps the mini-cards
+  // renderable). Carrying any of that into L7 is distracting noise unrelated
+  // to fractions. Runs once on the lesson-index transition.
+  useEffect(() => {
+    if (engine.lessonIndex < MIMIC_FIRST_FRACTION_LESSON_INDEX) return;
+    tutorialBus.emitFanDemo({ kind: 'closeResultsChip' });
+    tutorialBus.emitFanDemo({ kind: 'clearSolveExerciseChip' });
+    gameDispatch({ type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS', value: false });
+  }, [engine.lessonIndex, gameDispatch]);
+
+  // Pulse halo around the discard pile while in the fractions lesson — keeps
+  // the learner's attention on the pile card (the teaching target) across
+  // all attack/defense steps.
+  useEffect(() => {
+    if (engine.lessonIndex < MIMIC_FIRST_FRACTION_LESSON_INDEX) {
+      fracPilePulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(fracPilePulse, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(fracPilePulse, { toValue: 0, duration: 700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [engine.lessonIndex, fracPilePulse]);
+
+  // Fractions lesson: re-rig the pile + hand on EVERY step transition. The
+  // generic `intro` useEffect above only fires once per lesson entry, but
+  // our fractions steps expect different pile cards per step (step 2
+  // wants 8, step 3 wants 9, steps 4-5 swap the pile for defense setups).
+  // Without this, the learner stays on the step-0 pile (12) while the
+  // bubble text references the step-specific value.
+  const lastFracRigRef = useRef<string>('');
+  useEffect(() => {
+    if (engine.lessonIndex < MIMIC_FIRST_FRACTION_LESSON_INDEX) {
+      lastFracRigRef.current = '';
+      return;
+    }
+    if (engine.phase !== 'bot-demo') return;
+    const key = `${engine.lessonIndex}-${engine.stepIndex}`;
+    if (lastFracRigRef.current === key) return;
+    lastFracRigRef.current = key;
+    gameDispatch(buildFractionTutorialSetup(engine.stepIndex, Date.now()));
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
+
   useEffect(() => {
     // Joker-place is now stepIndex 1 (the new place-op step took over
     // stepIndex 0 and the old cycle-signs / pick-place / solve-for-op
@@ -736,26 +889,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       else if (key === 'playCardsBtn') setPlayCardsBtnRect(rect);
     });
   }, []);
-
-  // ── Pulse the ➜ arrow while it's visible (confirm/play sub-phases).
-  //    Timing matches the game's existing roll-dice timer arrow: 280ms each
-  //    way with inOut(quad) — a quick, urgent bob that draws the eye. ──
-  const isL4Step3AwaitForArrow = engine.lessonIndex === 3 && engine.stepIndex === 2 && engine.phase === 'await-mimic';
-  const showArrow = isL4Step3AwaitForArrow && (l4Step3Phase === 'confirm' || l4Step3Phase === 'play');
-  useEffect(() => {
-    if (!showArrow) {
-      l4ArrowPulse.setValue(0);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(l4ArrowPulse, { toValue: 1, duration: 280, useNativeDriver: true, easing: Easing.inOut(Easing.quad) }),
-        Animated.timing(l4ArrowPulse, { toValue: 0, duration: 280, useNativeDriver: true, easing: Easing.inOut(Easing.quad) }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [showArrow, l4ArrowPulse]);
 
   // ── Lesson 4 bounce-back: if CONFIRM_STAGED advances the turn during
   //    any lesson-4 step, the game enters 'turn-transition' and the
@@ -876,6 +1009,8 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   };
   useEffect(() => {
     if (engine.lessonIndex !== 3) return;
+    // During intro the refs are reset by the global intro effect — don't rig yet.
+    if (engine.phase === 'intro' || engine.phase === 'idle') return;
     if (!gameState?.players || gameState.players.length < 2) return;
 
     // First entry: turn-transition → pre-roll → building
@@ -889,13 +1024,14 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       rigL4();
       return;
     }
-    // Re-entry after GO_BACK: game is already in 'building' — just re-rig.
+    // Re-entry after GO_BACK (same lesson or cross-lesson): game is already
+    // in 'building' — just re-rig so dice/hand match the current l4DiceRef.
     if (gameState.phase === 'building' && !eqLessonHandRiggedRef.current) {
       eqLessonHandRiggedRef.current = true;
       rigL4();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine.lessonIndex, gameState?.phase, gameState?.players, gameDispatch]);
+  }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
 
   // ── Lesson 5 (op/joker) must run on the real EquationBuilder. Ensure the
   //    game is in `building` with visible dice and a hand that includes a joker. ──
@@ -926,8 +1062,15 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       // No joker in this hand — the joker is introduced in step 5.2, and
       // exposing it here would let the learner bypass the "pick the right
       // operation card" decision that step 5.1 is teaching.
-      const FIXED_L5_DICE = { d1: 4, d2: 3, d3: 9 };
-      gameDispatch({ type: 'ROLL_DICE', values: { die1: FIXED_L5_DICE.d1, die2: FIXED_L5_DICE.d2, die3: FIXED_L5_DICE.d3 } });
+      const d1 = 2 + Math.floor(Math.random() * 7); // 2..8
+      const d2 = 1 + Math.floor(Math.random() * (d1 - 1)); // 1..d1-1, so d1>d2≥1
+      const d3Cands = [1,2,3,4,5,6,7,8,9].filter(n => n !== d1 && n !== d2 && n !== d1 + d2);
+      const d3 = d3Cands[Math.floor(Math.random() * d3Cands.length)] ?? 9;
+      l5DiceRef.current = { d1, d2, d3 };
+      // Correct the result-box target now that the ref has the fresh dice
+      // (the setL5aBlockFanTaps effect above fired first with stale values).
+      tutorialBus.setL5aTargetResult(d1 + d2);
+      gameDispatch({ type: 'ROLL_DICE', values: { die1: d1, die2: d2, die3: d3 } });
       const ts = Date.now();
       const playerHand = [
         { id: `tut-l5-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
@@ -942,16 +1085,19 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
+      // Pre-fill d1 and d2 so the equation shows `d1 [?] d2 = target`.
+      // The operator slot is intentionally left empty — the learner picks
+      // the `+` card from the fan and drops it on the empty slot.
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
     }
   }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.players, gameDispatch]);
 
-  // ── Lesson 5.1 (place-op): only the first two number slots (d1, d2) are
-  //    prefilled BY the EquationBuilder itself — the operator slot stays
-  //    empty so the learner drops a card there. See the self-prefill
-  //    useEffect in index.tsx that triggers off of
-  //    `tutorialBus.getL5aBlockFanTaps()`. Doing the prefill inside the
-  //    owner of the slot state removes the emit-vs-subscribe race that
-  //    previously left the equation empty ("המישוואה תקועה ואין שני
+  // ── Lesson 5.1 (place-op): dice slots + operator `+` are pre-filled in the
+  //    rigging block above (eqPickDice × 2 + eqSetOp). The self-prefill effect
+  //    in index.tsx is no longer needed for step 0 — it only ran for step 0
+  //    previously, but now the explicit emits handle it. Previously the equation
+  //    started empty; the user reported "המישוואה לא מלאה ושואלת שאלה".
   //    מיספרים"). Nothing to do here.
 
   // ── If the user skipped the dice lesson without rolling, fabricate
@@ -1039,14 +1185,27 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         { id: `tut-l5b-bot-op-divide-${ts}`, type: 'operation' as const, operation: '÷' as const },
       ];
       gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
-      // Scroll the fan so Slinda (index 2 of 5) is centred immediately when
-      // the step loads — before the bot demo does its own scroll.
-      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'scrollToIdx', idx: 2, durationMs: 350, easing: 'settle' }), 60);
+      // Keep the rigged hand order as-is — the default sort would push
+      // Slinda to the end (operations before jokers), but we rigged her at
+      // the centre index 2 on purpose. Flag is cleared when the lesson/step
+      // changes (see the cleanup effect right below this one).
+      tutorialBus.setTutorialPreserveHandOrder(true);
+      // Slinda is centred by the bot demo's immediate scrollFanTo(2, durationMs:0)
+      // at the start of botDemo — no separate setTimeout needed here.
       setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
       setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
+  // ── Clear the "preserve hand order" flag when leaving L5.2. The flag is
+  //    set inside the L5.2 rigging block above. Without this, Slinda would
+  //    stay pinned to the middle of the fan even in later lessons. ──
+  useEffect(() => {
+    const inL5b = engine.lessonIndex === 4 && engine.stepIndex === 1;
+    if (!inL5b) tutorialBus.setTutorialPreserveHandOrder(false);
+    return () => tutorialBus.setTutorialPreserveHandOrder(false);
+  }, [engine.lessonIndex, engine.stepIndex]);
 
   // ── Lesson 6 (possible-results) rigging: on entry, the learner sees a
   //    fully-filled equation and a full hand — the green ResultsChip pulses
@@ -1061,30 +1220,42 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
       l6RiggedRef.current = false;
       return;
     }
+    // Re-arm the rigging on every re-entry into step 0 (GO_BACK flows the
+    // engine through `intro` before landing on `bot-demo`, and the shared
+    // `intro` useEffect at the top of this file clears equationHandSlots +
+    // runs eqReset). Without this, returning to step 0 after a back-nav
+    // leaves the equation empty and validTargets stale.
+    if (engine.phase === 'intro' && engine.stepIndex === 0) {
+      l6RiggedRef.current = false;
+      return;
+    }
     if (engine.phase !== 'bot-demo' || engine.stepIndex !== 0) return;
     if (l6RiggedRef.current) return;
     l6RiggedRef.current = true;
 
-    // Fresh dice — pick values that generate plenty of valid targets so the
-    // mini-card strip isn't empty when the chip opens.
-    gameDispatch({ type: 'TUTORIAL_SET_DICE', values: { die1: 2, die2: 3, die3: 4 } });
+    // Dice: two distinct values (die3 exists but is not used in the equation)
+    // so the mini-card strip shows a mix of options while the builder shows
+    // a clean two-number exercise. ROLL_DICE guarantees 'building' phase.
+    gameDispatch({ type: 'ROLL_DICE', values: { die1: 2, die2: 3, die3: 5 } });
 
-    // Full hand — mix of numbers + operators so the hand visually looks
-    // "loaded" (per the user's spec: "הכפתור הירוק פועם... היד מלאה").
+    // Hand: number cards 5, 7, 8 match the three 2-number results reachable
+    // from dice {2,3,5}: 2+3=5, 2+5=7, 3+5=8. Even though the learner doesn't
+    // play cards in L6, seeing familiar numbers in the fan makes the demo
+    // feel realistic and connected to the possible-results strip.
     const ts = Date.now();
     const playerHand = [
       { id: `tut-l6-num-5-${ts}`, type: 'number' as const, value: 5 },
       { id: `tut-l6-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
-      { id: `tut-l6-num-6-${ts}`, type: 'number' as const, value: 6 },
+      { id: `tut-l6-num-7-${ts}`, type: 'number' as const, value: 7 },
+      { id: `tut-l6-num-8-${ts}`, type: 'number' as const, value: 8 },
       { id: `tut-l6-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
-      { id: `tut-l6-num-9-${ts}`, type: 'number' as const, value: 9 },
     ];
     const botHand = [
       { id: `tut-l6-bot-num-5-${ts}`, type: 'number' as const, value: 5 },
       { id: `tut-l6-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
-      { id: `tut-l6-bot-num-6-${ts}`, type: 'number' as const, value: 6 },
+      { id: `tut-l6-bot-num-7-${ts}`, type: 'number' as const, value: 7 },
+      { id: `tut-l6-bot-num-8-${ts}`, type: 'number' as const, value: 8 },
       { id: `tut-l6-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
-      { id: `tut-l6-bot-num-9-${ts}`, type: 'number' as const, value: 9 },
     ];
     gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
 
@@ -1092,17 +1263,62 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     // in L1–L5). Must be dispatched after the dice so validTargets is ready.
     gameDispatch({ type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS', value: true });
 
-    // Fill the EquationBuilder completely via the fan-demo channel. Stagger
-    // the emissions slightly so the EquationBuilder's subscribe effect has
-    // time to process each one (same pattern as L5b above). Both op slots
-    // are set to `+` giving "2 + 3 + 4 = 9".
+    // Equation stays EMPTY throughout step 0 — the teaching point is the
+    // green chip, not the builder. Reset any leftover state from previous steps.
     tutorialBus.emitFanDemo({ kind: 'eqReset' });
-    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 120);
-    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 1, op: '+' }), 200);
-    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
-    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 2, op: '+' }), 360);
-    setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 }), 440);
+    // Chip starts CLOSED — user taps it in step 6.1 to open the mini-strip.
+    tutorialBus.emitFanDemo({ kind: 'closeResultsChip' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
+  // ── Lesson 6 step transitions: ensure the chip is in the expected state
+  //    when the learner arrives at each step. Without this, skipping step
+  //    6.0 (without actually tapping the chip) leaves the mini-strip closed
+  //    for step 6.1, and the bot's `tapMiniResult` demo has nothing to tap.
+  //    Symmetrically, going BACK into step 6.0 with `resultsOpen=true` from
+  //    the previous run would defeat the "tap the pulsing chip" teaching. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== 5) return;
+    if (engine.phase !== 'bot-demo') return;
+    if (engine.stepIndex === 0) {
+      // Step 6.0: chip MUST start closed so the learner sees it pulsing and
+      // can tap to open. If the user navigated here with chip open, reset.
+      tutorialBus.emitFanDemo({ kind: 'closeResultsChip' });
+    } else if (engine.stepIndex === 1) {
+      // Step 6.1 (tap-mini): chip MUST be open so the mini-strip is visible.
+      // If the learner skipped step 6.0 without actually opening it, this
+      // force-opens so the bot demo + await-mimic have something to tap.
+      tutorialBus.emitFanDemo({ kind: 'openResultsChip' });
+    }
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
+  // ── Lesson 6.3 (copy-exercise): when the learner confirms an equation,
+  //    compare the result against the l6CopyConfig target and emit the
+  //    appropriate outcome event. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== 5 || engine.stepIndex !== 2 || engine.phase !== 'await-mimic') return;
+    if (gameState?.phase !== 'solved') return;
+    const cfg = tutorialBus.getL6CopyConfig();
+    if (!cfg) return;
+    const got = gameState.equationResult as number | null;
+    if (got === cfg.target) {
+      tutorialBus.emitUserEvent({ kind: 'l6CopyConfirmed' });
+    } else if (got != null) {
+      tutorialBus.emitUserEvent({ kind: 'l6CopyMismatch', expected: cfg.target, got });
+    }
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameState?.phase, gameState?.equationResult]);
+
+  // ── L6.3 mismatch bubble: show error 2s when wrong result is confirmed. ──
+  useEffect(() => {
+    setL6Mismatch(false);
+    if (l6MismatchTimerRef.current) clearTimeout(l6MismatchTimerRef.current);
+    if (engine.lessonIndex !== 5 || engine.stepIndex !== 2 || engine.phase !== 'await-mimic') return;
+    return tutorialBus.subscribeUserEvent((evt) => {
+      if (evt.kind !== 'l6CopyMismatch') return;
+      setL6Mismatch(true);
+      if (l6MismatchTimerRef.current) clearTimeout(l6MismatchTimerRef.current);
+      l6MismatchTimerRef.current = setTimeout(() => setL6Mismatch(false), 2500);
+    });
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
   // ── Lesson 5a: when the learner cycles the `?` slot, publish the matching
@@ -1170,9 +1386,19 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
 
   // ── Celebrate timer (longer if the step provides a custom message
   //    that the learner actually needs time to read). Dice lesson (idx 2)
-  //    skips straight to the equation with zero delay. ──
+  //    skips straight to the equation with zero delay. L6.2 (tap-mini)
+  //    requires a MANUAL "הבנתי ›" confirmation so the learner can read
+  //    the red SolveExerciseChip at their own pace before advancing. ──
   useEffect(() => {
     if (engine.phase !== 'celebrate') return;
+    // L6 step 0 (open-chip): skip celebrate instantly — no fanfare.
+    if (engine.lessonIndex === 5 && engine.stepIndex === 0) {
+      dispatchEngine({ type: 'CELEBRATE_DONE' });
+      return;
+    }
+    // L6.2 (tap-mini, stepIndex 1 of lessonIndex 5): no auto-advance.
+    const isL6TapMiniCelebrate = engine.lessonIndex === 5 && engine.stepIndex === 1;
+    if (isL6TapMiniCelebrate) return;
     const lesson = LESSONS[engine.lessonIndex];
     const step = lesson?.steps[engine.stepIndex];
     // Dice lesson → equation: instant transition, no celebration pause.
@@ -1205,7 +1431,7 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   //   2. card selected (equationHandPick set) → "now press in the exercise to place it"
   //   3. wrong card placed → error message (auto-clears after 2s)
   const isL5PlaceAwait = engine.lessonIndex === 4 && engine.stepIndex === 0 && engine.phase === 'await-mimic';
-  const L5A_TARGET_RESULT = 7;
+  const L5A_TARGET_RESULT = l5DiceRef.current.d1 + l5DiceRef.current.d2;
   const l5PlaceHintKey: string | null = isL5PlaceAwait
     ? (l5PlaceWrong
         ? 'tutorial.l5op.wrong'
@@ -1215,10 +1441,18 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
     : null;
   const l5PlaceHintParams: Record<string, string> | undefined =
     l5PlaceHintKey === 'tutorial.l5a.hintChooseCard' ? { result: String(L5A_TARGET_RESULT) } : undefined;
+  const isL6CopyAwait = engine.lessonIndex === 5 && engine.stepIndex === 2 && engine.phase === 'await-mimic';
+  const l6MismatchHintKey: string | null = isL6CopyAwait && l6Mismatch ? 'tutorial.l6c.mismatch' : null;
+  // Fractions intro step uses custom dedicated bubbles — suppress default bubble.
+  const isFracIntroActive =
+    engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX &&
+    engine.stepIndex === 0 &&
+    (engine.phase === 'bot-demo' || engine.phase === 'await-mimic');
   const bubbleText: string | null =
-    engine.phase === 'post-signs-choice' || engine.phase === 'core-complete' ? null
+    isFracIntroActive ? null
+    : engine.phase === 'post-signs-choice' || engine.phase === 'core-complete' ? null
     : engine.phase === 'bot-demo' ? (currentStep?.botHintKey ? t(currentStep.botHintKey) : t('tutorial.engine.botDemoLabel'))
-    : engine.phase === 'await-mimic' ? (l4Step3HintKey ? t(l4Step3HintKey) : l5PlaceHintKey ? t(l5PlaceHintKey, l5PlaceHintParams) : l5bHintKey ? t(l5bHintKey) : (currentStep?.hintKey ? t(currentStep.hintKey) : t('tutorial.engine.yourTurnLabel')))
+    : engine.phase === 'await-mimic' ? (l4Step3HintKey ? t(l4Step3HintKey) : l5PlaceHintKey ? t(l5PlaceHintKey, l5PlaceHintParams) : l5bHintKey ? t(l5bHintKey) : l6MismatchHintKey ? t(l6MismatchHintKey) : (currentStep?.hintKey ? t(currentStep.hintKey) : t('tutorial.engine.yourTurnLabel')))
     : engine.phase === 'celebrate' ? (currentStep?.celebrateKey ? t(currentStep.celebrateKey) : t('tutorial.engine.celebrate'))
     // lesson-done has no bubble — celebrate already said its piece, and a
     // generic "you finished the lesson" right after every action is noise.
@@ -1252,6 +1486,20 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
   const isOpCycleLesson = engine.lessonIndex === 4;
   const isPossibleResultsLesson = engine.lessonIndex === 5;
   const isFracLesson = engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX;
+
+  // Step progress indicator: flat step number within core lessons only
+  // (fractions are an optional extension — not counted in the main progress).
+  const coreLessons = LESSONS.slice(0, MIMIC_LAST_CORE_LESSON_INDEX + 1);
+  const totalCoreSteps = coreLessons.reduce((s, l) => s + l.steps.length, 0);
+  const currentFlatStep = isFracLesson
+    ? totalCoreSteps // fractions are beyond the core counter
+    : LESSONS.slice(0, engine.lessonIndex).reduce((s, l) => s + l.steps.length, 0) + engine.stepIndex + 1;
+  const showStepProgress =
+    engine.phase !== 'idle' &&
+    engine.phase !== 'core-complete' &&
+    engine.phase !== 'post-signs-choice' &&
+    engine.phase !== 'all-done' &&
+    !isFracLesson;
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
   // bubble at the previous lesson's position so it doesn't jump; only the
@@ -1264,7 +1512,12 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
 
   // ── Skip button: pushes the engine forward one phase. Lets us walk
   //    through the tutorial without performing every action. ──
+  // Counts presses during bot-demo/await-mimic — the phases where learning
+  // is expected. > 2 such skips blocks the coin reward at core-complete.
   const skipForward = () => {
+    if (engine.phase === 'bot-demo' || engine.phase === 'await-mimic') {
+      setSkipCount((n) => n + 1);
+    }
     switch (engine.phase) {
       case 'intro': dispatchEngine({ type: 'DISMISS_INTRO' }); break;
       case 'bot-demo': dispatchEngine({ type: 'BOT_DEMO_DONE' }); break;
@@ -1394,21 +1647,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
               }}
             >
               <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
-                <Animated.View
-                  pointerEvents="none"
-                  style={{
-                    position: 'absolute',
-                    top: -14,
-                    left: -14,
-                    right: -14,
-                    bottom: -14,
-                    borderRadius: 70,
-                    borderWidth: 4,
-                    borderColor: '#FCD34D',
-                    opacity: dicePulse.interpolate({ inputRange: [0, 1], outputRange: [0, 0.95] }),
-                    transform: [{ scale: dicePulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }],
-                  }}
-                />
                 <GoldDiceButton
                   onPress={() => {
                     void playDiceRollSound();
@@ -1679,34 +1917,30 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         );
       })() : null}
 
-      {/* The game's red "יציאה" button at top-left is uncovered by design;
-          its onPress emits tutorialBus.requestExit() to leave the tutorial. */}
-
-      {/* Exit + Skip + Back buttons — top-right. Exit always available so
-          learners (or QA) can leave the tutorial at any point regardless of
-          whether the underlying game's header exit button is reachable. */}
-      <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 9600, flexDirection: 'row', gap: 8 }}>
-        <TouchableOpacity
-          onPress={() => {
-            dispatchEngine({ type: 'EXIT' });
-            onExit();
-          }}
-          style={{
-            paddingVertical: 8,
+      {/* Skip + Back buttons + step progress pill — top-right row. */}
+      <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 9600, flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+        {showStepProgress ? (
+          <View pointerEvents="none" style={{
+            backgroundColor: 'rgba(15,23,42,0.82)',
+            borderRadius: 20,
             paddingHorizontal: 12,
-            backgroundColor: 'rgba(185,28,28,0.95)',
-            borderRadius: 14,
+            paddingVertical: 5,
             borderWidth: 1.5,
-            borderColor: 'rgba(254,202,202,0.85)',
-          }}
-        >
-          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>{t('tutorial.engine.exitBtn')}</Text>
-        </TouchableOpacity>
+            borderColor: 'rgba(148,163,184,0.55)',
+          }}>
+            <Text style={{ color: '#CBD5E1', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
+              {t('tutorial.stepProgress', { n: String(currentFlatStep), total: String(totalCoreSteps) })}
+            </Text>
+          </View>
+        ) : null}
         <TouchableOpacity
           onPress={() => dispatchEngine({ type: 'GO_BACK' })}
           style={{
             paddingVertical: 8,
             paddingHorizontal: 12,
+            minWidth: 82,
+            alignItems: 'center',
+            justifyContent: 'center',
             backgroundColor: 'rgba(71,85,105,0.92)',
             borderRadius: 14,
             borderWidth: 1.5,
@@ -1720,6 +1954,9 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
           style={{
             paddingVertical: 8,
             paddingHorizontal: 12,
+            minWidth: 82,
+            alignItems: 'center',
+            justifyContent: 'center',
             backgroundColor: 'rgba(15,118,110,0.92)',
             borderRadius: 14,
             borderWidth: 1.5,
@@ -1730,16 +1967,6 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
             {engine.phase === 'celebrate' ? 'הבנתי ›' : 'דלג ›'}
           </Text>
         </TouchableOpacity>
-      </View>
-
-      {/* DEBUG: step number badge — visible so we can reference specific
-          steps by number during review. REMOVE BEFORE PRODUCTION. */}
-      <View pointerEvents="none" style={{ position: 'absolute', top: 48, right: 16, zIndex: 9700 }}>
-        <View style={{ backgroundColor: 'rgba(0,0,0,0.85)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#FCD34D' }}>
-          <Text style={{ color: '#FCD34D', fontSize: 14, fontWeight: '900' }}>
-            {`${engine.lessonIndex + 1}.${engine.stepIndex + 1} [${engine.phase}]`}
-          </Text>
-        </View>
       </View>
 
       {/* Cheerful speech bubble — position depends on lesson + phase:
@@ -1754,22 +1981,155 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         const bubbleAtTop =
           isEquationLesson ||
           isOpCycleLesson ||
-          isPossibleResultsLesson ||
-          isFracLesson ||
           (isDiceLesson && engine.phase !== 'bot-demo');
+        // Compact bubble for L6 (possible results) + L7 (fractions) — both
+        // lessons teach UI that lives at the TOP of the real game board
+        // (green chip at top:84 / discard pile at top:50). A full-width
+        // bubble at top:55 would cover exactly what the learner is supposed
+        // to look at. Placing the compact bubble at top:400 keeps it in the
+        // middle of the screen where no teaching target lives.
+        // Exception: frac-intro (stepIndex 0) renders its own two-bubble
+        // layout — suppress the default compact bubble there.
+        const isL6 = isPossibleResultsLesson;
+        const isFracIntroStep = isFracLesson && engine.stepIndex === 0 &&
+          (engine.phase === 'bot-demo' || engine.phase === 'await-mimic');
+        const compactMid = (isL6 || isFracLesson) && !isFracIntroStep;
         return (
           <View
             pointerEvents="none"
             style={
-              bubbleAtTop
-                ? { position: 'absolute', top: 55, left: 16, right: 16, alignItems: 'center', zIndex: 9200 }
-                : { position: 'absolute', bottom: BUBBLE_BOTTOM, left: 0, right: 0, alignItems: 'center', zIndex: 9200 }
+              compactMid
+                ? { position: 'absolute', top: 400, left: 16, right: 16, alignItems: 'center', zIndex: 9200 }
+                : bubbleAtTop
+                  ? { position: 'absolute', top: 55, left: 16, right: 16, alignItems: 'center', zIndex: 9200 }
+                  : { position: 'absolute', bottom: BUBBLE_BOTTOM, left: 0, right: 0, alignItems: 'center', zIndex: 9200 }
             }
           >
-            <HappyBubble text={bubbleText} tone={bubbleTone} arrowSize={bubbleAtTop ? 'small' : 'big'} />
+            <HappyBubble
+              text={bubbleText}
+              tone={bubbleTone}
+              arrowSize={compactMid || bubbleAtTop ? 'small' : 'big'}
+              size={compactMid ? 'compact' : 'normal'}
+              maxWidth={compactMid ? 320 : undefined}
+            />
           </View>
         );
       })() : null}
+
+      {/* Fractions lesson — pulsing halo around the discard pile.
+          The pile is positioned in the game at `top: 50, right: 12` with
+          roughly 96px width and ~120px height (card + count badge). We
+          draw a gold ring just outside its bounds that pulses in sync
+          with `fracPilePulse`. */}
+      {isFracLesson ? (
+        <Animated.View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 42,
+            right: 4,
+            width: 112,
+            height: 132,
+            borderRadius: 18,
+            borderWidth: 4,
+            borderColor: '#FCD34D',
+            opacity: fracPilePulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+            transform: [{ scale: fracPilePulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }],
+            zIndex: 9150,
+            ...Platform.select({
+              ios: { shadowColor: '#FCD34D', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.95, shadowRadius: 20 },
+              android: { elevation: 18 },
+            }),
+          }}
+        />
+      ) : null}
+
+      {/* Fractions intro step (frac-intro, stepIndex 0) — two dedicated bubbles
+          + a Continue button, bypassing the generic compact-mid bubble slot.
+          • Pile bubble: compact label near the discard pile, pointing at it.
+          • Rule bubble: full bubble above the fan (arrow ↓ toward the cards).
+          • Continue button: "לחצו המשך שאתם מוכנים". */}
+      {isFracLesson && engine.stepIndex === 0 && (engine.phase === 'bot-demo' || engine.phase === 'await-mimic') ? (
+        <>
+          {/* Pile label — sits just below the pile halo, with upward arrow */}
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', top: 178, right: 6, alignItems: 'center', zIndex: 9200 }}
+          >
+            {/* Arrow pointing UP toward the pile above */}
+            <View style={{ width: 0, height: 0, borderLeftWidth: 8, borderRightWidth: 8, borderBottomWidth: 10, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#F59E0B', marginBottom: -2 }} />
+            <View
+              style={{
+                backgroundColor: '#FEF3C7',
+                borderColor: '#F59E0B',
+                borderWidth: 2,
+                borderRadius: 14,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
+                  android: { elevation: 6 },
+                }),
+              }}
+            >
+              <Text style={{ color: '#78350F', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
+                {locale === 'he' ? 'זאת הערימה' : 'This is the pile'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Rule bubble — above the fan, arrow pointing down toward cards */}
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', bottom: BUBBLE_BOTTOM + 60, left: 12, right: 12, alignItems: 'center', zIndex: 9200 }}
+          >
+            <HappyBubble
+              text={locale === 'he'
+                ? 'נפטרים מקלף שבר רק כשהוא מתחלק בערימה — או כהגנה'
+                : 'Play a fraction card only when it divides the pile — or to defend'}
+              tone="demo"
+              arrowSize="big"
+              size="compact"
+              maxWidth={320}
+            />
+          </View>
+
+          {/* Continue button */}
+          {engine.phase === 'await-mimic' ? (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => tutorialBus.emitUserEvent({ kind: 'fracLessonAck' })}
+              style={{
+                position: 'absolute',
+                bottom: BUBBLE_BOTTOM - 10,
+                left: 0,
+                right: 0,
+                alignItems: 'center',
+                zIndex: 9300,
+              }}
+            >
+              <View
+                style={{
+                  backgroundColor: '#2563EB',
+                  borderRadius: 18,
+                  paddingVertical: 12,
+                  paddingHorizontal: 32,
+                  borderWidth: 2,
+                  borderColor: '#93C5FD',
+                  ...Platform.select({
+                    ios: { shadowColor: '#2563EB', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 12 },
+                    android: { elevation: 10 },
+                  }),
+                }}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
+                  {locale === 'he' ? 'המשך — מוכן!' : 'Continue — ready!'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
+        </>
+      ) : null}
 
       {/* Lesson 4 (build equation) body is intentionally EMPTY here:
           the lesson is performed on the real game's EquationBuilder + fan.
@@ -1859,55 +2219,39 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         );
       })() : null}
 
-      {/* Lesson 4 step 3 arrow — horizontal yellow ➜ placed to the RIGHT of
-          the target button, rotated 180° so it points LEFT back at the
-          button. Container height MATCHES the button height so vertical
-          centring lands on the button itself (not below it). */}
-      {showArrow && (l4Step3Phase === 'confirm' ? confirmBtnRect : playCardsBtnRect) ? (
-        <Animated.View
-          pointerEvents="none"
-          style={(() => {
-            const rect = l4Step3Phase === 'confirm' ? confirmBtnRect! : playCardsBtnRect!;
-            // Real button heights from GameScreen LulosButton — measured rect
-            // can be taller (shadow / elevation), which vertically centers the
-            // arrow too low if we use rect.height blindly.
-            const btnH = l4Step3Phase === 'confirm' ? 48 : 54;
-            const top = rect.top + Math.max(0, (rect.height - btnH) / 2);
-            return {
-              position: 'absolute',
-              left: rect.left + rect.width + 4,
-              top,
-              width: 72,
-              height: btnH,
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 9500,
-              opacity: l4ArrowPulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }),
-              transform: [
-                { translateX: l4ArrowPulse.interpolate({ inputRange: [0, 1], outputRange: [14, -10] }) },
-                { scale: l4ArrowPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.94, 1.22, 0.94] }) },
-              ],
-            };
-          })()}
+      {/* L6 step 0 (possible-results open-chip): "הבנתי" button over dimmed fan */}
+      {isPossibleResultsLesson && engine.stepIndex === 0 && engine.phase === 'await-mimic' ? (
+        <View
+          pointerEvents="box-none"
+          style={{ position: 'absolute', bottom: FAN_BOTTOM + FAN_STRIP_H / 2 - 24, left: 0, right: 0, alignItems: 'center', zIndex: 9300 }}
         >
-          <Text style={{ fontSize: 36, lineHeight: 36, color: '#FDE047', fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6, transform: [{ rotate: '180deg' }] }}>➜</Text>
-        </Animated.View>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => dispatchEngine({ type: 'OUTCOME_MATCHED' })}
+            style={{
+              paddingVertical: 14,
+              paddingHorizontal: 40,
+              borderRadius: 18,
+              backgroundColor: '#0F172A',
+              borderWidth: 2,
+              borderColor: '#FACC15',
+            }}
+          >
+            <Text style={{ color: '#FACC15', fontWeight: '900', fontSize: 18 }}>
+              {locale === 'he' ? 'הבנתי' : 'Got it'}
+            </Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
 
-      {/* Core tutorial finished — celebratory "10 coins" popup that precedes
-          the fractions-branch choice. Warm palette + coin emoji + single
-          "הבנתי" button. Tapping it dispatches DISMISS_CORE_COMPLETE, which
-          transitions the engine to post-signs-choice. */}
+      {/* Core tutorial finished — choice screen: continue to fractions or start real game. */}
       {engine.phase === 'core-complete' ? (
         <View
           pointerEvents="auto"
           style={{
             position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.55)',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.60)',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 9400,
@@ -1917,40 +2261,77 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
           <View
             style={{
               backgroundColor: '#78350F',
-              borderRadius: 22,
-              paddingVertical: 28,
+              borderRadius: 24,
+              paddingVertical: 32,
               paddingHorizontal: 24,
               borderWidth: 3,
               borderColor: '#FACC15',
               maxWidth: 380,
               width: '100%',
               alignItems: 'center',
-              shadowColor: '#FACC15',
-              shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 0.6,
-              shadowRadius: 18,
-              elevation: 10,
+              gap: 14,
+              ...Platform.select({
+                ios: { shadowColor: '#FACC15', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.7, shadowRadius: 20 },
+                android: { elevation: 12 },
+              }),
             }}
           >
-            <Text style={{ color: '#FEF3C7', fontSize: 28, fontWeight: '900', textAlign: 'center', marginBottom: 14 }}>
+            <Text style={{ color: '#FEF3C7', fontSize: 26, fontWeight: '900', textAlign: 'center' }}>
               {t('tutorial.coreComplete.title')}
             </Text>
-            <Text style={{ color: '#FDE68A', fontSize: 22, fontWeight: '800', textAlign: 'center', marginBottom: 22 }}>
-              {t('tutorial.coreComplete.body')}
+            {(skipCount > 2 || tutorialCoinsEarnedCount >= 2) ? (
+              <>
+                <Text style={{ color: '#FCA5A5', fontSize: 20, fontWeight: '800', textAlign: 'center' }}>
+                  {t('tutorial.coreComplete.bodySkipped')}
+                </Text>
+                <Text style={{ color: '#FCA5A5', fontSize: 13, fontWeight: '600', textAlign: 'center', opacity: 0.75, marginTop: -6 }}>
+                  {tutorialCoinsEarnedCount >= 2
+                    ? t('tutorial.coreComplete.bodyLimitSub')
+                    : t('tutorial.coreComplete.bodySkippedSub')}
+                </Text>
+              </>
+            ) : (
+              <Text style={{ color: '#FDE68A', fontSize: 20, fontWeight: '800', textAlign: 'center' }}>
+                {t('tutorial.coreComplete.body')}
+              </Text>
+            )}
+            <Text style={{ color: '#FDE68A', fontSize: 15, fontWeight: '600', textAlign: 'center', opacity: 0.9 }}>
+              {t('tutorial.coreComplete.advancedOffer')}
             </Text>
+            {/* Advanced fractions option */}
             <TouchableOpacity
-              onPress={() => dispatchEngine({ type: 'DISMISS_CORE_COMPLETE' })}
+              onPress={() => dispatchEngine({ type: 'CHOOSE_ADVANCED_FRACTIONS' })}
               style={{
-                paddingVertical: 14,
-                paddingHorizontal: 36,
-                borderRadius: 16,
+                paddingVertical: 15,
+                paddingHorizontal: 28,
+                borderRadius: 18,
                 backgroundColor: '#F59E0B',
                 borderWidth: 2,
                 borderColor: '#FCD34D',
+                width: '100%',
+                alignItems: 'center',
               }}
             >
               <Text style={{ color: '#431407', fontWeight: '900', fontSize: 17 }}>
-                {t('tutorial.coreComplete.ack')}
+                {t('tutorial.coreComplete.advancedBtn')}
+              </Text>
+            </TouchableOpacity>
+            {/* Real game — exits tutorial */}
+            <TouchableOpacity
+              onPress={onExit}
+              style={{
+                paddingVertical: 15,
+                paddingHorizontal: 28,
+                borderRadius: 18,
+                backgroundColor: '#10B981',
+                borderWidth: 2,
+                borderColor: '#34D399',
+                width: '100%',
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 17, textAlign: 'center' }}>
+                {t('tutorial.coreComplete.realGameBtn')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2012,36 +2393,30 @@ export function InteractiveTutorialScreen({ onExit, gameDispatch, gameState }: P
         </View>
       ) : null}
 
-      {/* Fractions intro/theory: explicit Continue (outcome fracLessonAck) */}
-      {isFracLesson && engine.phase === 'await-mimic' && engine.stepIndex <= 1 ? (
-        <View
-          pointerEvents="box-none"
-          style={{ position: 'absolute', bottom: 100, left: 0, right: 0, alignItems: 'center', zIndex: 9350 }}
-        >
-          <TouchableOpacity
-            onPress={() => tutorialBus.emitUserEvent({ kind: 'fracLessonAck' })}
-            style={{
-              paddingVertical: 12,
-              paddingHorizontal: 28,
-              backgroundColor: '#059669',
-              borderRadius: 16,
-              borderWidth: 2,
-              borderColor: '#6EE7B7',
-            }}
-          >
-            <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>{t('tutorial.engine.continueBtn')}</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+      {/* Legacy standalone intro/theory "Continue" button was removed when
+          the fractions lesson merged into direct attack steps — each step's
+          outcome is now a real card tap, not a Continue click. */}
 
-      {/* All-done: explicit "Exit & return" CTA — never auto-continues into a game */}
+      {/* All-done: "יאללה נשחק!" CTA — returns to the mode picker */}
       {engine.phase === 'all-done' ? (
-        <View style={{ position: 'absolute', bottom: 40, left: 0, right: 0, alignItems: 'center', zIndex: 9300 }}>
+        <View style={{ position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center', zIndex: 9300 }}>
           <TouchableOpacity
             onPress={onExit}
-            style={{ paddingVertical: 14, paddingHorizontal: 32, backgroundColor: '#10B981', borderRadius: 20 }}
+            activeOpacity={0.8}
+            style={{
+              paddingVertical: 18,
+              paddingHorizontal: 48,
+              backgroundColor: '#10B981',
+              borderRadius: 28,
+              borderWidth: 3,
+              borderColor: '#34D399',
+              ...Platform.select({
+                ios: { shadowColor: '#10B981', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 18 },
+                android: { elevation: 14 },
+              }),
+            }}
           >
-            <Text style={{ color: '#fff', fontWeight: '900', fontSize: 18 }}>{t('tutorial.engine.exitAndReturn')}</Text>
+            <Text style={{ color: '#fff', fontWeight: '900', fontSize: 22, letterSpacing: 0.5 }}>{t('tutorial.engine.exitAndReturn')}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
