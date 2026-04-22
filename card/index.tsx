@@ -36,6 +36,7 @@ import { CasinoButton } from './components/CasinoButton';
 import { WalkingDice } from './components/WalkingDice';
 import FuseTimer from './components/FuseTimer';
 import ExcellenceMeter from './components/ExcellenceMeter';
+import { SlindaCoin } from './components/SlindaCoin';
 import { HorizontalOptionWheel, type HorizontalWheelOption } from './components/HorizontalOptionWheel';
 import * as Localization from 'expo-localization';
 import { t, type MsgParams } from './shared/i18n';
@@ -81,6 +82,8 @@ const gameBgImg = require('./assets/bg.jpg');
 const playerScreensGradientColors = ['#070f1a', '#0f2840', '#153252'] as const;
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMultiplayer';
+import { AuthProvider, useAuth } from './src/hooks/useAuth';
+import { ShopScreen } from './src/screens/ShopScreen';
 import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/LobbyScreens';
 import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
 import { displayFontFamily } from './src/theme/fonts';
@@ -171,7 +174,7 @@ interface Card {
   resolvedTarget?: number;
 }
 
-/** קלף פעולה/ג'וקר משובץ במשבצת 0 או 1 במבנה הקוביות; jokerAs רלוונטי רק לג'וקר */
+/** קלף פעולה/סלינדה משובץ במשבצת 0 או 1 במבנה הקוביות; jokerAs רלוונטי רק לסלינדה */
 interface EquationHandSlot {
   card: Card;
   jokerAs: Operation | null;
@@ -530,6 +533,11 @@ function TournamentInfoModal({
 }
 
 function sortHandCards(cards: Card[]): Card[] {
+  // Tutorial opt-out: when L5.2 (joker-place) rigs Slinda at the middle
+  // index of the fan, the default "operations before jokers" rule would
+  // push her to the end. Skip the sort so the learner sees Slinda right
+  // where the bot is about to pulse her.
+  if (tutorialBus.getTutorialPreserveHandOrder()) return cards;
   const groupOrder: Record<CardType, number> = {
     number: 0,
     wild: 0,
@@ -645,6 +653,7 @@ type GameAction =
   | { type: 'RESET_GAME' }
   | { type: 'TUTORIAL_SET_HANDS'; hands: Card[][]; drawPile?: Card[]; discardPile?: Card[] }
   | { type: 'TUTORIAL_SET_DICE'; values: DiceResult }
+  | { type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS'; value: boolean }
   | {
       type: 'TUTORIAL_FRACTION_SETUP';
       slice: {
@@ -1733,7 +1742,12 @@ function gameReducer(
       console.log('[REDUCER] SELECT_EQ_OP', 'phase=', st.phase, 'card=', action.card.operation);
       // שלב המשוואה נשלט ע"י override במצב רשת — ב-localState הוא נשאר 'setup', לכן אין בדיקת phase כאן; הצרכנים מגנים ב-UI.
       if (action.card.type !== 'operation') return st;
-      if (action.card.operation != null && !st.enabledOperators.includes(action.card.operation)) {
+      // Tutorial Lesson 5 teaches operator-card placement — all four signs
+      // are valid picks regardless of stage config (stage 'A' only enables
+      // `+`). The enabledOperators gate is bypassed here and in PLACE_EQ_OP
+      // so any card from the learner's L5 hand can be picked up.
+      const bypassOpGate = st.isTutorial;
+      if (!bypassOpGate && action.card.operation != null && !st.enabledOperators.includes(action.card.operation)) {
         return { ...st, message: tf('equation.operatorNotInStage') };
       }
       const placed = countEquationHandPlaced(st);
@@ -1750,7 +1764,9 @@ function gameReducer(
     }
     case 'SELECT_EQ_JOKER': {
       // שלב המשוואה נשלט ע"י override במצב רשת — ב-localState הוא נשאר 'setup'; הצרכנים מגנים ב-UI.
-      if (action.chosenOperation != null && !st.enabledOperators.includes(action.chosenOperation)) {
+      // Tutorial bypass: see comment in SELECT_EQ_OP above.
+      const bypassJokerGate = st.isTutorial;
+      if (!bypassJokerGate && action.chosenOperation != null && !st.enabledOperators.includes(action.chosenOperation)) {
         return { ...st, message: tf('equation.operatorNotInStage') };
       }
       const placed = countEquationHandPlaced(st);
@@ -1777,7 +1793,9 @@ function gameReducer(
       if (!pick || action.position < 0 || action.position > 1) return st;
       if (pick.card.type === 'joker' && pick.jokerAs == null) return st;
       const opToPlace = pick.card.type === 'joker' ? pick.jokerAs : pick.card.operation;
-      if (opToPlace != null && !st.enabledOperators.includes(opToPlace)) {
+      // Tutorial bypass: see comment in SELECT_EQ_OP above.
+      const bypassPlaceGate = st.isTutorial;
+      if (!bypassPlaceGate && opToPlace != null && !st.enabledOperators.includes(opToPlace)) {
         return { ...st, message: tf('equation.operatorNotInStage'), equationHandPick: null };
       }
       const slots: [EquationHandSlot | null, EquationHandSlot | null] = [...st.equationHandSlots];
@@ -1879,7 +1897,7 @@ function gameReducer(
         cardToDiscard = { ...action.card, resolvedValue: v };
         lastVal = v;
       } else {
-        // ג'וקר לא מגן; שבר עובר דרך PLAY_FRACTION
+        // סלינדה לא מגנה; שבר עובר דרך PLAY_FRACTION
         return st;
       }
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
@@ -2467,6 +2485,13 @@ function gameReducer(
         equationResult: null,
       };
     }
+    case 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS': {
+      // Tutorial-only: toggle the ResultsChip visibility mid-game. Lesson 6
+      // (possible-results) enables it on entry; earlier lessons boot with
+      // it disabled so the chip doesn't appear until it's the lesson focus.
+      if (!st.isTutorial) return st;
+      return { ...st, showPossibleResults: action.value };
+    }
     case 'TUTORIAL_FRACTION_SETUP': {
       if (!st.isTutorial) return st;
       const z = action.slice;
@@ -2827,7 +2852,7 @@ const mS = StyleSheet.create({
   overlayTop: { justifyContent:'flex-start', paddingTop: 10 },
   box: { backgroundColor:'#1F2937', borderRadius:16, padding:20, width:'100%', maxHeight:'80%' },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
-  title: { color:'#FFF', fontSize:18, fontWeight:'700' },
+  title: { color:'#FFF', fontSize:18, fontWeight:'700', flex:1, textAlign:'center' },
   close: { color:'#9CA3AF', fontSize:22 },
 });
 
@@ -3734,12 +3759,17 @@ function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selecte
                   justifyContent: 'center',
                 }}
               >
-                {/* התמונה עצמה מכילה סמלי פעולות בפינות; מגדילים וחותכים כדי להציג רק את הליצן שבמרכז */}
-                <View style={{ width: svgSize, height: svgSize, borderRadius: 6, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+                {/* התמונה עצמה מכילה סמלי פעולות בפינות; ממקמים חלון ריבועי על מרכז הליצן (source y=200-770, x=117-687) כך שהדמות כולה — מקצות הכובע עד הרגליים — נראית ללא חיתוך */}
+                <View style={{ width: svgSize, height: svgSize, borderRadius: 6, overflow: 'hidden' }}>
                   <Image
                     source={require('./assets/joker.jpg')}
-                    style={{ width: svgSize * 1.9, height: svgSize * 1.9 }}
-                    resizeMode="cover"
+                    style={{
+                      position: 'absolute',
+                      width: svgSize * 1.404,
+                      height: svgSize * 1.796,
+                      left: -svgSize * 0.206,
+                      top: -svgSize * 0.351,
+                    }}
                   />
                 </View>
               </View>
@@ -4069,7 +4099,7 @@ function ResultsStripNearPile({ resultsOpen, filteredResults, onSelectEquation }
   );
 }
 
-function ResultsStripBelowTable({ resultsOpen, filteredResults, fractionCards = [], onSelectEquation, miniPulseToken = 0, loopPulse = false, highlightResult }: { resultsOpen: boolean; filteredResults: EquationOption[]; fractionCards?: Card[]; onSelectEquation?: (eq: EquationOption) => void; miniPulseToken?: number; loopPulse?: boolean; highlightResult?: number }) {
+function ResultsStripBelowTable({ resultsOpen, filteredResults, fractionCards = [], onSelectEquation, miniPulseToken = 0, loopPulse = false, highlightResult, highlightAll = false }: { resultsOpen: boolean; filteredResults: EquationOption[]; fractionCards?: Card[]; onSelectEquation?: (eq: EquationOption) => void; miniPulseToken?: number; loopPulse?: boolean; highlightResult?: number; highlightAll?: boolean }) {
   const normalizedResults = useMemo(() => {
     const byResult = new Map<number, EquationOption>();
     for (const option of filteredResults) {
@@ -4122,12 +4152,12 @@ function ResultsStripBelowTable({ resultsOpen, filteredResults, fractionCards = 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:10,paddingHorizontal:6,alignItems:'center',justifyContent:'center'}}>
           {normalizedResults.map((t, i) => (
             <View key={`${t.equation}-${t.result}-${i}`} style={{width:MINI_W + 14}}>
-              <MiniResultCard value={t.result} index={i} pulseToken={miniPulseToken} loopPulse={loopPulse} highlighted={highlightResult != null && t.result === highlightResult} onPress={onSelectEquation ? () => onSelectEquation(t) : undefined} />
+              <MiniResultCard value={t.result} index={i} pulseToken={miniPulseToken} loopPulse={loopPulse} highlighted={highlightAll || (highlightResult != null && t.result === highlightResult)} onPress={onSelectEquation ? () => onSelectEquation(t) : undefined} />
             </View>
           ))}
           {uniqueFractions.map((c, i) => (
             <View key={`frac-${c.fraction}-${i}`} style={{width:MINI_W + 14}}>
-              <MiniResultCard value={0} fractionLabel={c.fraction} index={normalizedResults.length + i} pulseToken={miniPulseToken} loopPulse={loopPulse} />
+              <MiniResultCard value={0} fractionLabel={c.fraction} index={normalizedResults.length + i} pulseToken={miniPulseToken} loopPulse={loopPulse} highlighted={highlightAll} />
             </View>
           ))}
         </ScrollView>
@@ -4689,7 +4719,16 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const { state, dispatch } = useGame();
   const { t } = useLocale();
 
-  const eqOpChoices = (state.isTutorial && tutorialBus.getL5GuidedMode())
+  // Lesson 5 is the "all four signs" lesson — the whole point is cycling
+  // through +, −, ×, ÷. The tutorial game starts with enabledOperators=['+']
+  // so without this override the cycle would loop on + only. Check BOTH the
+  // guided-mode flag AND the L5a block-fan-taps flag: either one being on is
+  // proof the learner is inside lesson 5, and both are now wired to notify
+  // the UI so this re-derives on the very next render.
+  const isL5Cycle =
+    state.isTutorial &&
+    (tutorialBus.getL5GuidedMode() || tutorialBus.getL5aBlockFanTaps());
+  const eqOpChoices = isL5Cycle
     ? buildEqOpDisplayCycle(['+', '-', 'x', '÷'])
     : buildEqOpDisplayCycle(state.enabledOperators);
 
@@ -4730,6 +4769,35 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   useEffect(() => {
     return tutorialBus.subscribeOpButtonPulse(setOpPulse);
   }, []);
+
+  // Tutorial-only: 4 inward-pointing arrows converge on each empty op slot
+  // so the learner sees EXACTLY where to drop the picked card. Used in two
+  // situations:
+  //   • L5.2 (joker): after the learner picks a sign inside the joker
+  //     modal and the joker card is waiting for placement.
+  //   • L5.1 (place-op): as soon as the learner picks any operation card
+  //     from the fan, the target empty slot lights up with arrows so
+  //     they don't have to guess where the card goes.
+  const jokerArrowsPulse = useRef(new Animated.Value(0)).current;
+  const showJokerArrows =
+    !!state.isTutorial && (
+      (state.equationHandPick?.card?.type === 'joker' && state.equationHandPick?.jokerAs != null) ||
+      (tutorialBus.getL5aTargetResult() !== null && state.equationHandPick?.card?.type === 'operation')
+    );
+  useEffect(() => {
+    if (!showJokerArrows) {
+      jokerArrowsPulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(jokerArrowsPulse, { toValue: 1, duration: 420, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(jokerArrowsPulse, { toValue: 0, duration: 420, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [showJokerArrows, jokerArrowsPulse]);
 
   // Drop-in animation: one Animated.Value per dice (0=hidden, 1=visible)
   const dropAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
@@ -4822,34 +4890,99 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   // Tutorial-driven equation building: subscribe to bus commands so the
   // bot's "demo" can fill the equation programmatically. No-op outside tutorial.
-  // confirmRef is set just below in the same component, so we use it for
-  // eqConfirm to avoid temporal-dead-zone issues at module init.
+  //
+  // The subscription is STABLE — it runs once per tutorial lifecycle — and
+  // reads the latest dice placements via refs. Previously the effect depended
+  // on `dice1/dice2/dice3/op1/op2` and re-subscribed on every state change,
+  // which raced with back-to-back `eqPickDice` emissions during the L5a
+  // pre-fill and occasionally dropped one, leaving dice1 null and the op1
+  // cycle button disabled (= "stuck").
+  const dice1Ref = useRef<number | null>(dice1);
+  const dice2Ref = useRef<number | null>(dice2);
+  const dice3Ref = useRef<number | null>(dice3);
+  useEffect(() => { dice1Ref.current = dice1; }, [dice1]);
+  useEffect(() => { dice2Ref.current = dice2; }, [dice2]);
+  useEffect(() => { dice3Ref.current = dice3; }, [dice3]);
+  const finalResultRef = useRef<number | null>(null);
   useEffect(() => {
     if (!state.isTutorial) return;
     return tutorialBus.subscribeFanDemo((cmd) => {
       if (cmd.kind === 'eqPickDice') {
-        hDice(cmd.idx);
+        // Inline placement — uses refs for the latest slot state so back-to-back
+        // emissions can see each other's side effects without re-subscribing.
+        const dIdx = cmd.idx;
+        const d1 = dice1Ref.current, d2 = dice2Ref.current, d3 = dice3Ref.current;
+        const used = new Set([d1, d2, d3].filter((d) => d !== null) as number[]);
+        if (used.has(dIdx)) {
+          if (d1 === dIdx) { setDice1(null); dice1Ref.current = null; }
+          else if (d2 === dIdx) { setDice2(null); dice2Ref.current = null; }
+          else if (d3 === dIdx) { setDice3(null); dice3Ref.current = null; }
+          return;
+        }
+        if (d1 === null) { setDice1(dIdx); dice1Ref.current = dIdx; }
+        else if (d2 === null) { setDice2(dIdx); dice2Ref.current = dIdx; }
+        else if (d3 === null) { setDice3(dIdx); dice3Ref.current = dIdx; }
       } else if (cmd.kind === 'eqSetOp') {
         if (cmd.which === 1) setOp1(cmd.op);
         else setOp2(cmd.op);
       } else if (cmd.kind === 'eqConfirm') {
-        tutorialBus.setLastEquationResult(finalResult);
+        tutorialBus.setLastEquationResult(finalResultRef.current);
         confirmRef.current?.();
       } else if (cmd.kind === 'eqReset') {
         // Quick clear of the slots/ops without leaving 'building' phase.
         setDice1(null); setDice2(null); setDice3(null);
         setOp1(null); setOp2(null);
+        dice1Ref.current = null; dice2Ref.current = null; dice3Ref.current = null;
       }
     });
-    // hDice + setOp close over the latest state via React setters; confirmRef
-    // is mutated on every render so the latest hConfirm is always reachable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.isTutorial, dice1, dice2, dice3, op1, op2]);
+  }, [state.isTutorial]);
+
+  // ── Lesson 5.1 self-prefill ────────────────────────────────────────────
+  // The parent InteractiveTutorialScreen used to push the prefill through
+  // the bus with `emitFanDemo({kind:'eqPickDice'})`, which relies on this
+  // component having already subscribed when the emits fire. In practice
+  // that race ran both ways: sometimes the parent effect ran before the
+  // child's subscribe effect mounted, so the emits landed on an empty
+  // listener set and the equation showed zero dice ("המישוואה תקועה ואין
+  // שני מיספרים"). Doing the prefill inside the owner of the slot state
+  // removes the race entirely.
+  //
+  // Gate on `tutorialBus.getL5aBlockFanTaps()` which is set exclusively in
+  // L5 step 0 (see InteractiveTutorialScreen). `l5UiTick` forces this
+  // effect to re-run when the bus flags flip. Running while `state.dice`
+  // is populated and all local slots are empty makes it idempotent — once
+  // the slots fill, the effect exits on the next pass.
+  useEffect(() => {
+    if (!state.isTutorial) return;
+    if (state.phase !== 'building') return;
+    if (!state.dice) return;
+    if (!tutorialBus.getL5aBlockFanTaps()) return;
+    // L5.1: equation starts empty — learner places dice manually (no prefill).
+    // L5.2: prefill d1+d2 so the layout mirrors 5.1.
+    if (tutorialBus.getL5aDiceUnlocked()) {
+      // Only clear stale operator values left over from L4.
+      setOp1(null);
+      setOp2(null);
+      return;
+    }
+    // If dice slots are already filled, the learner may have started
+    // interacting — bail out of the prefill. Same for hand cards already
+    // placed in the operator slots.
+    if (dice1 !== null || dice2 !== null || dice3 !== null) return;
+    if (state.equationHandSlots[0] != null || state.equationHandSlots[1] != null) return;
+    setDice1(0); dice1Ref.current = 0;
+    setDice2(1); dice2Ref.current = 1;
+    setOp1(null);
+    setOp2(null);
+  }, [state.isTutorial, state.phase, state.dice, l5UiTick, dice1, dice2, dice3, op1, op2, state.equationHandSlots]);
 
   // Remove dice from a specific slot
   const removeDice = (slot: 1 | 2 | 3) => {
     if (!interactive) return;
     if (isSolved) return;
+    // Lesson 5a: lock the pre-filled dice slots — only the op slots should
+    // be interactive.
+    if (state.isTutorial && tutorialBus.getL5aBlockFanTaps()) return;
     if (slot === 1) setDice1(null);
     else if (slot === 2) setDice2(null);
     else setDice3(null);
@@ -4859,13 +4992,18 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const cycleOp = (which: 1 | 2) => {
     if (!interactive) return;
     if (isSolved) return;
+    // Lesson 5.2 (pick & place operator card): block cycling entirely — the
+    // learner must pick an operator card from their fan and drop it on the
+    // slot, exactly like the real game. Tapping the `?` slot is a no-op.
+    if (state.isTutorial && tutorialBus.getL5BlockOpCycle()) return;
     // Sound on each cycle:
-    //   • Lesson 5a (sign-cycle tutorial): the `complete`-fanfare
-    //     (sfx_ui_complete.wav), same chime the online-vs-bot flow plays for
-    //     the "who starts first" draw / on-player-joined moment.
-    //   • Everywhere else: the dice-roll sample for tactile feedback.
+    //   • Tutorial (any lesson): the `complete`-fanfare (sfx_ui_complete.wav),
+    //     matching the same chime used when the learner taps a number into
+    //     the equation — so sign-taps and number-taps share one clean sound
+    //     instead of the jarring dice-roll sample.
+    //   • Real game: the dice-roll sample for tactile feedback.
     if (state.soundsEnabled !== false) {
-      if (state.isTutorial && tutorialBus.getL5aBlockFanTaps()) {
+      if (state.isTutorial) {
         void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.45 });
       } else {
         void _playDiceRollOneShot();
@@ -5023,14 +5161,22 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       state.equationHandSlots[1] != null &&
       handOp1
     ) {
-      // קלף פעולה/ג'וקר בסלוט השני אבל בלי קוביה שלישית — same as 2-dice finish; usedOps עדיין כולל את האתגר
+      // קלף פעולה/סלינדה בסלוט השני אבל בלי קוביה שלישית — same as 2-dice finish; usedOps עדיין כולל את האתגר
       finalResult = !parensRight ? subResult : applyOperation(d1v, effectiveOp1, d2v);
     }
   }
   if (finalResult !== null && (typeof finalResult !== 'number' || !Number.isFinite(finalResult))) finalResult = null;
+  finalResultRef.current = finalResult;
 
-  const opsDisallowed =
-    (d1v !== null && d2v !== null && effectiveOp1 !== null && !isOperationAllowedForStage(effectiveOp1, state.enabledOperators)) ||
+  // Lesson 5 (op-cycle) is SPECIFICALLY about learning all four operators, so
+  // the stage's enabledOperators restriction (which limits the rest of the
+  // tutorial to `+`) must be bypassed here — otherwise cycling to −, ×, ÷
+  // triggers opsDisallowed → red "error" result box instead of the actual
+  // computed value, defeating the lesson.
+  const l5BypassOpRestriction = !!state.isTutorial && tutorialBus.getL5GuidedMode();
+  const opsDisallowed = l5BypassOpRestriction
+    ? false
+    : (d1v !== null && d2v !== null && effectiveOp1 !== null && !isOperationAllowedForStage(effectiveOp1, state.enabledOperators)) ||
     (d1v !== null &&
       d2v !== null &&
       d3v !== null &&
@@ -5084,15 +5230,27 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   // doesn't need to press the orange button; the tutorial engine handles it.
   const tutorialAutoConfirmedRef = useRef(false);
   useEffect(() => {
-    if (!state.isTutorial || !ok) {
+    // Also pulse the result box in L5.1 while we're showing the target
+    // number — makes the `= 7` pop visually so the learner registers it as
+    // the goal before reading the bubble.
+    const hasL5aTarget = state.isTutorial && tutorialBus.getL5aTargetResult() != null && finalResult === null && !hasError;
+    // L6 (possible-results): the mini-cards ARE the teaching focus, so the
+    // halo around the equation's result box competes for attention. Skip it
+    // entirely when showPossibleResults is on (L6-only in tutorial).
+    const isL6Tutorial = state.isTutorial && state.showPossibleResults;
+    if (!state.isTutorial || (!ok && !hasL5aTarget) || isL6Tutorial) {
       tutorialResultPulse.setValue(0);
       tutorialAutoConfirmedRef.current = false;
       return;
     }
-    // Lesson-4 step-3 guided full build: hand control over to the learner —
-    // no auto-confirm, and let the tutorial know the equation is ready so it
-    // can advance its "press the confirm button" sub-phase + arrow.
-    if (tutorialBus.getL4Step3Mode()) {
+    if (hasL5aTarget && !ok) {
+      // L5.1 target phase — animate the halo around the target number, but
+      // DON'T auto-confirm or fire eqReadyToConfirm (the learner hasn't
+      // placed a card yet).
+    } else if (tutorialBus.getL4Step3Mode()) {
+      // Lesson-4 step-3 guided full build: hand control over to the learner
+      // — no auto-confirm, and let the tutorial know the equation is ready
+      // so it can advance its "press the confirm button" sub-phase + arrow.
       if (!isSolved) tutorialBus.emitUserEvent({ kind: 'eqReadyToConfirm' });
     } else if (tutorialBus.getL5GuidedMode()) {
       // Lesson 5: sandbox for dice + operation signs (+ joker placement) —
@@ -5115,7 +5273,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     );
     loop.start();
     return () => loop.stop();
-  }, [state.isTutorial, ok, isSolved, tutorialResultPulse, l5UiTick]);
+  }, [state.isTutorial, ok, isSolved, tutorialResultPulse, l5UiTick, finalResult, hasError, state.showPossibleResults]);
 
   // Solved-state pulse (real game): once the user confirms the equation
   // (phase='solved') the whole builder dims to opacity 0.5 — we counter
@@ -5201,6 +5359,12 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   const show3rd = !parensRight
     ? subResult !== null
     : d1v !== null && effectiveOp1 !== null && d2v !== null;
+  // Lesson 5 (place-op + joker) renders the FULL 3-dice equation with both
+  // operator slots and the sub-result box visible. The old L5a "simplified
+  // shell" was retired when cycle-signs was replaced by a card-placement
+  // flow — the learner now sees a complete `(d1 + d2) + d3 = result` from
+  // the moment they enter the lesson.
+  const isL5aSimple = false;
   const timerColor = timerProgress !== null ? timerProgressColor(timerProgress) : null;
   const eqRowDynamicStyle = timerColor ? {
     borderColor: withAlpha(timerColor, 0.72),
@@ -5236,19 +5400,39 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
     const onPress = () => {
       if (isSolved || !enabled) return;
+      // L6 (possible-results): the equation is pre-filled as reference — the
+      // lesson is about the results chip + mini-cards, not about editing the
+      // exercise. Block all operator taps so the learner can't break the
+      // carefully rigged `2 + 3 = 5`.
+      if (state.isTutorial && state.showPossibleResults) return;
       if (isHandPlaced) {
         dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: posIdx as 0 | 1 });
         return;
       }
       if (isWaitingPlacement) {
+        const pick = state.equationHandPick;
         const pendingJokerOp =
-          state.equationHandPick?.card.type === 'joker'
-            ? normalizeOperationToken(state.equationHandPick.jokerAs)
+          pick?.card.type === 'joker'
+            ? normalizeOperationToken(pick.jokerAs)
+            : null;
+        const placedOperatorOp =
+          pick?.card.type === 'operation'
+            ? normalizeOperationToken(pick.card.operation)
             : null;
         dispatch({ type: 'PLACE_EQ_OP', position: posIdx });
-        if (state.isTutorial && tutorialBus.getL5GuidedMode() && pendingJokerOp) {
-          tutorialBus.emitUserEvent({ kind: 'l5JokerPlaced', op: pendingJokerOp });
-          tutorialBus.emitUserEvent({ kind: 'l5JokerFlowCompleted', op: pendingJokerOp });
+        if (state.isTutorial && tutorialBus.getL5GuidedMode()) {
+          if (pendingJokerOp) {
+            tutorialBus.emitUserEvent({ kind: 'l5JokerPlaced', op: pendingJokerOp });
+            tutorialBus.emitUserEvent({ kind: 'l5JokerFlowCompleted', op: pendingJokerOp });
+          } else if (placedOperatorOp) {
+            // Non-joker: regular operator card dropped from hand. Used by the
+            // L5.2 pick-place exercises to decide correct-vs-wrong pick.
+            tutorialBus.emitUserEvent({
+              kind: 'l5OperatorPlaced',
+              op: placedOperatorOp,
+              position: posIdx as 0 | 1,
+            });
+          }
         }
         return;
       }
@@ -5347,7 +5531,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
           </View>
         ) : (
             <Text allowFontScaling={false} style={[normalizedDisplayOp ? eqS.opBtnFilledTxt : eqS.opBtnEmptyTxt]}>
-            {normalizedDisplayOp || '⬦'}
+            {normalizedDisplayOp || (tutorialBus.getL5aTargetResult() !== null ? '?' : '⬦')}
           </Text>
         )}
         {opPulse > 0 && state.isTutorial ? (
@@ -5363,6 +5547,73 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
               transform: [{ scale: 1 + opPulse * 0.08 }],
             }}
           />
+        ) : null}
+        {/* L5b joker-placement hint: 4 inward-pointing arrows inside the op
+            slot, one from each side, blinking together. Shown after the
+            learner picks a sign in the joker modal and before they tap the
+            slot to place it. Also adds an amber halo to the slot to draw
+            the eye, since the hand card's dashed border is subtle. */}
+        {showJokerArrows && !isHandPlaced ? (
+          <>
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                top: -5, left: -5, right: -5, bottom: -5,
+                borderRadius: 14,
+                borderWidth: 3,
+                borderColor: '#FBBF24',
+                opacity: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] }),
+                transform: [{ scale: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) }],
+                ...Platform.select({
+                  ios: { shadowColor: '#FBBF24', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 10 },
+                  android: { elevation: 10 },
+                }),
+              }}
+            />
+            <Animated.Text
+              allowFontScaling={false}
+              pointerEvents="none"
+              style={{
+                position: 'absolute', top: 0, left: 0, right: 0, textAlign: 'center',
+                fontSize: 14, fontWeight: '900', color: '#FBBF24',
+                opacity: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }),
+                transform: [{ translateY: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [-2, 2] }) }],
+              }}
+            >▼</Animated.Text>
+            <Animated.Text
+              allowFontScaling={false}
+              pointerEvents="none"
+              style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center',
+                fontSize: 14, fontWeight: '900', color: '#FBBF24',
+                opacity: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }),
+                transform: [{ translateY: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [2, -2] }) }],
+              }}
+            >▲</Animated.Text>
+            <Animated.Text
+              allowFontScaling={false}
+              pointerEvents="none"
+              style={{
+                position: 'absolute', left: 0, top: 0, bottom: 0,
+                width: 14, textAlign: 'center', textAlignVertical: 'center',
+                fontSize: 14, fontWeight: '900', color: '#FBBF24', lineHeight: 44,
+                opacity: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }),
+                transform: [{ translateX: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [-2, 2] }) }],
+              }}
+            >▶</Animated.Text>
+            <Animated.Text
+              allowFontScaling={false}
+              pointerEvents="none"
+              style={{
+                position: 'absolute', right: 0, top: 0, bottom: 0,
+                width: 14, textAlign: 'center', textAlignVertical: 'center',
+                fontSize: 14, fontWeight: '900', color: '#FBBF24', lineHeight: 44,
+                opacity: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }),
+                transform: [{ translateX: jokerArrowsPulse.interpolate({ inputRange: [0, 1], outputRange: [2, -2] }) }],
+              }}
+            >◀</Animated.Text>
+          </>
         ) : null}
       </TouchableOpacity>
     );
@@ -5382,13 +5633,16 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       { transform: [{ translateX: EQUATION_BUILDER_FINE_OFFSET_X }, { translateY: EQUATION_BUILDER_FINE_OFFSET_Y }] },
     ]}>
       <View style={{ alignSelf: 'stretch', alignItems: 'center', marginBottom: 4 }}>
-        <Text style={{ color: state.isTutorial ? '#FCD34D' : '#000000', fontSize: 14, fontWeight: '800', textAlign: 'center' }}>
+        <Text style={{ color: '#000000', fontSize: 14, fontWeight: '800', textAlign: 'center' }}>
           {buildTitle}
         </Text>
       </View>
       {/* Dice pool — בטוטוריאל נשאר גלוי גם אחרי האישור כדי שהשחקן
-          יראה שמתוך שלוש הקוביות בחרנו שתיים בלבד (השלישית עדיין זמינה). */}
-      {(!isSolved || state.isTutorial) && (
+          יראה שמתוך שלוש הקוביות בחרנו שתיים בלבד (השלישית עדיין זמינה).
+          חריג: בשיעור 6 (possible-results; מזוהה לפי state.showPossibleResults
+          שמופעל רק שם בתוך הדרכה) מסתירים את שורת הקוביות כי התרגיל כולו
+          מלא מראש והקוביות רק מסיחות את הדעת מהמיני־קלפים. */}
+      {(!isSolved || state.isTutorial) && !(state.isTutorial && state.showPossibleResults) && (
         <View style={eqS.diceRow}>
           {diceValues.map((dv, dIdx) => {
             const isUsed = usedDice.has(dIdx);
@@ -5410,6 +5664,14 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 ],
               }}>
                 <TouchableOpacity onPress={() => {
+                  // Lesson 5a: in step 5.2 block unplaced-die taps (dice are
+                  // pre-filled). In step 5.1 the equation starts empty so the
+                  // learner places dice manually — allow taps there.
+                  if (state.isTutorial && tutorialBus.getL5aBlockFanTaps() && !tutorialBus.getL5aDiceUnlocked()) return;
+                  // L6 (possible-results): the exercise is fixed reference —
+                  // block die taps so the learner can't remove `2` or `3`
+                  // from the pre-filled equation.
+                  if (state.isTutorial && state.showPossibleResults) return;
                   hDice(dIdx);
                   if (state.isTutorial) {
                     // Use the `complete`-fanfare (sfx_ui_complete.wav) — the
@@ -5468,22 +5730,25 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             const midEqVisible = !parensRight && show3rd;
             return (
               <>
-                {/* outer left bracket — visible only in LEFT mode */}
-                {show3rd ? renderBracket('(', !parensRight) : null}
-                {/* d1 + op1 (kept as a chunk for inner gap) */}
+                {/* outer left bracket — visible only in LEFT mode. Hidden in
+                    L5a so the learner sees just `[d1] [?] [d2]`. */}
+                {show3rd && !isL5aSimple ? renderBracket('(', !parensRight) : null}
+                {/* d1 + op1 (kept as a chunk for inner gap). Op1 is always
+                    tappable in L5a — even if dice1 hasn't been prefilled yet
+                    (bus race) — so the sign-cycle never feels stuck. */}
                 <View style={eqS.eqChunk}>
                   {renderDiceSlot(dice1, 1)}
-                  {renderOpBtn(1, op1, dice1 !== null)}
+                  {renderOpBtn(1, op1, isL5aSimple || dice1 !== null)}
                 </View>
                 {/* mid-open bracket — visible only in RIGHT mode (before d2) */}
-                {show3rd ? renderBracket('(', parensRight) : null}
+                {show3rd && !isL5aSimple ? renderBracket('(', parensRight) : null}
                 {/* d2 — always at the same column position */}
                 <View style={[!show3rd && !state.isTutorial && { opacity: 0.25 }]}>{renderDiceSlot(dice2, 2)}</View>
                 {/* mid-close bracket — visible only in LEFT mode (after d2) */}
-                {show3rd ? renderBracket(')', !parensRight) : null}
+                {show3rd && !isL5aSimple ? renderBracket(')', !parensRight) : null}
                 {/* = + subResultBox — visible only in LEFT mode. Also hidden
                     during lesson 5a so the learner sees just `[a] [?] [b]`. */}
-                {show3rd && !tutorialBus.getL5aBlockFanTaps() ? (
+                {show3rd && !isL5aSimple ? (
                   <>
                     <Text
                       style={[eqS.equalsSmall, (!midEqVisible || subResult === null) && eqS.hiddenMiddle]}
@@ -5502,14 +5767,14 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 {/* op2 + d3 (kept as a chunk for inner gap). Lesson 5a hides
                     the whole chunk — the third slot + second op belong to the
                     advanced equation and would confuse the sign-cycle lesson. */}
-                {tutorialBus.getL5aBlockFanTaps() ? null : (
+                {isL5aSimple ? null : (
                   <View style={[eqS.eqChunk, !show3rd && !state.isTutorial && { opacity: 0.25 }]}>
                     {renderOpBtn(2, op2, show3rd)}
                     {renderDiceSlot(dice3, 3)}
                   </View>
                 )}
                 {/* outer right bracket — visible only in RIGHT mode */}
-                {show3rd && !tutorialBus.getL5aBlockFanTaps() ? renderBracket(')', parensRight) : null}
+                {show3rd && !isL5aSimple ? renderBracket(')', parensRight) : null}
               </>
             );
           })()}
@@ -5521,7 +5786,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={{ fontSize: 22, fontWeight: '800', color: equalsColor }}>=</Text>
           <View style={{ position: 'relative' }}>
-            {state.isTutorial && ok ? (
+            {state.isTutorial && (ok || (tutorialBus.getL5aTargetResult() !== null && finalResult === null && !hasError)) ? (
               <Animated.View
                 pointerEvents="none"
                 style={{
@@ -5560,31 +5825,52 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 }}
               />
             ) : null}
-            <Animated.View style={[
-              {
-                minWidth: 76, height: 48, borderRadius: 12, borderWidth: 2,
-                borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : (state.isTutorial ? 'rgba(124,58,237,0.95)' : '#A16207'),
-                backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : (state.isTutorial ? 'rgba(124,58,237,0.45)' : '#854D0E'),
-                alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
-              },
-              resultBoxDynamic,
-              isSolved && !state.isTutorial && {
-                transform: [{ scale: solvedResultPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] }) }],
-              },
-            ]}>
-              {hasError ? (
-                <Text allowFontScaling={false} style={{ fontSize: 20, fontWeight: '900', color: '#FFF' }}>✕</Text>
-              ) : finalResult !== null ? (
-                <Animated.Text allowFontScaling={false} numberOfLines={1} style={{
-                  fontSize: 26, fontWeight: '900', color: resultTextColor,
-                  transform: state.isTutorial && ok
-                    ? [{ scale: tutorialResultPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.25] }) }]
-                    : [],
-                }}>{finalResult}</Animated.Text>
-              ) : (
-                <Text allowFontScaling={false} style={{ fontSize: 24, fontWeight: '800', color: state.isTutorial ? 'rgba(255,215,0,0.4)' : 'rgba(255,255,255,0.4)' }}>?</Text>
-              )}
-            </Animated.View>
+            {(() => {
+              // Lesson 5.1: when no finalResult yet, surface the target
+              // number ("= 7") the learner is aiming for, so they know which
+              // operator card to pick. Once the learner drops a card and
+              // finalResult becomes non-null, fall back to the normal render
+              // (green/red box reflects correctness against validTargets).
+              const l5aTarget = state.isTutorial ? tutorialBus.getL5aTargetResult() : null;
+              const showL5aTarget = l5aTarget !== null && finalResult === null && !hasError;
+              return (
+                <Animated.View style={[
+                  {
+                    minWidth: 76, height: 48, borderRadius: 12, borderWidth: 2,
+                    // L5.1 target uses the same strong `ok`-style green fill
+                    // as a solved answer — the earlier pale-mint rendering
+                    // faded into the background; reusing the solved palette
+                    // keeps the number visually prominent so it reads as
+                    // "the goal", not as a disabled hint.
+                    borderColor: hasError ? '#B91C1C' : ok ? '#15803D' : showL5aTarget ? '#15803D' : (state.isTutorial ? 'rgba(124,58,237,0.95)' : '#A16207'),
+                    backgroundColor: hasError ? '#DC2626' : ok ? '#166534' : showL5aTarget ? '#166534' : (state.isTutorial ? 'rgba(124,58,237,0.45)' : '#854D0E'),
+                    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
+                  },
+                  resultBoxDynamic,
+                  isSolved && !state.isTutorial && {
+                    transform: [{ scale: solvedResultPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] }) }],
+                  },
+                ]}>
+                  {hasError ? (
+                    <Text allowFontScaling={false} style={{ fontSize: 20, fontWeight: '900', color: '#FFF' }}>✕</Text>
+                  ) : finalResult !== null ? (
+                    <Animated.Text allowFontScaling={false} numberOfLines={1} style={{
+                      fontSize: 26, fontWeight: '900', color: resultTextColor,
+                      transform: state.isTutorial && ok
+                        ? [{ scale: tutorialResultPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.25] }) }]
+                        : [],
+                    }}>{finalResult}</Animated.Text>
+                  ) : showL5aTarget ? (
+                    <Animated.Text allowFontScaling={false} numberOfLines={1} style={{
+                      fontSize: 28, fontWeight: '900', color: '#FFFFFF',
+                      transform: [{ scale: tutorialResultPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] }) }],
+                    }}>{l5aTarget}</Animated.Text>
+                  ) : (
+                    <Text allowFontScaling={false} style={{ fontSize: 24, fontWeight: '800', color: state.isTutorial ? 'rgba(255,215,0,0.4)' : 'rgba(255,255,255,0.4)' }}>?</Text>
+                  )}
+                </Animated.View>
+              );
+            })()}
           </View>
         </View>
       </View>
@@ -5816,6 +6102,23 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
     loop.start();
     return () => loop.stop();
   }, [emphasizedCardPrefix, emphasisPulse]);
+  // Sparkling halo for the currently-picked hand card (equationHandPick).
+  // A static purple ring was too easy to miss once the learner's eye
+  // settled on the equation builder; the pulse signals "this card is
+  // selected, drop it somewhere" without adding more UI chrome.
+  const pickedHaloPulse = useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    if (!equationHandPendingId) {
+      pickedHaloPulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pickedHaloPulse, { toValue: 1, duration: 550, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+      Animated.timing(pickedHaloPulse, { toValue: 0, duration: 550, useNativeDriver: true, easing: Easing.inOut(Easing.sin) }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [equationHandPendingId, pickedHaloPulse]);
 
   // Scroll the fan to bring the emphasized card to the center when the
   // learner cycles ops in L5a. scrollX maps 1:1 to card index, so
@@ -6352,18 +6655,37 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
                 android: { elevation: waitingMode ? 6 : 8 },
               }),
             }} />
-            {/* Purple glow behind selected equation op card */}
-            {isEqPending && (
-              <View style={{
-                position: 'absolute', top: -8, left: -8, right: -8, bottom: -8,
-                borderRadius: 18, backgroundColor: 'rgba(124,58,237,0.35)',
-                borderWidth: 2, borderColor: '#A78BFA',
-                ...Platform.select({
-                  ios: { shadowColor: '#7C3AED', shadowOffset:{width:0,height:0}, shadowOpacity: 0.8, shadowRadius: 14 },
-                  android: { elevation: 12 },
-                }),
-              }} />
-            )}
+            {/* Sparkling halo behind the picked equation op card — pulses
+                so the "this card is selected, drop it somewhere" signal
+                stays alive even after the learner looks away at the
+                equation builder. Color matches the card's own border.
+                Suppressed in L5a tutorial mode: the op slot already has
+                the arrows+halo, so the fan halo is redundant noise. */}
+            {isEqPending && tutorialBus.getL5aTargetResult() === null && (() => {
+              // Normalise '÷' → '/' to match opColors key convention.
+              const rawOp = card.type === 'operation' ? (card.operation ?? '+') : null;
+              const opKey = rawOp === '÷' ? '/' : rawOp;
+              const cl = opKey ? (opColors[opKey] ?? opColors['+']) : null;
+              const face = cl?.face ?? '#A78BFA';
+              // Build rgba bg from the face hex so the halo tints match the card.
+              const r = parseInt(face.slice(1, 3), 16);
+              const g = parseInt(face.slice(3, 5), 16);
+              const b = parseInt(face.slice(5, 7), 16);
+              const haloBg = `rgba(${r},${g},${b},0.28)`;
+              return (
+                <Animated.View style={{
+                  position: 'absolute', top: -10, left: -10, right: -10, bottom: -10,
+                  borderRadius: 20, backgroundColor: haloBg,
+                  borderWidth: 2.5, borderColor: face,
+                  opacity: pickedHaloPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+                  transform: [{ scale: pickedHaloPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }],
+                  ...Platform.select({
+                    ios: { shadowColor: face, shadowOffset:{width:0,height:0}, shadowOpacity: 0.9, shadowRadius: 18 },
+                    android: { elevation: 16 },
+                  }),
+                }} />
+              );
+            })()}
             {/* Green glow behind valid defense cards */}
             {isDefenseValid && (
               <View style={{
@@ -6674,13 +6996,8 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   }, [soundOn]);
 
   const tap = (card:Card) => {
-    // L5a: swallow operation-card fan taps and let InteractiveTutorialScreen
-    // show guidance. Joker taps (step 5b) are NOT blocked — the flag is off
-    // by then (set/cleared by InteractiveTutorialScreen's useEffect).
-    if (state.isTutorial && tutorialBus.getL5aBlockFanTaps() && card.type === 'operation') {
-      tutorialBus.emitUserEvent({ kind: 'cardTapped', cardId: card.id });
-      return;
-    }
+    // (L5.1 (place-op) expects the learner to pick an operation card from
+    // the fan, so fan-tap blocking was removed when cycle-signs was retired.)
     if (isOnlineWaiting) {
       // #region agent log
       fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H3',location:'index.tsx:PlayerHand.tap',message:'Tap blocked by online waiting',data:{cardId:card.id,cardType:card.type,phase:state.phase,currentPlayerIndex:state.currentPlayerIndex,handPlayerIndex},timestamp:Date.now()})}).catch(()=>{});
@@ -6700,7 +7017,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
 
     if (card.type === 'fraction' && !hasFracDefense) onFractionTapForOnb?.();
 
-    // ── Fraction defense: מספר (מתחלק), פרא (בחירת ערך במודאל), או שבר; ג'וקר לא מגן ──
+    // ── Fraction defense: מספר (מתחלק), פרא (בחירת ערך במודאל), או שבר; סלינדה לא מגנה ──
     if (hasFracDefense) {
       if (
         card.type === 'number' &&
@@ -6757,9 +7074,9 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     if (bl) {
       if (card.type === 'operation') {
         if (state.equationHandSlots[0]?.card.id === card.id) {
-          dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: 0 });
+          // already placed in equation — no-op
         } else if (state.equationHandSlots[1]?.card.id === card.id) {
-          dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: 1 });
+          // already placed in equation — no-op
         } else if (state.equationHandPick?.card.id === card.id) {
           dispatch({ type: 'CLEAR_EQ_HAND_PICK' });
         } else {
@@ -7299,7 +7616,7 @@ const FUTURE_LAB_SPECS: { id: FutureLabId; detailCount: number }[] = [
   { id: 'steal', detailCount: 3 },
 ];
 
-function StartScreen({ onBackToChoice, onHowToPlay, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; preferredName?: string }) {
+function StartScreen({ onBackToChoice, onHowToPlay, onShop, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; onShop?: () => void; preferredName?: string }) {
   const { t, isRTL } = useLocale();
   const { dispatch, state: gameState } = useGame();
   const safe = useGameSafeArea();
@@ -7574,12 +7891,12 @@ function StartScreen({ onBackToChoice, onHowToPlay, preferredName }: { onBackToC
     });
   };
 
-  // תחתית מסע — תפריט קומפקטי כדי שהג'וקר (פנים/מותג) יופיע במלואו
+  // תחתית מסע — תפריט קומפקטי כדי שסלינדה (פנים/מותג) תופיע במלואה
   const MENU_H = 160;
   const bottomPad = safe.SAFE_BOTTOM_PAD || 12;
   const PLAY_BTN_H = 56;
   const totalBottomH = MENU_H + PLAY_BTN_H + bottomPad;
-  // תמונת ג'וקר — גודל מקורי במסך ברוכים הבאים
+  // תמונת סלינדה — גודל מקורי במסך ברוכים הבאים
   // Shrink hero joker card by ~1/3 to free vertical space for scrolling.
   const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * (2 / 3);
 
@@ -8032,6 +8349,9 @@ function StartScreen({ onBackToChoice, onHowToPlay, preferredName }: { onBackToC
         )}
         {onHowToPlay && (
           <LulosButton text={t('mode.howToPlay')} color="blue" width={110} height={38} fontSize={12} onPress={onHowToPlay} />
+        )}
+        {onShop && (
+          <LulosButton text={t('shop.openShop')} color="yellow" width={90} height={38} fontSize={13} onPress={onShop} />
         )}
         <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
       </View>
@@ -8586,7 +8906,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, preferredName }: { onBackToC
           <Text style={{ color: '#4285F4', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{t('start.welcomeSalinda')}</Text>
         </View>
       )}
-      {/* ג'וקר — מוצמד מתחת לשורת הכפתורים העליונה (top + buttons + margin) */}
+      {/* סלינדה — מוצמדת מתחת לשורת הכפתורים העליונה (top + buttons + margin) */}
       <View style={{ alignItems: 'center', justifyContent: 'flex-start', paddingTop: (safe.insets.top || 12) + 50 }}>
         <Animated.View style={{
           transform: [{ translateY: bounceAnim }],
@@ -8605,7 +8925,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, preferredName }: { onBackToC
         </Animated.View>
       </View>
 
-      {/* Bottom menu — הגלילה מתחילה מתחת לג'וקר ומשתרעת עד לתחתית */}
+      {/* Bottom menu — הגלילה מתחילה מתחת לסלינדה ומשתרעת עד לתחתית */}
       <View style={{ position: 'absolute', top: (safe.insets.top || 12) + 50 + JOKER_SIZE + 10, bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: 'transparent', zIndex: 10 }}>
         <Animated.ScrollView
           style={{ maxHeight: '100%', backgroundColor: 'transparent' }}
@@ -9884,7 +10204,7 @@ function TurnTransition() {
         return fracTips[card.fraction] ?? `קלף שבר (${card.fraction}). גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא.`;
       }
       case 'operation': return `קלף פעולה (${card.operation}) — שלב אותו בתוך התרגיל כדי להיפטר מהקלף.`;
-      case 'joker': return `ג'וקר — תחליף לסימן (+, −, ×, ÷). שלב אותו בתרגיל והפטר מקלף. לא מגן מפני אתגר שבר.`;
+      case 'joker': return `סלינדה — תחליף לסימן (+, −, ×, ÷). שלבו אותה בתרגיל והיפטרו מקלף. לא מגנה מפני אתגר שבר.`;
       case 'wild': return `קלף פרא — נספר ככל מספר 0–25. הנח בתרגיל או זהה לערימה כדי להיפטר ממנו.`;
       default: return '';
     }
@@ -9924,6 +10244,21 @@ function TurnTransition() {
             <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           )}
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
+          {!state.isTutorial && (
+            <View style={{ marginTop: 10, alignItems: 'center', gap: 4 }}>
+              <ExcellenceMeter
+                value={state.courageMeterPercent}
+                pulseKey={state.courageRewardPulseId}
+                compact
+                height={82}
+              />
+              <SlindaCoin
+                size={36}
+                pulseKey={state.courageRewardPulseId}
+                spin={!!state.lastCourageRewardReason && !state.players[lastPlayerIndex]?.isBot && !state.isTutorial}
+              />
+            </View>
+          )}
         </View>
         <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-end',gap:2,flex:1,minWidth:0,marginTop:-65,marginLeft:8}}>
           {/* תגי מידע (שברים/טיימר/פתרון תרגיל) הועברו לטורניר — שורות 446, 458, 461 ב-TournamentInfoModal */}
@@ -9940,6 +10275,8 @@ function TurnTransition() {
                   height={64}
                   fontSize={14}
                   onPress={() => {
+                    if (!p.isBot) return;
+                    if (!isDefaultPlayerName(p.name)) return;
                     const idx = state.players.findIndex((x) => x.id === p.id);
                     if (idx < 0) return;
                     setEditingPlayerIndex(idx);
@@ -10278,8 +10615,8 @@ function TurnTransition() {
           ) : (
             <>
               {!handHintDismissed && !state.isTutorial && (
-                <Text style={{color:'#FACC15',fontSize:14,fontWeight:'800',textAlign:'center',marginBottom:6,textShadowColor:'rgba(0,0,0,0.5)',textShadowOffset:{width:0,height:1},textShadowRadius:4}}>
-                  👇 לחץ על הקלפים כדי לחקור אותם
+                <Text style={{fontSize:28,textAlign:'center',marginBottom:4}}>
+                  👇
                 </Text>
               )}
               <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
@@ -10501,28 +10838,33 @@ function PlayerSidebar({
           {visible.map((p) => {
             const isCurrent = cp?.id === p.id;
             const shortName = p.name.length > 5 ? p.name.slice(0, 4) + '…' : p.name;
-            const btn = (
-              <LulosButton
-                text={`${shortName} ${p.hand.length}`}
-                color={isCurrent ? 'green' : 'blue'}
-                width={72}
-                height={32}
-                fontSize={10}
-                onPress={() => setHistoryPlayerId(p.id)}
-              />
-            );
-            if (isCurrent) {
-              return (
-                <View key={p.id}>
-                  {btn}
+            const meterPct = Math.max(0, Math.min(100, p.courageMeterPercent ?? 0));
+            const chip = (
+              <View style={{ alignItems: 'center', gap: 2 }}>
+                <LulosButton
+                  text={`${shortName} ${p.hand.length}`}
+                  color={isCurrent ? 'green' : 'blue'}
+                  width={72}
+                  height={32}
+                  fontSize={10}
+                  onPress={() => setHistoryPlayerId(p.id)}
+                />
+                {/* מד היצטיינות: בר אופקי + מטבע סלינדה */}
+                <View style={{ width: 66, gap: 2 }}>
+                  <View style={{ width: 66, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+                    <View style={{ width: `${meterPct}%`, height: 4, borderRadius: 2, backgroundColor: meterPct >= 66 ? '#F59E0B' : meterPct >= 33 ? '#34D399' : '#60A5FA' }} />
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+                    <SlindaCoin size={14} pulseKey={p.courageRewardPulseId} />
+                    <Text style={{ color: '#FDE68A', fontSize: 10, fontWeight: '800' }}>{p.courageCoins ?? 0}</Text>
+                  </View>
                 </View>
-              );
-            }
-            return (
-              <View key={p.id} style={{ opacity: 0.34 }}>
-                {btn}
               </View>
             );
+            if (isCurrent) {
+              return <View key={p.id}>{chip}</View>;
+            }
+            return <View key={p.id} style={{ opacity: 0.45 }}>{chip}</View>;
           })}
           {hasMore && (
             <TouchableOpacity onPress={() => setShowAll(true)} style={{ marginRight: 4, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
@@ -10707,6 +11049,7 @@ function GameScreen() {
   const [gameCardsCatalogOpen, setGameCardsCatalogOpen] = useState(false);
   const [onlineBotDiffOpen, setOnlineBotDiffOpen] = useState(false);
   const [tournamentInfoOpen, setTournamentInfoOpen] = useState(false);
+  const [timerOpen, setTimerOpen] = useState(false);
   /** רמזים בבועות (שבר, תוצאות, תרגיל, אין קלף זהה…) — רק אחרי הטלת קוביות ראשונה במשחק */
   const [midGameHintsUnlocked, setMidGameHintsUnlocked] = useState(false);
   const miniStripEverShownRef = useRef(false);
@@ -11074,6 +11417,27 @@ function GameScreen() {
       return () => clearTimeout(t);
     });
   }, [dicePulseAnim]);
+
+  // Lesson 6 helpers: handle bus commands to force-open the green chip and
+  // to programmatically tap a mini-card by index. These keep the chip state
+  // predictable when the learner skips/back-navigates into the lesson —
+  // without these handlers the `resultsOpen` flag stays whatever it was in
+  // the previous lesson, which breaks the step 6.2 mini-tap demo.
+  useEffect(() => {
+    return tutorialBus.subscribeFanDemo((cmd) => {
+      if (cmd.kind === 'openResultsChip') {
+        setResultsOpenState(true);
+      } else if (cmd.kind === 'closeResultsChip') {
+        setResultsOpenState(false);
+        // Re-arm the strong pulse so the tutorial's L6 step 0 always gets
+        // the pulsing chip, even on back-nav after the learner already
+        // opened it once (which would have turned boostedPulse off).
+        setResultsChipBoostedPulse(true);
+      } else if (cmd.kind === 'clearSolveExerciseChip') {
+        setSelectedEquationForDisplay(null);
+      }
+    });
+  }, []);
   const showDicePulse = diceBtnPulseUntil > 0 && Date.now() < diceBtnPulseUntil;
   // Tutorial-only pulsing ▼ arrow above the confirm-equation button in
   // building phase. Loops continuously; the arrow is only rendered when
@@ -11455,8 +11819,12 @@ function GameScreen() {
     if (resultsOpen) {
       setResultsChipBoostedPulse(false);
       setResultsOpenState(false);
+      if (state.isTutorial) tutorialBus.emitUserEvent({ kind: 'resultsChipTapped' });
       return;
     }
+    // Tutorial (lesson 6 step 6.1) watches for this event as the outcome
+    // predicate — without the emit the lesson never advances.
+    if (state.isTutorial) tutorialBus.emitUserEvent({ kind: 'resultsChipTapped' });
     const shouldCountUseThisOpen = !state.possibleResultsInfoCountedThisTurn;
     const nextInfoUse = state.possibleResultsInfoUses + 1;
     if (shouldCountUseThisOpen) {
@@ -11657,16 +12025,39 @@ function GameScreen() {
   }, [isBotTurnAny, state.phase, state.hasPlayedCards, state.lastEquationDisplay, state.equationResult, state.validTargets, state.roundsPlayed, state.currentPlayerIndex, resultsOpen]);
 
   const handleMiniResultSelect = useCallback((eq: EquationOption) => {
+    if (tutorialBus.getL6MiniLocked()) return;
     playMiniResultTapSound();
     setSelectedEquationForDisplay(eq);
     setSolveChipPulseKey(prev => prev + 1);
+    // Tutorial (lesson 6 step 6.2) watches for this event as the outcome
+    // predicate — without the emit the lesson never advances.
+    if (state.isTutorial) {
+      tutorialBus.emitUserEvent({ kind: 'miniCardTapped', result: eq.result, equation: eq.equation });
+      // Find the simplest 2-number dice combination that produces eq.result
+      // so the bot demo in L6.3 can replicate it. Tries all ordered pairs
+      // and all ops (+ first for clarity) until a match is found.
+      const dv = state.dice ? [state.dice.die1, state.dice.die2, state.dice.die3] : [2, 3, 5];
+      const pairs: [number, number][] = [[0,1],[0,2],[1,2],[1,0],[2,0],[2,1]];
+      const ops: ('+' | '-' | 'x' | '÷')[] = ['+', '-', 'x', '÷'];
+      let copyA = 0, copyB = 1, copyOp: '+' | '-' | 'x' | '÷' = '+';
+      let found = false;
+      for (const [pa, pb] of pairs) {
+        if (found) break;
+        for (const testOp of ops) {
+          if (applyOperation(dv[pa], testOp, dv[pb]) === eq.result) {
+            copyA = pa; copyB = pb; copyOp = testOp; found = true; break;
+          }
+        }
+      }
+      tutorialBus.setL6CopyConfig({ pickA: copyA, pickB: copyB, op: copyOp, target: eq.result });
+    }
     // First ever tap on any mini-result card — stop the first-time pulse
     // loop permanently and remember it across app launches.
     if (!miniResultTapped) {
       setMiniResultTapped(true);
       void AsyncStorage.setItem(MINI_RESULT_TAPPED_KEY, 'true');
     }
-  }, [playMiniResultTapSound, miniResultTapped]);
+  }, [playMiniResultTapSound, miniResultTapped, state.isTutorial]);
 
   // The "אותגרת" / fraction-challenge bubble now lives on the TurnTransition
   // screen (see TurnTransition's fraction-challenge effect). GameScreen only
@@ -11870,7 +12261,7 @@ function GameScreen() {
     prevTurnPlayerIdxRef.current = state.currentPlayerIndex;
   }, [state.currentPlayerIndex, state.players, state.botConfig, soundOn]);
 
-  // G4. ג׳וקר/קלף סימן — ההודעה מוצגת רק כשעומדים על הקלף (מרכז המניפה), בחלק התחתון של המסך, חד־פעמי (ראה BottomCardHint)
+  // G4. סלינדה/קלף סימן — ההודעה מוצגת רק כשעומדים על הקלף (מרכז המניפה), בחלק התחתון של המסך, חד־פעמי (ראה BottomCardHint)
 
   // G5. Triple dice — all 3 dice show the same number
   const prevDiceForTriple = useRef<typeof state.dice>(null);
@@ -11966,13 +12357,17 @@ function GameScreen() {
         />
       ) : null}
 
-      {/* ── Background dice layers (decorative — stays absolute) ── */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <RoamingDice ref={bgDiceRef} />
-      </View>
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <WalkingDice />
-      </View>
+      {/* ── Background dice layers (decorative — hidden in tutorial mode) ── */}
+      {!state.isTutorial ? (
+        <>
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            <RoamingDice ref={bgDiceRef} />
+          </View>
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            <WalkingDice />
+          </View>
+        </>
+      ) : null}
       {/* תוכן מעל הרקע ── */}
       <View style={{flex:1,paddingTop:0,paddingBottom:bottomPad,overflow:'visible'}}>
       {/* ── SLOT 1: שחקנים + שליטה בשורה העליונה (תמיד מעל שאר ה-UI) ──
@@ -12000,6 +12395,17 @@ function GameScreen() {
           {!state.isTutorial && (
             <LulosButton text="טורניר" color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           )}
+          {!state.isTutorial && state.timerSetting !== 'off' && (
+            <LulosButton
+              text={`⏱ ${secsLeft ?? 0}`}
+              color={secsLeft <= 5 && timerRunning ? 'red' : 'blue'}
+              width={72}
+              height={32}
+              fontSize={13}
+              onPress={() => setTimerOpen(true)}
+              style={{ marginBottom: -8 }}
+            />
+          )}
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={toggleSoundsInGame} />
         </View>
         {!state.isTutorial && (
@@ -12017,8 +12423,10 @@ function GameScreen() {
       {/* ── SLOT 2: תוצאות אפשריות (הערימה ממוקמת לפי Y מוחלט) ── */}
       <View style={{flexShrink:0,flexDirection:'row',direction:'ltr' as any,alignItems:'center',justifyContent:'flex-start',flexWrap:'wrap',gap:12,paddingHorizontal:12,paddingVertical:4,zIndex:1}} />
 
-      {/* ערימה — מיקום מוחלט לפי צירים. מוסתרת בטוטוריאל. */}
-      {!state.isTutorial && (
+      {/* ערימה — מיקום מוחלט לפי צירים. מוסתרת בטוטוריאל חוץ משיעור השברים
+          (שם המשתמש חייב לראות את הקלף שבראש הערימה כדי להבין מתי אפשר
+          להניח קלף שבר). showFractions מסומן ל־true רק ב־TUTORIAL_FRACTION_SETUP. */}
+      {(!state.isTutorial || state.showFractions) && (
       <View style={{ position:'absolute', top:50, right:12, zIndex:3, alignItems:'center', gap:4 }}>
         <View style={{ alignItems:'center', gap:4, position:'relative', minWidth:96 }}>
           <DiscardPile />
@@ -12055,49 +12463,16 @@ function GameScreen() {
         </View>
       </View>
       )}
-      {/* כפתור תוצאות אפשריות + כפתור אדום — לצד הערימה, ממורכז לגובה הערימה ובמרחק 20px */}
+      {/* כפתור תוצאות אפשריות + כפתור אדום — לצד הערימה */}
       {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
-        <>
-          <View
-            style={{
-              position: 'absolute',
-              top: 4,
-              right: state.showSolveExercise ? 176 : 128,
-              zIndex: 9,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-            }}
-            pointerEvents="none"
-          >
-            <ExcellenceMeter
-              value={state.courageMeterPercent}
-              pulseKey={state.courageRewardPulseId}
-              compact
-              height={82}
-            />
-            <View
-              style={{
-                paddingHorizontal: 8,
-                paddingVertical: 2,
-                borderRadius: 10,
-                backgroundColor: 'rgba(15,23,42,0.65)',
-                borderWidth: 1,
-                borderColor: 'rgba(250,204,21,0.55)',
-              }}
-            >
-              <Text style={{ color: '#FDE68A', fontSize: 11, fontWeight: '800' }}>🪙 {state.courageCoins}</Text>
-            </View>
-          </View>
-          <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <ResultsSlot
             onToggle={toggleResultsBadges}
             filteredResults={filteredResultsForHand}
             matchCount={matchCountForHand}
             boostedPulse={resultsChipBoostedPulse}
           />
-          </View>
-        </>
+        </View>
       )}
       {/* טוגל סוגריים — מחוץ לשולחן, בין תוצאות אפשריות לבין השולחן הירוק */}
       {state.phase === 'building' && !state.hasPlayedCards && state.dice !== null && (
@@ -12186,8 +12561,11 @@ function GameScreen() {
       <View style={{flexShrink:0,height:100}} />
       </View>
 
-      {/* מניפה: מלא את המסך; ללא bottom שלילי — תואם AppShell בלי paddingBottom תחתון */}
-      <View style={[StyleSheet.absoluteFillObject, { zIndex: isLocalBotTurn ? 52 : 4 }]} pointerEvents="box-none">
+      {/* מניפה: מלא את המסך; ללא bottom שלילי — תואם AppShell בלי paddingBottom תחתון.
+          בשיעור 6 ברגע שהשחקן פותח את הצ'יפ הירוק — מעממים את המניפה (opacity 0.3)
+          כדי שהמבט יעבור למיני־קלפים שהרגע נפתחו. לא חוסמים לחיצות כי המניפה
+          לא הפוקוס של השיעור ולחיצה בה ממילא לא מתקדמת את השיעור. */}
+      <View style={[StyleSheet.absoluteFillObject, { zIndex: isLocalBotTurn ? 52 : 4, opacity: (state.isTutorial && state.showPossibleResults && resultsOpen) ? 0.3 : 1 }]} pointerEvents="box-none">
         <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
           <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
             {!l5HideFanStrip ? <PlayerHand onCenterCard={setCenterCard} onFractionTapForOnb={onFractionTapForOnb} /> : null}
@@ -12197,64 +12575,53 @@ function GameScreen() {
 
       {/* הודעה "אין לך קלף זהה" — מועברת ל־NotificationZone */}
 
-      {/* טיימר פתיל — כמו מסך השחקן (TurnTransition): מיכל alignItems:center + טקסטים בלי width:100% */}
+      {/* טיימר פתיל — מוצג inline על המסך. FuseTimer מצייר את הפתיל ב-Y=40 פנימי,
+          לכן container ב-top:400 נותן Y חזותי של ~440. */}
       {state.timerSetting !== 'off' && (
         <View
           style={{
             position: 'absolute',
-            // FuseTimer draws the rope at internal Y=40, so place container at 400 for visual Y=440.
             top: 400,
             left: 0,
             right: 0,
-            minHeight: 0,
             zIndex: 4,
-            alignItems: 'center',
-            justifyContent: 'flex-start',
-            paddingBottom: 4,
           }}
           pointerEvents="none"
         >
-          <View style={{ position: 'relative', alignItems: 'center', paddingHorizontal: 12 }}>
+          <View style={{ alignItems: 'center', paddingHorizontal: 12 }}>
             <FuseTimer totalTime={TIMER_TOTAL} secsLeft={secsLeft} running={timerRunning} />
-            <Text
-              style={{
-                color: '#FDE68A',
-                fontSize: 14,
-                fontWeight: '800',
-                textAlign: 'center',
-                marginTop: 6,
-                paddingHorizontal: 12,
-                lineHeight: 20,
-              }}
-            >
-              ⏱ {secsLeft ?? 0}
-            </Text>
-            {showSmallTurnTimerHint ? (
-              <Text
-                style={{
-                  color: '#FDE68A',
-                  fontSize: 10,
-                  fontWeight: '600',
-                  marginTop: 8,
-                  textAlign: 'center',
-                  paddingHorizontal: 12,
-                  opacity: 0.92,
-                  maxWidth: 340,
-                  lineHeight: 15,
-                }}
-              >
-                {t('ui.turnTimerLabel')}
-              </Text>
-            ) : null}
           </View>
         </View>
       )}
+
+      {/* מודל טיימר פתיל — נפתח בלחיצה על כפתור ⏱ בעמודה השמאלית */}
+      <RNModal visible={timerOpen} transparent animationType="fade" onRequestClose={() => setTimerOpen(false)}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setTimerOpen(false)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center' }}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={{ backgroundColor: 'rgba(15,23,42,0.97)', borderRadius: 20, padding: 24, borderWidth: 1.5, borderColor: 'rgba(250,204,21,0.45)', alignItems: 'center', gap: 10 }}>
+              <FuseTimer totalTime={TIMER_TOTAL} secsLeft={secsLeft} running={timerRunning} />
+              <Text style={{ color: '#FDE68A', fontSize: 22, fontWeight: '900', textAlign: 'center' }}>
+                ⏱ {secsLeft ?? 0} {t('ui.seconds')}
+              </Text>
+              {showSmallTurnTimerHint ? (
+                <Text style={{ color: '#FDE68A', fontSize: 12, fontWeight: '600', textAlign: 'center', opacity: 0.85, maxWidth: 280, lineHeight: 17 }}>
+                  {t('ui.turnTimerLabel')}
+                </Text>
+              ) : null}
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </RNModal>
 
       {/* מיני תוצאות — מעט מתחת לטיימר פתיל, מעל קו המניפה.
           During the bot's teaching beat we force-render the strip even if the
           player hasn't enabled "possible results" — the demo is the whole
           point: it's how the player discovers the feature. */}
-      {((isBotTurnAny || isBotDemoBeat || state.showPossibleResults) && !state.isTutorial && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards) ? (
+      {((isBotTurnAny || isBotDemoBeat || state.showPossibleResults) && (!state.isTutorial || state.showPossibleResults) && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards) ? (
         <View style={{ position: 'absolute', top: 455, left: 0, right: 0, minHeight: 50, zIndex: 30, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }} pointerEvents="box-none">
           {resultsMiniArrowPulse ? (
             <Animated.View
@@ -12291,8 +12658,9 @@ function GameScreen() {
             filteredResults={resultsStripFeed}
             fractionCards={isBotTurnAny ? [] : playableFractionCardsForResults}
             miniPulseToken={miniResultsPulseToken}
-            loopPulse={!miniResultTapped && !!state.showSolveExercise}
-            onSelectEquation={state.showSolveExercise ? handleMiniResultSelect : undefined}
+            loopPulse={(!miniResultTapped && !!state.showSolveExercise) || (state.isTutorial && state.showPossibleResults)}
+            highlightAll={state.isTutorial && state.showPossibleResults}
+            onSelectEquation={(state.showSolveExercise || state.showPossibleResults) ? handleMiniResultSelect : undefined}
             highlightResult={state.isTutorial && state.equationResult != null ? state.equationResult : undefined}
           />
         </View>
@@ -12482,12 +12850,12 @@ function GameScreen() {
       )}
 
       {/* כפתור פתרון תרגיל — ליד כפתור תוצאות אפשריות, ממורכז לגובה הערימה וברווח 20px */}
-      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && !state.isTutorial && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise) && selectedEquationForDisplay !== null && (
+      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (!state.isTutorial || state.showPossibleResults) && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise || state.showPossibleResults) && selectedEquationForDisplay !== null && (
         <View style={{ position: 'absolute', top: 84, right: 224, zIndex: 8 }} pointerEvents="box-none">
           <SolveExerciseChip
             equation={selectedEquationForDisplay.equation}
             pulseKey={solveChipPulseKey}
-            onPress={() => setSelectedEquationForDisplay(null)}
+            onPress={state.isTutorial ? () => {} : () => setSelectedEquationForDisplay(null)}
           />
         </View>
       )}
@@ -12682,7 +13050,7 @@ function GameScreen() {
           (גם אם כבר הצגת קלפים; REVERT_TO_BUILDING מאפס את stagedCards).
           מיקום: מתחת למניפה (bottom נמוך מ־HAND_BOTTOM_OFFSET=195) כדי לא לדרוס
           את אזור המשוואה/התוצאות באמצע המסך. */}
-      {state.phase === 'solved' && !state.hasPlayedCards && !l5GuidedTutorial && (
+      {state.phase === 'solved' && !state.hasPlayedCards && !l5GuidedTutorial && !state.isTutorial && (
         <View
           style={[
             StyleSheet.absoluteFillObject,
@@ -13938,19 +14306,28 @@ function PlayModeChoiceScreen({
   onLocal,
   onOnline,
   onHowToPlay,
+  onShop,
   preferredName,
   onPreferredNameChange,
 }: {
   onLocal: () => void;
   onOnline: () => void;
   onHowToPlay: () => void;
+  onShop: () => void;
   preferredName: string;
   onPreferredNameChange: (name: string) => void;
 }) {
   const { t } = useLocale();
+  const { profile } = useAuth();
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-      <Text style={{ alignSelf: 'stretch', color: 'rgba(255,255,255,0.92)', fontSize: 20, fontWeight: '800', marginBottom: 24, textAlign: 'center' }}>{t('mode.howToPlay')}</Text>
+      <Text style={{ alignSelf: 'stretch', color: 'rgba(255,255,255,0.92)', fontSize: 20, fontWeight: '800', marginBottom: 12, textAlign: 'center' }}>{t('mode.howToPlay')}</Text>
+      {profile && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 }}>
+          <SlindaCoin size={18} />
+          <Text style={{ color: '#FDE68A', fontSize: 14, fontWeight: '700' }}>{profile.total_coins}</Text>
+        </View>
+      )}
       <Text style={{ alignSelf: 'stretch', color: '#D1D5DB', fontSize: 13, fontWeight: '700', marginBottom: 6, textAlign: 'right' }}>{t('lobby.yourName')}</Text>
       <TextInput
         style={{
@@ -13993,6 +14370,7 @@ function PlayModeChoiceScreen({
           backgroundColor: 'rgba(255,90,180,0.16)',
         }}
       />
+      <LulosButton text={t('shop.openShop')} color="yellow" width={280} height={48} fontSize={15} onPress={onShop} style={{ marginTop: 12 }} />
     </View>
   );
 }
@@ -14006,6 +14384,7 @@ function GameRouter() {
   const { state, dispatch } = useGame();
   const insets = useSafeAreaInsets();
   const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'tutorial'>('choose');
+  const [showShop, setShowShop] = useState(false);
   // showTutorial removed — replaced by playMode === 'tutorial'
   const welcomeMusicRef = useRef<Audio.Sound | null>(null);
   const soundOn = state.soundsEnabled !== false;
@@ -14229,12 +14608,13 @@ function GameRouter() {
         onLocal={() => setPlayMode('local')}
         onOnline={() => setPlayMode('online')}
         onHowToPlay={() => setPlayMode('tutorial')}
+        onShop={() => setShowShop(true)}
         preferredName={preferredName}
         onPreferredNameChange={setPreferredName}
       />
     );
   } else if (playMode === 'local') {
-    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} preferredName={preferredName} />;
+    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
     else {
       switch (state.phase) {
         case 'turn-transition': screen = <TurnTransition />; break;
@@ -14248,7 +14628,7 @@ function GameRouter() {
           screen = <GameOver />;
           break;
         default:
-          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} preferredName={preferredName} />;
+          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
       }
     }
   } else if (playMode === 'tutorial') {
@@ -14329,6 +14709,7 @@ function GameRouter() {
   return (
     <View style={{ flex: 1, backgroundColor: playMode === 'tutorial' ? '#0a1628' : undefined }}>
       {screen}
+      <ShopScreen visible={showShop} onClose={() => setShowShop(false)} />
       {showGlobalMute && (
         <>
           {showSalindaPanel && (
@@ -14698,13 +15079,15 @@ function App() {
   if (!fontsLoaded) return null;
   sendDebugLog('H2', 'index.tsx:App.render', 'App render after fonts loaded', { showSplash });
   return (
-    <LocaleProvider>
-      <MultiplayerProvider>
-        <GameProvider>
-          <AppShell showSplash={showSplash} setShowSplash={setShowSplash} />
-        </GameProvider>
-      </MultiplayerProvider>
-    </LocaleProvider>
+    <AuthProvider>
+      <LocaleProvider>
+        <MultiplayerProvider>
+          <GameProvider>
+            <AppShell showSplash={showSplash} setShowSplash={setShowSplash} />
+          </GameProvider>
+        </MultiplayerProvider>
+      </LocaleProvider>
+    </AuthProvider>
   );
 }
 
