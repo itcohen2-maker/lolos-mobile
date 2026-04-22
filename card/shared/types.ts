@@ -39,6 +39,8 @@ export interface Player {
   isSpectator: boolean;
   /** UI + server message language */
   locale: AppLocale;
+  /** Supabase auth UUID — set at join time for authenticated players; undefined for guests */
+  supabaseUserId?: string;
 }
 
 /** What opponents see about a player (no hand details) */
@@ -90,11 +92,11 @@ export interface EquationOption {
   result: number;
 }
 
-/** קלף פעולה/ג'וקר שהושם במשבצת בתרגיל הקוביות — מסונכרן לשרת במשחק מקוון */
+/** קלף פעולה/סלינדה שהושם במשבצת בתרגיל הקוביות — מסונכרן לשרת במשחק מקוון */
 export interface EquationCommitPayload {
   cardId: string;
   position: 0 | 1;
-  /** כשהקלף ג'וקר — איזו פעולה נבחרה; אחרת null */
+  /** כשהקלף סלינדה — איזו פעולה נבחרה; אחרת null */
   jokerAs: Operation | null;
 }
 
@@ -181,7 +183,7 @@ export interface ServerGameState {
   turnDeadlineAt: number | null;
   /** מונה סיומי תור (מעבר לשחקן הבא דרך endTurnLogic) */
   roundsPlayed: number;
-  /** אחרי אישור תרגיל קוביות: עד 2 קלפי פעולה/ג'וקר במשבצות 0 ו־1; יוסרו עם קלפי ההנחה */
+  /** אחרי אישור תרגיל קוביות: עד 2 קלפי פעולה/סלינדה במשבצות 0 ו־1; יוסרו עם קלפי ההנחה */
   equationCommits: EquationCommitPayload[];
   /** תור מזהי קלפים ל־stage אחרי confirmEquation (בוט); null/undefined = אין */
   botPendingStagedIds?: string[] | null;
@@ -237,7 +239,7 @@ export interface PlayerView {
   turnDeadlineAt: number | null;
   /** סיומי תור ל־UI (רמז טיימר); לקוח ישן בלי שדה — מתייחסים כ־0 */
   roundsPlayed?: number;
-  /** נתון רק אחרי אישור תרגיל עם קלף/י פעולה או ג'וקר מהיד */
+  /** נתון רק אחרי אישור תרגיל עם קלף/י פעולה או סלינדה מהיד */
   equationCommits?: EquationCommitPayload[];
   /** @deprecated השרת שולח equationCommits */
   equationCommit?: EquationCommitPayload | null;

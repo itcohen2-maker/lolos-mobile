@@ -703,19 +703,27 @@ function maybeRecordMatch(room: Room): void {
   const humanPlayers = room.players.filter((p) => !p.isBot);
   if (humanPlayers.length === 0) return; // solo-bot practice — nothing to record
 
-  const winnerId = state.winner?.id ?? null;
+  const gameWinnerId = state.winner?.id ?? null;
   const coinsEarned = state.courageCoins ?? 0;
 
-  const participants = humanPlayers.map((p) => {
-    const isWinner = p.id === winnerId;
-    const abandoned = !p.isConnected && p.id !== winnerId;
+  // Only record authenticated players; skip guests (supabaseUserId is undefined)
+  const authenticatedPlayers = humanPlayers.filter((p) => !!p.supabaseUserId);
+  if (authenticatedPlayers.length === 0) return; // all guests — nothing to record
+
+  const participants = authenticatedPlayers.map((p) => {
+    const isWinner = p.id === gameWinnerId;
+    const abandoned = !p.isConnected && !isWinner;
     const delta = abandoned
       ? -RATING_ABANDON_PENALTY
       : isWinner
         ? RATING_WIN
         : -RATING_LOSS;
-    return { playerId: p.id, delta, abandoned, coinsEarned };
+    return { playerId: p.supabaseUserId!, delta, abandoned, coinsEarned };
   });
+
+  // Resolve winnerId to supabase UID for the match record
+  const winnerPlayer = gameWinnerId ? authenticatedPlayers.find((p) => p.id === gameWinnerId) : null;
+  const winnerId = winnerPlayer?.supabaseUserId ?? null;
 
   recordMatch({
     roomCode: room.code,
@@ -766,6 +774,8 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     }
     const loc = validateLocale(locale);
     const { room, playerId } = createRoom(name, socket.id, loc);
+    const creatingPlayer = room.players.find((p) => p.id === playerId);
+    if (creatingPlayer) creatingPlayer.supabaseUserId = socket.data.userId ?? undefined;
     socket.join(room.code);
     socket.emit('room_created', { roomCode: room.code, playerId });
     emitRoomPlayers(io, room);
@@ -791,6 +801,8 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
       return;
     }
     const { room, playerId } = result;
+    const joiningPlayer = room.players.find((p) => p.id === playerId);
+    if (joiningPlayer) joiningPlayer.supabaseUserId = socket.data.userId ?? undefined;
     socket.join(room.code);
     socket.emit('room_created', { roomCode: room.code, playerId });
     emitRoomPlayers(io, room);
