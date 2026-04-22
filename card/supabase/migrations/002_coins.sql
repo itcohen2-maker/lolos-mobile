@@ -88,3 +88,5 @@ begin
   where id = v_player_id;
 end;
 $$ language plpgsql security definer;
+
+grant execute on function public.award_coins(integer, text, uuid) to authenticated;

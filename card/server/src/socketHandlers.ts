@@ -718,7 +718,7 @@ function maybeRecordMatch(room: Room): void {
       : isWinner
         ? RATING_WIN
         : -RATING_LOSS;
-    return { playerId: p.supabaseUserId!, delta, abandoned, coinsEarned };
+    return { playerId: p.supabaseUserId!, delta, abandoned, coinsEarned: abandoned ? 0 : coinsEarned };
   });
 
   // Resolve winnerId to supabase UID for the match record
@@ -853,6 +853,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
       return;
     }
     const { room, player } = result;
+    if (socket.data.userId) player.supabaseUserId = socket.data.userId;
     socket.join(room.code);
     if (room.disconnectedPlayerId === player.id) {
       clearRoomDisconnectGrace(room);
