@@ -287,6 +287,7 @@ export const en: Record<string, string> = {
   'ui.welcomeHowTitle': '👋 Welcome — how to play',
   'ui.timedGameBanner': 'Timed game: {{value}} per turn',
   'ui.turnTimerLabel': 'If you do not act, turn passes',
+  'ui.seconds': 'seconds',
   'ui.wildIdenticalHint': 'Wild handy? Discard it as a match when the top is a number — it counts as that number.',
 
   'results.possibleTitle': 'Possible results',
@@ -981,11 +982,11 @@ export const en: Record<string, string> = {
   'tutorial.engine.yourTurnLabel': 'Your turn — try it',
   'tutorial.engine.celebrate': 'Nice',
   'tutorial.engine.lessonDone': 'Lesson done',
-  'tutorial.engine.allDone': 'Tutorial complete',
+  'tutorial.engine.allDone': 'Ready for a real game! 🎮',
   'tutorial.engine.continueBtn': 'Continue',
   'tutorial.engine.startLessonBtn': 'Start',
   'tutorial.engine.exitBtn': 'Exit',
-  'tutorial.engine.exitAndReturn': 'Exit & return',
+  'tutorial.engine.exitAndReturn': "Let's play!",
 
   // Lesson 1 — the fan (slide)
   'tutorial.l1.title': 'The Fan',
@@ -1023,7 +1024,7 @@ export const en: Record<string, string> = {
   'tutorial.l4c.botFull': 'Your turn — build the whole exercise and pick the card',
   'tutorial.l4c.hintFull': 'Add numbers and an operator to the exercise',
   'tutorial.l4c.hintPressConfirm': 'Tap the button to pick cards',
-  'tutorial.l4c.hintPickCards': 'Pick cards whose sum together matches the result',
+  'tutorial.l4c.hintPickCards': 'Pick one card or several whose sum matches the result',
   'tutorial.l4c.hintPressPlay': 'Tap "I\'ve picked" to finish',
   'tutorial.l4c.celebrate': 'Well done — you did it alone',
 
@@ -1062,10 +1063,17 @@ export const en: Record<string, string> = {
   'tutorial.l5.opCardLabel.div': 'Divide',
   'tutorial.l5.jokerLabel': 'Slinda',
 
-  // Core tutorial complete — celebratory popup before the fractions branch
-  'tutorial.coreComplete.title': '🎉 You did it!',
+  // Core tutorial complete — choice screen: fractions or real game
+  'tutorial.coreComplete.title': '🎉 Tutorial complete!',
   'tutorial.coreComplete.body': 'You earned 10 coins 🪙',
+  'tutorial.coreComplete.bodySkipped': 'This time you won\'t earn coins 😬',
+  'tutorial.coreComplete.bodySkippedSub': 'you skipped too many times',
+  'tutorial.coreComplete.bodyLimitSub': 'you\'ve already earned tutorial coins twice',
+  'tutorial.coreComplete.advancedOffer': 'Want more? Continue to advanced and earn ...',
+  'tutorial.coreComplete.advancedBtn': 'Continue to advanced 🪙 +20',
+  'tutorial.coreComplete.realGameBtn': 'Ready for the real game!',
   'tutorial.coreComplete.ack': 'Got it',
+  'tutorial.stepProgress': 'Step {{n}} / {{total}}',
 
   // After signs — optional fractions branch
   'tutorial.fracBranch.title': 'Want to earn more coins?',
@@ -1079,13 +1087,13 @@ export const en: Record<string, string> = {
   'tutorial.l6.title': 'Possible outcomes',
   'tutorial.l6.desc': 'Tap the green button to see every result you can build from the dice — then copy one into the equation.',
   // 6.1 — open the green chip
-  'tutorial.l6a.botIntro': 'See the green button? It is here to help us',
-  'tutorial.l6a.hintTapChip': 'Now tap it',
+  'tutorial.l6a.botIntro': 'See the green button? Tap it',
+  'tutorial.l6a.hintTapChip': 'See the green button? Tap it',
   'tutorial.l6a.celebrate': 'Here they are! Each mini card is a possible result',
   // 6.2 — tap a mini card to see the red solve chip
   'tutorial.l6b.botIntro': 'The mini cards show some of the options you can solve for',
   'tutorial.l6b.hintTapMini': 'Tap a mini card and you will discover the way too',
-  'tutorial.l6b.celebrate': 'That is the exercise! Now you see both the result and how to build it',
+  'tutorial.l6b.celebrate': 'Nice! 🎉',
   // 6.3 — copy the red equation into the equation builder
   'tutorial.l6c.botIntro': 'Your turn — copy the red equation into the equation builder',
   'tutorial.l6c.hintCopy': 'Rebuild the red equation: dice and an operation',
@@ -1096,19 +1104,19 @@ export const en: Record<string, string> = {
   // Lesson 7 — Optional fractions (½ & ⅓)
   'tutorial.l7.title': 'Fraction cards (advanced)',
   'tutorial.l7.desc': 'How ½ and ⅓ challenge the pile and how you defend.',
-  'tutorial.l7.intro.bot': 'New idea: a fraction card (like 1/2, 1/3) divides the top of the pile — that is my power',
-  'tutorial.l7.intro.hint': 'Tap Continue when you are ready.',
-  'tutorial.l7.intro.celebrate': 'Nice — let us go on.',
+  'tutorial.l7.intro.bot': 'Fraction cards — how to use them?\nThe pile shows 8. Let us find a fraction card that divides it',
+  'tutorial.l7.intro.hint': 'Tap a matching fraction card in your hand',
+  'tutorial.l7.intro.celebrate': 'Let\'s try it',
   'tutorial.l7.theory.bot':
-    'Attack: play ½ or ⅓ on a pile number that divides by 2 or 3 (e.g. 12). Defense: play a number that divides by the penalty (shown on the challenge).',
-  'tutorial.l7.theory.hint': 'Tap Continue to try it on the real board.',
-  'tutorial.l7.theory.celebrate': 'Let us practice',
-  'tutorial.l7.attackHalf.bot': 'The pile shows 12 — it divides by 2. Play your ½ card on it',
-  'tutorial.l7.attackHalf.hint': 'Tap the ½ card to attack the pile.',
-  'tutorial.l7.attackHalf.celebrate': 'Great — that was a ½ attack',
-  'tutorial.l7.attackThird.bot': 'Again: 12 divides by 3. Play your ⅓ card',
-  'tutorial.l7.attackThird.hint': 'Tap the ⅓ card on the 12.',
-  'tutorial.l7.attackThird.celebrate': 'Nice — ⅓ works too',
+    'Play a fraction card on a pile number it divides — you get rid of the card, and the next player must defend or take a penalty',
+  'tutorial.l7.theory.hint': 'Tap Continue when you get it',
+  'tutorial.l7.theory.celebrate': 'Let us try it',
+  'tutorial.l7.attackHalf.bot': 'The pile shows 8 — divisible by 2. Tap your ½ card to drop it and attack',
+  'tutorial.l7.attackHalf.hint': 'Tap the ½ card in your hand',
+  'tutorial.l7.attackHalf.celebrate': 'Nice — the next player has to defend',
+  'tutorial.l7.attackThird.bot': 'Now the pile shows 9 — divisible by 3. Tap your ⅓ card to drop it',
+  'tutorial.l7.attackThird.hint': 'Tap the ⅓ card in your hand',
+  'tutorial.l7.attackThird.celebrate': 'Great — ⅓ attacks too',
   'tutorial.l7.defendHalf.bot': 'A ½ attack is active — defend with a number divisible by 2 (e.g. 4, 6, 8).',
   'tutorial.l7.defendHalf.hint': 'Tap a valid number card to defend.',
   'tutorial.l7.defendHalf.celebrate': 'Solid defense',
@@ -1117,15 +1125,17 @@ export const en: Record<string, string> = {
   'tutorial.l7.defendThird.celebrate': 'You did it — fractions unlocked',
 
   // ── Auth ──
-  'auth.signUpTitle': 'Sign Up',
+  'auth.linkTitle': 'Save Your Progress',
+  'auth.linkSubtitle': 'Add an email to keep your coins and rating across devices',
+  'auth.linkBtn': 'Save Progress',
   'auth.signInTitle': 'Sign In',
-  'auth.subtitle': 'An account is required to play online',
+  'auth.signInSubtitle': 'Sign in to restore your coins and rating',
   'auth.usernamePlaceholder': 'Username (2-15 characters)',
   'auth.emailPlaceholder': 'Email',
   'auth.passwordPlaceholder': 'Password',
   'auth.signUpBtn': 'Sign Up',
   'auth.signInBtn': 'Sign In',
-  'auth.noAccount': "Don't have an account? Sign up",
+  'auth.noAccount': "Don't have an account? Save progress",
   'auth.haveAccount': 'Already have an account? Sign in',
   'auth.back': '← Back',
   'auth.usernameMinLength': 'Username must be at least 2 characters',
@@ -1147,4 +1157,21 @@ export const en: Record<string, string> = {
   'rating.wins': 'Wins',
   'rating.losses': 'Losses',
   'rating.abandons': 'Abandons',
+  // Shop
+  'shop.title': 'Shop',
+  'shop.coinBalance': 'Your coins: {{count}}',
+  'shop.slindaCard.name': 'Slinda Card',
+  'shop.slindaCard.description': 'A wild joker card. Add it to your hand at any time during any game — forever.',
+  'shop.slindaCard.price': '100 coins',
+  'shop.buyButton': 'Buy',
+  'shop.ownedButton': 'Owned ✓',
+  'shop.insufficientCoins': 'Not enough coins',
+  'shop.purchaseSuccess': 'Slinda card added to your bank!',
+  'shop.purchaseError': 'Purchase failed, please try again.',
+  'shop.openShop': 'Shop',
+  // In-game Slinda bank
+  'slindaBank.addToHand': '+ Slinda',
+  // Coin award notification (5 coins)
+  'courage.coinAward.title': '⭐ +5 Coins!',
+  'courage.coinAward.body': 'Excellence meter full — you earned 5 coins!',
 };

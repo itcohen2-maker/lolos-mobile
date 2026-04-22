@@ -292,6 +292,7 @@ export const he: Record<string, string> = {
   'ui.welcomeHowTitle': '👋 ברוכים הבאים — איך משחקים',
   'ui.timedGameBanner': 'משחק על זמן: {{value}} לכל תור',
   'ui.turnTimerLabel': 'אם לא תפעל/י — התור יעבור',
+  'ui.seconds': 'שניות',
   'ui.wildIdenticalHint': 'יש לך קלף פרא? תוכל להפטר ממנו כקלף זהה — כשראש הערימה קלף מספר, הפרא נספר כאותו מספר.',
 
   'results.possibleTitle': 'תוצאות אפשריות',
@@ -990,11 +991,11 @@ export const he: Record<string, string> = {
   'tutorial.engine.yourTurnLabel': 'תורכם — נסו',
   'tutorial.engine.celebrate': 'מעולה',
   'tutorial.engine.lessonDone': 'סיימתם את השיעור',
-  'tutorial.engine.allDone': 'סיימתם את ההדרכה',
+  'tutorial.engine.allDone': 'מוכנים לשחק משחק אמיתי! 🎮',
   'tutorial.engine.continueBtn': 'המשך',
   'tutorial.engine.startLessonBtn': 'התחל',
   'tutorial.engine.exitBtn': 'יציאה',
-  'tutorial.engine.exitAndReturn': 'יציאה וחזרה',
+  'tutorial.engine.exitAndReturn': 'יאללה נשחק!',
 
   // שיעור 1 — המניפה (גלילה)
   'tutorial.l1.title': 'המניפה',
@@ -1032,7 +1033,7 @@ export const he: Record<string, string> = {
   'tutorial.l4c.botFull': 'עכשיו תורכם — בנו את כל התרגיל ובחרו את הקלף',
   'tutorial.l4c.hintFull': 'הוסיפו מספרים וסימן פעולה לתרגיל',
   'tutorial.l4c.hintPressConfirm': 'לחצו על הכפתור לאשר את התרגיל שבניתם',
-  'tutorial.l4c.hintPickCards': 'בחרו קלפים שסכומם ביחד מתאים לתוצאה',
+  'tutorial.l4c.hintPickCards': 'בחרו קלף אחד או כמה שסכומם ביחד מתאים לתוצאה',
   'tutorial.l4c.hintPressPlay': 'לחצו "בחרתי" לסיום',
   'tutorial.l4c.celebrate': 'כל הכבוד — סיימתם לבד',
 
@@ -1070,10 +1071,17 @@ export const he: Record<string, string> = {
   'tutorial.l5.opCardLabel.div': 'חילוק',
   'tutorial.l5.jokerLabel': 'סלינדה',
 
-  // סיום הדרכת ליבה — בועת חגיגה לפני ענף השברים
-  'tutorial.coreComplete.title': '🎉 סיימתם!',
+  // סיום הדרכת ליבה — מסך בחירה: שברים או משחק אמיתי
+  'tutorial.coreComplete.title': '🎉 סיימתם את ההדרכה!',
   'tutorial.coreComplete.body': 'קיבלתם 10 מטבעות 🪙',
+  'tutorial.coreComplete.bodySkipped': 'הפעם לא תרוויחו מטבעות 😬',
+  'tutorial.coreComplete.bodySkippedSub': 'דילגתם יותר מידיי',
+  'tutorial.coreComplete.bodyLimitSub': 'כבר ניצלתם את ההדרכה פעמיים',
+  'tutorial.coreComplete.advancedOffer': 'רוצים עוד? המשיכו למתקדמים ותרוויחו ...',
+  'tutorial.coreComplete.advancedBtn': 'המשיכו למתקדמים 🪙 +20',
+  'tutorial.coreComplete.realGameBtn': 'מוכנים למשחק האמיתי!',
   'tutorial.coreComplete.ack': 'הבנתי',
+  'tutorial.stepProgress': 'שלב {{n}} / {{total}}',
 
   // אחרי סימנים — ענף שברים אופציונלי
   'tutorial.fracBranch.title': 'רוצים להרוויח עוד מטבעות?',
@@ -1087,13 +1095,13 @@ export const he: Record<string, string> = {
   'tutorial.l6.title': 'תוצאות אפשריות',
   'tutorial.l6.desc': 'לוחצים על הכפתור הירוק, רואים אילו תוצאות אפשר להכין עם הקוביות — ומעתיקים תרגיל.',
   // 6.1 — פותחים את הכפתור הירוק
-  'tutorial.l6a.botIntro': 'רואים את הכפתור הירוק? הוא בא לעזור לנו',
-  'tutorial.l6a.hintTapChip': 'עכשיו לחצו עליו',
+  'tutorial.l6a.botIntro': 'רואים את הכפתור הירוק? לחצו עליו',
+  'tutorial.l6a.hintTapChip': 'רואים את הכפתור הירוק? לחצו עליו',
   'tutorial.l6a.celebrate': 'זה מה שיצא! כל מיני־קלף הוא תוצאה אפשרית',
   // 6.2 — לוחצים על מיני־קלף ורואים את התרגיל האדום
   'tutorial.l6b.botIntro': 'המיני־קלפים מראים חלק מהאפשרויות שאפשר לפתור',
   'tutorial.l6b.hintTapMini': 'לחצו על מיני־קלף ותגלו גם את הדרך',
-  'tutorial.l6b.celebrate': 'זה התרגיל! עכשיו רואים גם את התוצאה וגם איך בונים אותה',
+  'tutorial.l6b.celebrate': 'מעולה! 🎉',
   // 6.3 — מעתיקים את התרגיל האדום לבונה המשוואה
   'tutorial.l6c.botIntro': 'עכשיו תורכם — העתיקו את התרגיל שבאדום אל בונה המשוואה',
   'tutorial.l6c.hintCopy': 'הרכיבו את התרגיל שבאדום: קוביות וסימן פעולה',
@@ -1104,19 +1112,19 @@ export const he: Record<string, string> = {
   // שיעור 7 — שברים מתקדמים (חצי ושליש)
   'tutorial.l7.title': 'קלפי שבר (מתקדמים)',
   'tutorial.l7.desc': 'איך חצי ושליש מאתגרים את הערימה ואיך מגנים.',
-  'tutorial.l7.intro.bot': 'רעיון חדש: קלף שבר (כמו 1/2, 1/3) מחלק את המספר בראש הערימה — זה כוחי',
-  'tutorial.l7.intro.hint': 'לחצו "המשך" כשאתם מוכנים.',
-  'tutorial.l7.intro.celebrate': 'יפה — ממשיכים.',
+  'tutorial.l7.intro.bot': 'קלפי שבר — איך מישתמשים?\nבערימה יש את המספר 8. בואו נחפש קלף שבר שמתחלק בה',
+  'tutorial.l7.intro.hint': 'לחצו על קלף שבר מתאים מהיד',
+  'tutorial.l7.intro.celebrate': 'בוא ננסה',
   'tutorial.l7.theory.bot':
-    'התקפה: משחקים חצי או שליש על מספר שמתחלק ב־2 או ב־3 (למשל 12). הגנה: משחקים מספר שמתחלק בעונש (מוצג באתגר).',
-  'tutorial.l7.theory.hint': 'לחצו "המשך" כדי לנסות על הלוח האמיתי.',
-  'tutorial.l7.theory.celebrate': 'בואו נתרגל',
-  'tutorial.l7.attackHalf.bot': 'בערימה יש 12 — מתחלק ב־2. שחקו את קלף החצי עליו',
-  'tutorial.l7.attackHalf.hint': 'לחצו על קלף החצי כדי לתקוף את הערימה.',
-  'tutorial.l7.attackHalf.celebrate': 'מעולה — זו הייתה התקפת חצי',
-  'tutorial.l7.attackThird.bot': 'שוב: 12 מתחלק ב־3. שחקו את קלף השליש',
-  'tutorial.l7.attackThird.hint': 'לחצו על קלף השליש על ה־12.',
-  'tutorial.l7.attackThird.celebrate': 'נחמד — גם שליש עובד',
+    'מניחים קלף שבר על מספר שמתחלק בו — נפטרים ממנו מהיד, והשחקן הבא חייב להגן או לספוג עונש',
+  'tutorial.l7.theory.hint': 'לחצו "המשך" כשהבנתם',
+  'tutorial.l7.theory.celebrate': 'בואו ננסה',
+  'tutorial.l7.attackHalf.bot': 'בערימה יש 8 — מתחלק ב־2. לחצו על קלף 1/2 כדי להיפטר ממנו ולתקוף',
+  'tutorial.l7.attackHalf.hint': 'לחצו על קלף ה־1/2 ביד',
+  'tutorial.l7.attackHalf.celebrate': 'יופי — השחקן הבא צריך להגן',
+  'tutorial.l7.attackThird.bot': 'עכשיו בערימה יש 9 — מתחלק ב־3. לחצו על קלף 1/3 להיפטר ממנו',
+  'tutorial.l7.attackThird.hint': 'לחצו על קלף ה־1/3 ביד',
+  'tutorial.l7.attackThird.celebrate': 'מעולה — גם שליש תוקף',
   'tutorial.l7.defendHalf.bot': 'התקפת חצי פעילה — הגנו עם מספר שמתחלק ב־2 (למשל 4, 6, 8).',
   'tutorial.l7.defendHalf.hint': 'לחצו על קלף מספר מתאים להגנה.',
   'tutorial.l7.defendHalf.celebrate': 'הגנה מצוינת',
@@ -1125,15 +1133,17 @@ export const he: Record<string, string> = {
   'tutorial.l7.defendThird.celebrate': 'עשיתם את זה — שברים נפתחו',
 
   // ── Auth ──
-  'auth.signUpTitle': 'הרשמה',
+  'auth.linkTitle': 'שמירת ההתקדמות',
+  'auth.linkSubtitle': 'הוסיפו אימייל כדי לשמור את המטבעות והדירוג בכל המכשירים',
+  'auth.linkBtn': 'שמירת ההתקדמות',
   'auth.signInTitle': 'כניסה',
-  'auth.subtitle': 'כדי לשחק ברשת צריך חשבון',
+  'auth.signInSubtitle': 'היכנסו כדי לשחזר את המטבעות והדירוג שלכם',
   'auth.usernamePlaceholder': 'שם משתמש (2-15 תווים)',
   'auth.emailPlaceholder': 'אימייל',
   'auth.passwordPlaceholder': 'סיסמה',
   'auth.signUpBtn': 'הרשמה',
   'auth.signInBtn': 'כניסה',
-  'auth.noAccount': 'אין לך חשבון? הירשם',
+  'auth.noAccount': 'אין לך חשבון? שמור התקדמות',
   'auth.haveAccount': 'יש לך חשבון? היכנס',
   'auth.back': '← חזרה',
   'auth.usernameMinLength': 'שם משתמש חייב להכיל לפחות 2 תווים',
@@ -1155,6 +1165,23 @@ export const he: Record<string, string> = {
   'rating.wins': 'ניצחונות',
   'rating.losses': 'הפסדים',
   'rating.abandons': 'נטישות',
+  // Shop
+  'shop.title': 'חנות',
+  'shop.coinBalance': 'המטבעות שלך: {{count}}',
+  'shop.slindaCard.name': 'קלף סלינדה',
+  'shop.slindaCard.description': 'קלף ג\'וקר קסם. הוסף אותו ליד שלך בכל זמן שתרצה, בכל משחק — לצמיתות.',
+  'shop.slindaCard.price': '100 מטבעות',
+  'shop.buyButton': 'קנה',
+  'shop.ownedButton': 'ברשותך ✓',
+  'shop.insufficientCoins': 'אין מספיק מטבעות',
+  'shop.purchaseSuccess': 'קלף סלינדה נוסף לבנק שלך!',
+  'shop.purchaseError': 'הרכישה נכשלה, נסה שוב.',
+  'shop.openShop': 'חנות',
+  // In-game Slinda bank
+  'slindaBank.addToHand': '+ סלינדה',
+  // Coin award notification (5 coins)
+  'courage.coinAward.title': '⭐ +5 מטבעות!',
+  'courage.coinAward.body': 'מד ההצטיינות התמלא — הרווחת 5 מטבעות!',
 
   ...heLateOverrides,
 };
