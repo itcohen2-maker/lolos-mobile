@@ -301,6 +301,9 @@ git commit -m "feat(tutorial): add lesson-09-identical (single identical card)"
 // lesson-10-multi-play.ts — Multi-play tip: stage 2+ cards
 // whose sum equals the equation result, discarding them all
 // in one turn. Opens with a "הידעת?" intro overlay.
+// The rigged addends (addA, addB) are published by
+// InteractiveTutorialScreen via tutorialBus.setL11Config()
+// before this botDemo runs.
 // ============================================================
 
 import type { Lesson } from './types';
@@ -321,13 +324,17 @@ export const lesson10MultiPlay: Lesson = {
       outcome: (e) => e.kind === 'identicalMultiAck',
     },
     {
-      // Step 1 — learner stages 2+ cards summing to 7, then confirms.
-      // Bot demos staging 4 + 3 and confirming. Hand has no direct "7" card.
+      // Step 1 — learner stages addA + addB (random, set by rigging) and confirms.
+      // Bot reads addA/addB from tutorialBus.getL11Config() so the demo always
+      // matches the randomised hand.
       id: 'multi-play-act',
       botDemo: async (api) => {
         await api.wait(800);
-        await api.stageCardByValue(4);
-        await api.stageCardByValue(3);
+        const cfg = api.l11Config();
+        if (cfg) {
+          await api.stageCardByValue(cfg.addA);
+          await api.stageCardByValue(cfg.addB);
+        }
         await api.eqConfirm();
       },
       outcome: (e) => e.kind === 'userPlayedCards',
@@ -457,32 +464,41 @@ Replace with:
     gameDispatch({ type: 'DISMISS_IDENTICAL_ALERT' });
 ```
 
-### 8d — Add L10 rigging effect
+### 8d — Add L10 rigging effect (randomised each run)
 
 Add a new `useEffect` after the existing L9 mini-copy rigging block (after line ~1720). Use a ref `l10RiggedRef` (declare it with the other refs near the top of the component).
 
 Add ref near existing `l9RiggedRef`:
 ```ts
 const l10RiggedRef = useRef(false);
+const l10LastDiscardRef = useRef(-1);
 ```
 
 Add the rigging effect:
 ```ts
-  // ── Lesson 10 (single identical): pre-roll with one matching card ──
+  // ── Lesson 10 (single identical): pre-roll with one matching card.
+  //    Discard value is randomised every run (avoid repeating). ──
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_SINGLE_IDENTICAL_LESSON_INDEX) { l10RiggedRef.current = false; return; }
     if (engine.phase !== 'bot-demo') { l10RiggedRef.current = false; return; }
     if (engine.stepIndex !== 0) return;
     if (l10RiggedRef.current) return;
     l10RiggedRef.current = true;
-    const DISCARD_VALUE = 5;
+    // Pick a random discard value in [3..9], avoid repeating the last run.
+    const pool = [3, 4, 5, 6, 7, 8, 9];
+    let discardValue: number;
+    do { discardValue = pool[Math.floor(Math.random() * pool.length)]; }
+    while (pool.length > 1 && discardValue === l10LastDiscardRef.current);
+    l10LastDiscardRef.current = discardValue;
     const ts = Date.now();
-    const matchCard = { id: `tut-l10-match-${ts}`, type: 'number' as const, value: DISCARD_VALUE };
-    const extraCards = [2, 3, 8, 9].map((v, i) => ({
-      id: `tut-l10-extra-${v}-${ts}-${i}`, type: 'number' as const, value: v,
-    }));
-    const discardCard = { id: `tut-l10-discard-${ts}`, type: 'number' as const, value: DISCARD_VALUE };
-    const playerHand = [matchCard, ...extraCards];
+    const matchCard = { id: `tut-l10-match-${ts}`, type: 'number' as const, value: discardValue };
+    // Fill the rest of the hand with values different from discardValue.
+    const extras = [2, 3, 4, 5, 6, 7, 8, 9]
+      .filter((v) => v !== discardValue)
+      .slice(0, 4)
+      .map((v, i) => ({ id: `tut-l10-extra-${v}-${ts}-${i}`, type: 'number' as const, value: v }));
+    const discardCard = { id: `tut-l10-discard-${ts}`, type: 'number' as const, value: discardValue };
+    const playerHand = [matchCard, ...extras];
     const botHand = playerHand.map((c) => ({ ...c, id: `bot-${c.id}` }));
     gameDispatch({
       type: 'TUTORIAL_FRACTION_SETUP',
@@ -539,26 +555,37 @@ Find the celebrate-timer effect at line ~2054. Inside it, after the frac-intro i
     }
 ```
 
-### 9b — Add L11 rigging effect for step 1
+### 9b — Add L11 rigging effect for step 1 (randomised each run)
 
-Add ref near `l10RiggedRef`:
+Add refs near `l10RiggedRef`:
 ```ts
 const l11RiggedRef = useRef(false);
+const l11LastResultRef = useRef(-1);
 ```
 
 Add a new `useEffect` after the L10 rigging effect from Task 8:
 
 ```ts
-  // ── Lesson 11 (multi-play): solved phase with result=7, hand without direct 7 ──
+  // ── Lesson 11 (multi-play): solved phase, randomised target in [5..9].
+  //    Hand contains two addends that sum to the target + wild + joker,
+  //    but NO direct card whose value === target. ──
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_MULTI_PLAY_LESSON_INDEX) { l11RiggedRef.current = false; return; }
     if (engine.phase !== 'bot-demo') { l11RiggedRef.current = false; return; }
     if (engine.stepIndex !== 1) return;
     if (l11RiggedRef.current) return;
     l11RiggedRef.current = true;
+    // Pick a random target in [5..9], avoid repeating the last run.
+    const targets = [5, 6, 7, 8, 9];
+    let EQ_RESULT: number;
+    do { EQ_RESULT = targets[Math.floor(Math.random() * targets.length)]; }
+    while (targets.length > 1 && EQ_RESULT === l11LastResultRef.current);
+    l11LastResultRef.current = EQ_RESULT;
+    // Derive two addends that sum to EQ_RESULT (split roughly in half).
+    const addA = Math.floor(EQ_RESULT / 2);
+    const addB = EQ_RESULT - addA; // addA + addB === EQ_RESULT always
     const ts = Date.now();
-    const EQ_RESULT = 7;
-    const playerCards = [4, 3, 0].map((v, i) => ({
+    const playerCards = [addA, addB, 0].map((v, i) => ({
       id: `tut-l11-num-${v}-${ts}-${i}`, type: 'number' as const, value: v,
     }));
     const wildCard = { id: `tut-l11-wild-${ts}`, type: 'wild' as const };
@@ -573,6 +600,48 @@ Add a new `useEffect` after the L10 rigging effect from Task 8:
     });
   }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
 ```
+
+**Note:** The `botDemo` in `lesson-10-multi-play.ts` calls `api.stageCardByValue(addA)` and `api.stageCardByValue(addB)` — but because the lesson file is static, it hard-codes the values it stages. This means the lesson file must read the rigged hand to know which values to stage. Update `lesson-10-multi-play.ts` step 1's `botDemo` to use `api.stageCardByValue` with the actual rigged values.
+
+**Solution:** Expose the current rigged result via a tutorialBus getter, similar to `getL4Config()`. Add to `tutorialBus.ts`:
+
+```ts
+// In tutorialBus.ts — add alongside existing config getters:
+let l11Config: { addA: number; addB: number } | null = null;
+// getter + setter:
+setL11Config(cfg: { addA: number; addB: number } | null) { l11Config = cfg; }
+getL11Config() { return l11Config; }
+```
+
+And in the rigging effect, after computing `addA`/`addB`:
+```ts
+tutorialBus.setL11Config({ addA, addB });
+```
+
+And add `l11Config()` to `DemoApi` in `BotDemonstrator.ts`:
+```ts
+l11Config(): { addA: number; addB: number } | null {
+  return tutorialBus.getL11Config();
+}
+```
+
+Then update `lesson-10-multi-play.ts` step 1 `botDemo`:
+```ts
+botDemo: async (api) => {
+  await api.wait(800);
+  const cfg = api.l11Config();
+  if (cfg) {
+    await api.stageCardByValue(cfg.addA);
+    await api.stageCardByValue(cfg.addB);
+  }
+  await api.eqConfirm();
+},
+```
+
+This requires also updating:
+- `src/tutorial/tutorialBus.ts` (Task 9b-extra-i)
+- `src/tutorial/BotDemonstrator.ts` (Task 9b-extra-ii)
+- `src/tutorial/lessons/lesson-10-multi-play.ts` (update botDemo)
 
 ### 9c — Render "הידעת?" overlay for L11 step 0 await-mimic
 
