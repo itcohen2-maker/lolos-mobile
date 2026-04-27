@@ -30,10 +30,8 @@ export const LESSONS: Lesson[] = [
   lesson07Parens,
   // Index 8 — single identical-card play (follows parens).
   lesson09Identical,
-  // Index 9 — multi-play tip.
+  // Index 9 — multi-play tip (final advanced lesson).
   lesson10MultiPlay,
-  // Index 10 — mini-copy (final advanced lesson).
-  lesson08Identical,
 ];
 
 export type { Lesson, LessonStep, OutcomePredicate, HighlightSpec } from './types';

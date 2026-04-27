@@ -167,8 +167,8 @@ export function mimicReducer(
     if (atCoreEnd) {
       return { ...state, phase: 'core-complete' };
     }
-    // Mini-copy is the final advanced lesson — show the advanced completion screen.
-    if (state.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX) {
+    // Multi-play is the final advanced lesson — show the advanced completion screen.
+    if (state.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX) {
       return { ...state, phase: 'advanced-complete' };
     }
     const isLastLesson = state.lessonIndex >= lessons.length - 1;
