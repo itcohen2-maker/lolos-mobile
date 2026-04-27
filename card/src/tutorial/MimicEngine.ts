@@ -48,14 +48,14 @@ export const MIMIC_FIRST_FRACTION_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 
 /** Parens-move lesson index — follows fractions in the advanced sequence. */
 export const MIMIC_PARENS_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 2;
 
-/** Mini-copy lesson index (lesson-08) — after parens. */
-export const MIMIC_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 3;
+/** Single identical-card play lesson index (lesson-09) — follows parens. */
+export const MIMIC_SINGLE_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 3;
 
-/** Single identical-card play lesson index (lesson-09). */
-export const MIMIC_SINGLE_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 4;
+/** Multi-play tip lesson index (lesson-10). */
+export const MIMIC_MULTI_PLAY_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 4;
 
-/** Multi-play tip lesson index (lesson-10) — final advanced lesson. */
-export const MIMIC_MULTI_PLAY_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 5;
+/** Mini-copy lesson index (lesson-08) — final advanced lesson. */
+export const MIMIC_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 5;
 
 export type LessonShape = { id: string; stepCount: number };
 
@@ -167,8 +167,8 @@ export function mimicReducer(
     if (atCoreEnd) {
       return { ...state, phase: 'core-complete' };
     }
-    // Multi-play is the final advanced lesson — show the advanced completion screen.
-    if (state.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX) {
+    // Mini-copy is the final advanced lesson — show the advanced completion screen.
+    if (state.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX) {
       return { ...state, phase: 'advanced-complete' };
     }
     const isLastLesson = state.lessonIndex >= lessons.length - 1;

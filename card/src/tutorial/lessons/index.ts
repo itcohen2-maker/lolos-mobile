@@ -28,12 +28,12 @@ export const LESSONS: Lesson[] = [
   lesson06FractionsAdvanced,
   // Index 7 — advanced parens-move lesson (follows fractions).
   lesson07Parens,
-  // Index 8 — mini-copy lesson.
-  lesson08Identical,
-  // Index 9 — single identical-card play.
+  // Index 8 — single identical-card play (follows parens).
   lesson09Identical,
-  // Index 10 — multi-play tip (final advanced lesson).
+  // Index 9 — multi-play tip.
   lesson10MultiPlay,
+  // Index 10 — mini-copy (final advanced lesson).
+  lesson08Identical,
 ];
 
 export type { Lesson, LessonStep, OutcomePredicate, HighlightSpec } from './types';

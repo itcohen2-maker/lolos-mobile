@@ -6,7 +6,7 @@ describe('lesson registry smoke', () => {
     expect(LESSONS.length).toBeGreaterThan(0);
     expect(LESSONS[0].steps.length).toBeGreaterThan(0);
   });
-  it('lessons in order: core six + optional fractions + parens + mini-copy + identical + multi-play', () => {
+  it('lessons in order: core six + optional fractions + parens + identical + multi-play + mini-copy', () => {
     expect(LESSONS.map((l) => l.id)).toEqual([
       'fan-basics',
       'tap-card',
@@ -16,9 +16,9 @@ describe('lesson registry smoke', () => {
       'possible-results-basics',
       'fractions-advanced',
       'parens-move',
-      'mini-copy-next-turn',
       'identical-single',
       'multi-play-tip',
+      'mini-copy-next-turn',
     ]);
   });
   it('lesson 4 (equation-basics) has 3 steps: play-card, fill-missing-die, full-build', () => {
