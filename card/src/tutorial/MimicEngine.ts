@@ -13,6 +13,7 @@ export type MimicPhase =
   | 'lesson-done'
   | 'core-complete'
   | 'post-signs-choice'
+  | 'advanced-complete'
   | 'all-done';
 
 export type MimicState = {
@@ -29,8 +30,10 @@ export type MimicAction =
   | { type: 'CELEBRATE_DONE' }
   | { type: 'DISMISS_LESSON_DONE' }
   | { type: 'DISMISS_CORE_COMPLETE' }
+  | { type: 'DISMISS_ADVANCED_COMPLETE' }
   | { type: 'CHOOSE_FINISH_TUTORIAL' }
   | { type: 'CHOOSE_ADVANCED_FRACTIONS' }
+  | { type: 'JUMP_TO_ADVANCED' }
   | { type: 'GO_BACK' }
   | { type: 'EXIT' };
 
@@ -41,6 +44,18 @@ export const MIMIC_LAST_CORE_LESSON_INDEX = 5;
 
 /** First optional fractions module lesson index (append after core lessons). */
 export const MIMIC_FIRST_FRACTION_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 1;
+
+/** Parens-move lesson index — follows fractions in the advanced sequence. */
+export const MIMIC_PARENS_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 2;
+
+/** Mini-copy lesson index (lesson-08) — after parens. */
+export const MIMIC_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 3;
+
+/** Single identical-card play lesson index (lesson-09). */
+export const MIMIC_SINGLE_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 4;
+
+/** Multi-play tip lesson index (lesson-10) — final advanced lesson. */
+export const MIMIC_MULTI_PLAY_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 5;
 
 export type LessonShape = { id: string; stepCount: number };
 
@@ -59,32 +74,63 @@ export function mimicReducer(
 
   if (action.type === 'GO_BACK') {
     if (state.phase === 'post-signs-choice' || state.phase === 'core-complete') {
-      // Return to the LAST step of the last core lesson (so the learner can
-      // re-review whatever they just finished). The core end moved from
-      // lesson 4 (2 steps) to lesson 5 (3 steps) when the possible-results
-      // lesson was inserted, so read the step count from the registry
-      // instead of hardcoding the index.
       const last = lessons[MIMIC_LAST_CORE_LESSON_INDEX];
       const lastStep = last ? Math.max(0, last.stepCount - 1) : 0;
       return { phase: 'intro', lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX, stepIndex: lastStep };
     }
-    if (state.lessonIndex > MIMIC_LAST_CORE_LESSON_INDEX && state.stepIndex === 0) {
-      return { phase: 'post-signs-choice', lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX, stepIndex: 0 };
+
+    // await-mimic, bot-demo, and intro all use the same "go back one step" logic.
+    // This makes ONE press go back a full step/lesson regardless of sub-phase.
+    if (
+      state.phase === 'await-mimic' ||
+      state.phase === 'bot-demo' ||
+      state.phase === 'intro'
+    ) {
+      // Go back one step within the current lesson.
+      if (state.stepIndex > 0) {
+        return { ...state, phase: 'intro', stepIndex: state.stepIndex - 1 };
+      }
+
+      // Step 0: go back to the previous lesson's LAST step.
+      // Exception: first advanced lesson goes to post-signs-choice.
+      if (state.lessonIndex === MIMIC_FIRST_FRACTION_LESSON_INDEX) {
+        return { phase: 'post-signs-choice', lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX, stepIndex: 0 };
+      }
+      if (state.lessonIndex > 0) {
+        const prev = lessons[state.lessonIndex - 1];
+        const lastStepOfPrev = prev ? Math.max(0, prev.stepCount - 1) : 0;
+        return { phase: 'intro', lessonIndex: state.lessonIndex - 1, stepIndex: lastStepOfPrev };
+      }
+      return { phase: 'intro', lessonIndex: 0, stepIndex: 0 };
     }
-    if (state.stepIndex > 0) {
-      return { ...state, phase: 'intro', stepIndex: state.stepIndex - 1 };
+
+    // If the user already reached celebration for the current step,
+    // one "back" returns to that step's mimic phase.
+    if (state.phase === 'celebrate') {
+      return { ...state, phase: 'await-mimic' };
     }
-    if (state.lessonIndex > 0) {
-      return { phase: 'intro', lessonIndex: state.lessonIndex - 1, stepIndex: 0 };
+
+    // If lesson-done/completion screens are open, back to the lesson intro.
+    if (
+      state.phase === 'lesson-done' ||
+      state.phase === 'advanced-complete' ||
+      state.phase === 'all-done'
+    ) {
+      return { ...state, phase: 'intro' };
     }
-    return { phase: 'intro', lessonIndex: 0, stepIndex: 0 };
   }
 
   if (action.type === 'CHOOSE_FINISH_TUTORIAL' && state.phase === 'post-signs-choice') {
     return { ...state, phase: 'all-done' };
   }
 
-  if (action.type === 'CHOOSE_ADVANCED_FRACTIONS' && state.phase === 'post-signs-choice') {
+  if (action.type === 'CHOOSE_ADVANCED_FRACTIONS' &&
+      (state.phase === 'post-signs-choice' || state.phase === 'core-complete')) {
+    return { phase: 'intro', lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX + 1, stepIndex: 0 };
+  }
+
+  // Jump to the fractions-advanced lesson from any phase (tutorial skip button).
+  if (action.type === 'JUMP_TO_ADVANCED') {
     return { phase: 'intro', lessonIndex: MIMIC_LAST_CORE_LESSON_INDEX + 1, stepIndex: 0 };
   }
 
@@ -119,10 +165,11 @@ export function mimicReducer(
       state.lessonIndex === MIMIC_LAST_CORE_LESSON_INDEX &&
       lessons[MIMIC_LAST_CORE_LESSON_INDEX]?.id === 'possible-results-basics';
     if (atCoreEnd) {
-      // Core tutorial finished. Show a festive "you earned 10 coins" popup
-      // first; the fractions branch prompt follows only after the learner
-      // acks it.
       return { ...state, phase: 'core-complete' };
+    }
+    // Multi-play is the final advanced lesson — show the advanced completion screen.
+    if (state.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX) {
+      return { ...state, phase: 'advanced-complete' };
     }
     const isLastLesson = state.lessonIndex >= lessons.length - 1;
     if (isLastLesson) {
@@ -133,6 +180,10 @@ export function mimicReducer(
 
   if (action.type === 'DISMISS_CORE_COMPLETE' && state.phase === 'core-complete') {
     return { ...state, phase: 'post-signs-choice' };
+  }
+
+  if (action.type === 'DISMISS_ADVANCED_COMPLETE' && state.phase === 'advanced-complete') {
+    return { ...state, phase: 'all-done' };
   }
 
   return state;
