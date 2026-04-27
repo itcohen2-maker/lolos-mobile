@@ -1,4 +1,4 @@
-/** English strings — keys map 1:1 to he.ts */
+﻿/** English strings — keys map 1:1 to he.ts */
 export const en: Record<string, string> = {
   'room.notFound': 'Room not found',
   'room.gameAlreadyStarted': 'Game already started',
@@ -85,12 +85,14 @@ export const en: Record<string, string> = {
 
   'toast.threeCardsLeft': '⚠️ {{name}} has only 3 cards left!',
   'toast.fractionDefenseRequired':
-    'Fraction attack! Need {{target}}. Defend with a number card, block with a fraction, or draw {{penalty}} cards.',
-  'toast.tripleDice': 'Triple {{n}}! Excellence-meter bonus! ⭐',
+    'Fraction attack! Need {{target}}. Defend with a number card, block with a fraction, or draw 1 card.',
+  'toast.tripleDice': 'Triple {{n}}! ⭐',
   // Excellence-meter reward reasons — shown in a bubble on TurnTransition
   // so the player understands why the meter just advanced.
-  'courage.reason.tripleDice': 'You earned excellence-meter progress — you rolled a triple {{n}}!',
+  'courage.reason.tripleDice': 'You rolled a triple {{n}}! ⭐',
   'courage.reason.equation': 'You earned excellence-meter progress — you built an equation and played {{count}} cards!',
+  'courage.reason.fullEquation': 'You earned excellence-meter progress — you used all dice results in your equation! 🎯',
+  'courage.reason.consecutiveSuccess': 'You earned excellence-meter progress — you played cards two turns in a row! 🔥',
   'courage.reason.title': '⭐ Excellence-meter bonus',
   'toast.turnTimeoutEnded': '⏱️ {{name}} ran out of time — turn ended and passed to the next player',
   'toast.playerEliminatedAfk': '⛔ {{name}} missed 3 turns and was eliminated.',
@@ -212,7 +214,7 @@ export const en: Record<string, string> = {
   'start.diffEasy': 'Easy (0-12, no fractions)',
   'start.startGame': 'Start game',
   'start.hideRules': 'Hide rules',
-  'start.showRules': 'How to play?',
+  'start.showRules': 'Tutorial | How to play?',
   'start.rulesTitle': 'How to play',
   'start.quickOpen': 'Quick start',
   'start.goalTitle': 'Goal',
@@ -225,7 +227,7 @@ export const en: Record<string, string> = {
   'start.challengesTitle': 'Key challenges',
   'start.rules.c1': '6. Fraction attack with ½ ⅓ ¼ ⅕ — next player defends, blocks with a fraction, or draws.',
   'start.rules.c2': '7. Operation cards: place the sign in the equation to discard them.',
-  'start.rules.c3': '8. Triple dice: the roller gets an excellence-meter bonus.',
+  'start.rules.c3': 'Triple dice: this is the only thing that happens — the roller gets an excellence-meter bonus.',
   'start.cardTypesTitle': 'Card types',
 
   'welcome.title': 'Welcome to the game!',
@@ -237,7 +239,7 @@ export const en: Record<string, string> = {
     'A fraction card (½ ⅓ ¼ ⅕) divides this turn’s target by its denominator, and can attack: the next player must respond with a number divisible by the challenge, or block with any other fraction that passes the challenge on.',
   'welcome.goodLuck': 'Good luck!',
 
-  'mode.howToPlay': 'How do you want to play?',
+  'mode.howToPlay': 'Tutorial / Bonus',
   'mode.local': 'Same device (pass & play)',
   'mode.online': 'Online (network)',
   'mode.toMyScreen': 'To my screen',
@@ -256,9 +258,11 @@ export const en: Record<string, string> = {
   'rules.sessionContextLine': 'Stage {{stage}} · {{range}} · {{frac}} · operators: {{ops}}',
   'rules.sessionWithFractions': 'with fraction cards',
   'rules.sessionNoFractions': 'no fraction cards',
+  'rules.excellenceHeading': '⭐ Excellence Meter',
+  'rules.excellenceBody': 'The meter fills in 2 ways:\n• You used the full equation — you built an equation using all 3 dice results (2 operator cards from hand)\n• You played cards successfully 2 turns in a row\n\nWhen the meter fills — you earn 5 coins ⭐',
 
   'gameTip.start': 'Start a game to see turn tips.',
-  'gameTip.fractionDefend': 'Tip: Play a card divisible by {{d}} (or a wild with that value), a matching fraction, or draw {{d}} cards.',
+  'gameTip.fractionDefend': 'Tip: Play a card divisible by {{d}} (or a wild with that value), a matching fraction, or draw 1 card.',
   'gameTip.identical': 'Tip: Matching top card skips rolling! ★ Wild counts as the same number when the top is a number.',
   'gameTip.rollOrMatch': 'Tip: Roll dice or play a matching top card (if you can).',
   'gameTip.opInEquation': 'Tip: Use an operation / Slinda inside the equation to discard it.',
@@ -284,7 +288,11 @@ export const en: Record<string, string> = {
   'rulesLine.wildCard': '★ Wild — any value in the active range (0–12/0–25 for beginners); can match when top is a number.',
 
   'ui.gotIt': 'Got it',
-  'ui.welcomeHowTitle': '👋 Welcome — how to play',
+  'ui.exitGame': 'Exit',
+  'ui.tournament': 'Scores',
+  'ui.tournamentTitle': 'Tournament — Scoreboard',
+  'ui.welcomeHowTitle': 'Welcome!',
+  'ui.welcomeHowBody': 'The goal is to get rid of all your cards — whoever has 2 cards left wins.\nFor more explanations, go to Tutorial.',
   'ui.timedGameBanner': 'Timed game: {{value}} per turn',
   'ui.turnTimerLabel': 'If you do not act, turn passes',
   'ui.seconds': 'seconds',
@@ -375,6 +383,23 @@ export const en: Record<string, string> = {
   'guidance.welcomeBody': 'Do you want guided hints and explanations during the game, or continue without guidance?',
   'guidance.hint.matchTopCard': 'You have a card matching the top discard. Play it now.',
   'guidance.hint.drawFromDeck': 'No match yet? Draw a card from this deck.',
+  'tutorial.identicalPracticeTitle': 'Matching-card rule',
+  'tutorial.identicalPracticeStageChip': 'Stage 3 • Mockup',
+  'tutorial.identicalPracticeBody':
+    'Before a regular turn starts: if you have a card matching the top discard, you can get rid of it immediately. This screen is practice only.',
+  'tutorial.identicalPracticeMockupTitle': 'Quick mockup: how to spot a match',
+  'tutorial.identicalPracticeMockupDiscard': 'Discard pile',
+  'tutorial.identicalPracticeMockupHand': 'Matching card in hand',
+  'tutorial.identicalPracticeTopCard': 'Top discard card: {{card}}',
+  'tutorial.identicalPracticeSkip': 'Continue to regular turn',
+  'tutorial.identicalPracticeSuccess': 'Great! You found a matching card — continuing to a regular turn.',
+  'tutorial.identicalMulti.stageChip': 'Matching stage • Mockup',
+  'tutorial.identicalMulti.didYouKnow': 'Did you know?',
+  'tutorial.identicalMulti.bestTip': 'This is the best tip I can give you',
+  'tutorial.identicalMulti.body': 'You can get rid of more than one card in a turn. Let us try.',
+  'tutorial.identicalMulti.targetLabel': 'Fixed result',
+  'tutorial.identicalMulti.fanLabel': 'Fan options (includes 0, no target-value card)',
+  'tutorial.identicalMulti.cta': 'Let us try',
 
   'previewOffer.title': 'Quick peek?',
   'previewOffer.body':
@@ -490,6 +515,14 @@ export const en: Record<string, string> = {
 
   'sound.play': 'Play',
   'sound.stopAll': 'Stop all',
+  'sound.sfxVolume': 'SFX: {{pct}}%',
+  'sound.label.tap': 'Tap',
+  'sound.label.success': 'Success',
+  'sound.label.combo': 'Combo',
+  'sound.label.errorSoft': 'Error Soft',
+  'sound.label.start': 'Start',
+  'sound.label.complete': 'Complete',
+  'sound.label.transition': 'Transition',
 
   'joker.banner': '★ Slinda! ★',
 
@@ -507,7 +540,8 @@ export const en: Record<string, string> = {
   'game.botLearn.step1': '{{name}} chooses a legal target for this turn.',
   'game.botLearn.step2': 'It builds the dice equation: {{eq}}',
   'game.botLearn.step3': 'Then it confirms and plays cards that match {{n}}.',
-  'game.pickCards': 'Edit equation',
+  'game.pickCards': 'Pick cards',
+  'game.pickCards_revert': 'Edit equation',
   'game.buildingEquationNext': 'Confirm the equation',
   'hand.buildingNumberWildHint':
     'Build an exercise from the dice on the table — not number cards from your hand yet. When it is ready, use the orange button — then pick hand cards that sum to the result.',
@@ -517,7 +551,7 @@ export const en: Record<string, string> = {
 
   'fraction.bubblePlayed': 'You played a fraction card — the challenge passes to the next player.',
   'fraction.attackPlayedExplain':
-    'You played a fraction: it divided the target by its denominator. The next player must respond — with a divisible number (or wild), a counter fraction (passes the chain on), or by drawing the penalty cards.',
+    'You played a fraction: it divided the target by its denominator. The next player must respond — with a divisible number (or wild), a counter fraction (passes the chain on), or by drawing 1 penalty card.',
   'fraction.cannotPlayHere': 'That fraction cannot be played on the current top card — try another fraction or follow the turn rules.',
   'fraction.challengeToastTitle': '⚔️ Fraction attack',
   'fraction.firstTapHintTitle': 'You have a fraction card',
@@ -647,7 +681,7 @@ export const en: Record<string, string> = {
   'start.advancedSetup.entryOpenCta': 'Open',
   'start.advancedSetup.entrySubtitle': 'Open the full setup room: practice level (A–H), number range, fractions, possible results, solve hint, and timer.',
   'start.advancedSetup.modalTitle': 'Full game settings',
-  'start.advancedSetup.modalLead': 'The Excellence Meter fills up each time you build an equation using all dice results and succeed twice in a row. That’s how you earn coins.',
+  'start.advancedSetup.modalLead': 'The Excellence Meter fills when: 1. You build an equation using all 3 dice results. 2. You play cards 2 turns in a row. 3. You roll a triple. That is how you earn coins.',
   'start.advancedSetup.sectionPlayModeHeading': 'Play vs bot or local game',
   'start.advancedSetup.sectionPlayModeIntro': '',
   'start.advancedSetup.botLevelsHint':
@@ -885,7 +919,7 @@ export const en: Record<string, string> = {
   'botOffline.explain.fractionBlock': '{{name}} chose fraction card {{card}} and blocked the challenge.',
   'botOffline.explain.defendNumber': '{{name}} chose number {{card}} divisible by {{penalty}}.',
   'botOffline.explain.defendWild': '{{name}} chose wild {{card}} (value {{value}}) divisible by {{penalty}}.',
-  'botOffline.explain.defendPenalty': '{{name}} has no valid defense and draws {{penalty}} penalty cards.',
+  'botOffline.explain.defendPenalty': '{{name}} has no valid defense and draws 1 penalty card.',
   'botOffline.explain.confirmEquation': '{{name}} built an equation: {{equation}} (target {{target}}).',
   'botOffline.explain.confirmEquationJoker': '{{name}} uses Slinda as {{op}} in the equation.',
   'botOffline.explain.confirmEquationOperation': '{{name}} includes an operation card {{op}} in the equation.',
@@ -916,7 +950,7 @@ export const en: Record<string, string> = {
   'tutorial.attackSubtitle': 'Play attack cards to challenge opponents — make them draw more cards or skip a turn',
   'tutorial.gotIt': 'Got it',
   'tutorial.letsPlay': "Let's play",
-  'tutorial.howToPlay': 'How to play?',
+  'tutorial.howToPlay': 'Tutorial',
 
   // ── Interactive Tutorial ──
   'tutorial.lessonProgress': 'Lesson {{current}}/{{total}}',
@@ -1050,6 +1084,7 @@ export const en: Record<string, string> = {
   'tutorial.l5b.hintTapJoker': 'Tap Slinda',
   'tutorial.l5b.hintPickInModal': 'Pick a sign',
   'tutorial.l5b.hintPlaceSign': 'Now tap the sign slot in the exercise',
+  'tutorial.l5b.wrongSign': 'Wrong sign — tap Slinda again',
   'tutorial.l5b.celebrate': 'Great — you met Slinda',
   'tutorial.l5c.botIntro': "Now let's practice — sometimes you get the result and pick the sign",
   'tutorial.l5c.hintSolve': 'Pick the sign that solves the exercise and press Confirm',
@@ -1062,6 +1097,12 @@ export const en: Record<string, string> = {
   'tutorial.l5.opCardLabel.mul': 'Times',
   'tutorial.l5.opCardLabel.div': 'Divide',
   'tutorial.l5.jokerLabel': 'Slinda',
+
+  // Welcome bubble — shown before the first lesson
+  'tutorial.welcome.title': '🎓 Welcome to the Tutorial!',
+  'tutorial.welcome.coreReward': 'Finish the basic tutorial and earn 10 coins',
+  'tutorial.welcome.advancedReward': 'Continue to advanced and earn 20 more coins',
+  'tutorial.welcome.start': "Let's go! ›",
 
   // Core tutorial complete — choice screen: fractions or real game
   'tutorial.coreComplete.title': '🎉 Tutorial complete!',
@@ -1111,18 +1152,66 @@ export const en: Record<string, string> = {
     'Play a fraction card on a pile number it divides — you get rid of the card, and the next player must defend or take a penalty',
   'tutorial.l7.theory.hint': 'Tap Continue when you get it',
   'tutorial.l7.theory.celebrate': 'Let us try it',
-  'tutorial.l7.attackHalf.bot': 'The pile shows 8 — divisible by 2. Tap your ½ card to drop it and attack',
-  'tutorial.l7.attackHalf.hint': 'Tap the ½ card in your hand',
-  'tutorial.l7.attackHalf.celebrate': 'Nice — the next player has to defend',
-  'tutorial.l7.attackThird.bot': 'Now the pile shows 9 — divisible by 3. Tap your ⅓ card to drop it',
-  'tutorial.l7.attackThird.hint': 'Tap the ⅓ card in your hand',
-  'tutorial.l7.attackThird.celebrate': 'Great — ⅓ attacks too',
+  'tutorial.l7.attackHalf.bot': '',
+  'tutorial.l7.attackHalf.hint': 'Pick a matching card',
+  'tutorial.l7.attackHalf.celebrate': '🎉 Excellent! Card played — now exercise two',
+  'tutorial.l7.attackThird.bot': '',
+  'tutorial.l7.attackThird.hint': 'Pick a matching card',
+  'tutorial.l7.attackThird.celebrate': 'Amazing! Both fractions are yours — ready to challenge!',
   'tutorial.l7.defendHalf.bot': 'A ½ attack is active — defend with a number divisible by 2 (e.g. 4, 6, 8).',
   'tutorial.l7.defendHalf.hint': 'Tap a valid number card to defend.',
   'tutorial.l7.defendHalf.celebrate': 'Solid defense',
   'tutorial.l7.defendThird.bot': 'Now a ⅓ attack — defend with a number divisible by 3 (e.g. 6, 9, 12).',
   'tutorial.l7.defendThird.hint': 'Tap a number that divides by 3.',
-  'tutorial.l7.defendThird.celebrate': 'You did it — fractions unlocked',
+  'tutorial.l7.defendThird.celebrate': 'Amazing! Moving on',
+  'tutorial.l7.bonusDefend.celebrate': 'Well done! You used a fraction card to defend',
+
+  // Lesson 8 — Moving parentheses
+  'tutorial.l8.title': 'Moving parentheses',
+  'tutorial.l8.desc': 'The orange button lets you shift which pair of numbers is calculated first.',
+  'tutorial.l8.mockupTitle': 'Moving parentheses in the exercise',
+  'tutorial.l8.mockupBody': 'By moving the parentheses, you can get a different result.',
+  'tutorial.l8.mockupContinue': "Let's try! ›",
+  'tutorial.l8.bot': 'Note: the orange button moves the parentheses',
+  'tutorial.l8.hint': 'Tap the orange button to move the parentheses to match the target',
+  'tutorial.l8.copyFullExercise': 'Copy the full equation to match the red chip.',
+  'tutorial.l8.continueParens': 'Next: tap the orange button and move the parentheses to match the target.',
+  'tutorial.l8.secondExerciseHint': 'Pick a mini card and copy the equation.',
+  'tutorial.l8.celebrate': 'Excellent — you moved the parentheses!',
+  'tutorial.l8.mismatch': 'Not quite — check the parentheses position and try again',
+
+  // Lesson 9 — mini card + full equation copy
+  'tutorial.l9.title': 'Copy From Mini Card',
+  'tutorial.l9.desc': 'Pick a mini card and copy the full equation exactly as shown.',
+  'tutorial.l9.copy.hint': 'Pick a mini card, then copy the full equation.',
+  'tutorial.l9.copy.bot': 'This turn everything is on, except the red button until a mini card is selected.',
+  'tutorial.l9.copy.celebrate': 'Excellent! You copied the full equation exactly.',
+  'tutorial.l9.copy.mismatch': 'Not exact yet — copy the equation exactly as shown on the chip.',
+  'tutorial.l9.selectMini': 'Select a mini card and copy the equation',
+  'tutorial.l9.buildEq': 'Build the equation exactly as shown on the red chip',
+  'tutorial.l9.chooseCard': 'Pick a card from your hand that matches the result, then tap Place',
+  'tutorial.l9.intro.title': 'Identical Card',
+  'tutorial.l9.intro.desc': 'If you have a card identical to the one on the pile, you can get rid of it easily — as long as you decide before rolling the dice',
+  'tutorial.l9.introContinue': "Let's try! ›",
+
+  // ── Lesson 10 (L10): single identical card ──────────────────────────────
+  'tutorial.l10.title': 'Identical Card',
+  'tutorial.l10.desc': 'Before rolling — check if you have a card matching the top of the pile.',
+  'tutorial.l10.hint': 'Place your identical card on the discard pile before rolling.',
+  'tutorial.l10.celebrate': 'Great! You skipped a full dice roll!',
+
+  // ── Lesson 11 (L11): multi-play tip ─────────────────────────────────────
+  'tutorial.l11.title': 'Tip: Discard More Than One Card',
+  'tutorial.l11.desc': 'You can use one result to play multiple cards at once.',
+  'tutorial.l11.step1.hint': 'Choose cards that sum to the result and tap "Done".',
+  'tutorial.l11.step1.celebrate': 'Exactly right! Any combination that adds up to the result works.',
+
+  // Advanced tutorial completion screen
+  'tutorial.advancedComplete.title': '🎉 Tutorial complete!',
+  'tutorial.advancedComplete.body': 'You earned 20 coins 🪙',
+  'tutorial.advancedComplete.bodySkipped': "This time you won't earn coins 😬",
+  'tutorial.advancedComplete.bodyLimitSub': "you've already earned coins twice",
+  'tutorial.advancedComplete.realGameBtn': 'Ready for the real game! ›',
 
   // ── Auth ──
   'auth.linkTitle': 'Save Your Progress',
@@ -1160,15 +1249,38 @@ export const en: Record<string, string> = {
   // Shop
   'shop.title': 'Shop',
   'shop.coinBalance': 'Your coins: {{count}}',
-  'shop.slindaCard.name': 'Slinda Card',
-  'shop.slindaCard.description': 'A wild joker card. Add it to your hand at any time during any game — forever.',
+  'shop.slindaCard.name': 'Salinda',
+  'shop.slindaCard.description': 'Magic Card. Add it to your hand at any time during any game — forever.',
   'shop.slindaCard.price': '100 coins',
   'shop.buyButton': 'Buy',
   'shop.ownedButton': 'Owned ✓',
   'shop.insufficientCoins': 'Not enough coins',
-  'shop.purchaseSuccess': 'Slinda card added to your bank!',
+  'shop.purchaseSuccess': 'Magic card added to your bank!',
   'shop.purchaseError': 'Purchase failed, please try again.',
   'shop.openShop': 'Shop',
+  'shop.themesSection': 'Themes',
+  'shop.tablesSection': 'Tables',
+  'shop.themePurchaseSuccess': 'Theme added to your collection!',
+  'shop.specialCardBadge': 'Special card',
+  'shop.coinsUnit': 'coins',
+  'shop.shortfall': 'Missing {{count}} coins',
+  'shop.previewHint': 'Preview',
+  'shop.activateButton': 'Activate',
+  'shop.activeBadge': 'Active',
+  // My Themes screen
+  'themes.myThemes': 'My Themes',
+  'themes.table': 'Table',
+  'themes.background': 'Screen Background',
+  'themes.active': 'Active ✓',
+  'themes.equip': 'Equip',
+  'themes.currentlyUsed': 'Currently used',
+  'themes.replaceable': 'Can replace',
+  'themes.tableSkin': 'Table Skin',
+  'themes.none': 'None',
+  'themes.removeSkin': 'No table skin',
+  'themes.mixNotice': 'You can combine a table from one theme with a screen background from another.',
+  'themes.currentCombo': 'Active combo:',
+  'themes.openMyThemes': 'My Themes',
   // In-game Slinda bank
   'slindaBank.addToHand': '+ Slinda',
   // Coin award notification (5 coins)
