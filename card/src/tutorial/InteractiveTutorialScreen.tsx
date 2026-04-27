@@ -480,6 +480,8 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const l9RiggedRef = useRef(false);
   const l10RiggedRef = useRef(false);
   const l10LastDiscardRef = useRef(-1);
+  const l11RiggedRef = useRef(false);
+  const l11LastResultRef = useRef(-1);
   const [l7FanHintHidden, setL7FanHintHidden] = useState(false);
   // L7 two-stage intro: 0=info bubble, 1=happy bubble+arrow, 2=gameplay.
   const [parensIntroStage, setParensIntroStage] = useState<0 | 1 | 2>(0);
@@ -1784,6 +1786,50 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     });
   }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
 
+  // ── Lesson 11 (multi-play): solved phase, randomised target in [5..9].
+  //    Hand contains two addends that sum to the target + wild + joker,
+  //    but NO direct card whose value === target. ──
+  useEffect(() => {
+    if (engine.lessonIndex !== MIMIC_MULTI_PLAY_LESSON_INDEX) { l11RiggedRef.current = false; return; }
+    if (engine.phase !== 'bot-demo') { l11RiggedRef.current = false; return; }
+    if (engine.stepIndex !== 1) return;
+    if (l11RiggedRef.current) return;
+    l11RiggedRef.current = true;
+    // Pick a random target in [5..9], avoid repeating the last run.
+    const targets = [5, 6, 7, 8, 9];
+    let EQ_RESULT: number;
+    do { EQ_RESULT = targets[Math.floor(Math.random() * targets.length)]; }
+    while (targets.length > 1 && EQ_RESULT === l11LastResultRef.current);
+    l11LastResultRef.current = EQ_RESULT;
+    // Derive two addends (split roughly in half).
+    const addA = Math.floor(EQ_RESULT / 2);
+    const addB = EQ_RESULT - addA; // addA + addB === EQ_RESULT always
+    // Publish config so the bot demo in lesson-10-multi-play.ts can read it.
+    tutorialBus.setL11Config({ addA, addB });
+    const ts = Date.now();
+    const playerCards = [addA, addB, 0].map((v, i) => ({
+      id: `tut-l11-num-${v}-${ts}-${i}`, type: 'number' as const, value: v,
+    }));
+    const wildCard = { id: `tut-l11-wild-${ts}`, type: 'wild' as const };
+    const jokerCard = { id: `tut-l11-joker-${ts}`, type: 'joker' as const };
+    const playerHand = [...playerCards, wildCard, jokerCard];
+    const botHand = playerHand.map((c) => ({ ...c, id: `bot-${c.id}` }));
+    gameDispatch({
+      type: 'TUTORIAL_FORCE_SOLVED',
+      equationResult: EQ_RESULT,
+      playerHand,
+      botHand,
+    });
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
+
+  // ── L11: clear l11Config when leaving the lesson ──
+  useEffect(() => {
+    if (engine.lessonIndex !== MIMIC_MULTI_PLAY_LESSON_INDEX) {
+      tutorialBus.setL11Config(null);
+      l11RiggedRef.current = false;
+    }
+  }, [engine.lessonIndex]);
+
   // ── L9: parens filter controls equation builder visibility by stage:
   //    Stage 1 (build equation): l9ParensFilter=true → dice row visible + clickable ──
   useEffect(() => {
@@ -2132,6 +2178,11 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       dispatchEngine({ type: 'CELEBRATE_DONE' });
       return;
     }
+    // L11 (multi-play) step 0 (הידעת? intro): skip celebrate instantly.
+    if (engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX && engine.stepIndex === 0) {
+      dispatchEngine({ type: 'CELEBRATE_DONE' });
+      return;
+    }
     // Parens lesson: auto-advance so flow continues into the next exercise.
     if (engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX) {
       const id = setTimeout(() => dispatchEngine({ type: 'CELEBRATE_DONE' }), 1200);
@@ -2364,6 +2415,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     engine.lessonIndex < MIMIC_PARENS_LESSON_INDEX;
   const isParensLesson = engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX;
   const isIdenticalLesson = engine.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX;
+  const isL11Intro = engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
+    engine.stepIndex === 0 &&
+    (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
 
   // Step progress indicator:
   // first step in a lesson shows "N"; additional steps show "N.1", "N.2"...
@@ -2967,6 +3021,50 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
         </>
       ) : null}
 
+      {/* L11 (multi-play) step 0: "הידעת?" intro overlay */}
+      {isL11Intro && (
+        <View
+          pointerEvents="auto"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(5,10,22,0.93)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            paddingHorizontal: 32,
+          }}
+        >
+          <Text style={{ fontSize: 40, marginBottom: 8 }}>💡</Text>
+          <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#fde68a', marginBottom: 4, textAlign: 'center' }}>
+            {t('tutorial.identicalMulti.didYouKnow')}
+          </Text>
+          <Text style={{ fontSize: 14, color: '#9ca3af', marginBottom: 12, textAlign: 'center' }}>
+            {t('tutorial.identicalMulti.bestTip')}
+          </Text>
+          <Text style={{ fontSize: 16, color: '#e5e7eb', textAlign: 'center', marginBottom: 24, lineHeight: 24 }}>
+            {t('tutorial.identicalMulti.body')}
+          </Text>
+          {engine.phase === 'await-mimic' && (
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#f59e0b',
+                borderRadius: 10,
+                paddingVertical: 12,
+                paddingHorizontal: 32,
+              }}
+              onPress={() => tutorialBus.emitUserEvent({ kind: 'identicalMultiAck' })}
+            >
+              <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 16 }}>
+                {t('tutorial.identicalMulti.cta')}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Cheerful speech bubble — position depends on lesson + phase:
           • Dice lesson (3) bot-demo: bottom (matches lesson 2 height, smooth

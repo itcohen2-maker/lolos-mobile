@@ -31,7 +31,7 @@ export const lesson10MultiPlay: Lesson = {
       id: 'multi-play-act',
       botDemo: async (api) => {
         await api.wait(800);
-        const cfg = (api as any).l11Config?.();
+        const cfg = api.l11Config();
         if (cfg) {
           await api.stageCardByValue(cfg.addA);
           await api.stageCardByValue(cfg.addB);

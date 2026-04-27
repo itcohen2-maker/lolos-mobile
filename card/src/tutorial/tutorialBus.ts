@@ -267,6 +267,10 @@ let manualEqConfirm = false;
 /** When true: enables equation builder (dice visible + clickable) in L9 stage 1. */
 let l9ParensFilter = false;
 
+/** Lesson 11 (multi-play) addends — published by InteractiveTutorialScreen
+ *  before the bot demo so the bot stages the correct cards. */
+let l11Config: { addA: number; addB: number } | null = null;
+
 /** Subscribers notified when L5 UI flags change (hide fan / guided mode) so GameScreen can re-render. */
 const l5UiListeners = new Set<VoidListener>();
 function notifyL5Ui(): void {
@@ -545,6 +549,13 @@ export const tutorialBus = {
     return l9ParensFilter;
   },
 
+  setL11Config(cfg: { addA: number; addB: number } | null): void {
+    l11Config = cfg;
+  },
+  getL11Config(): { addA: number; addB: number } | null {
+    return l11Config;
+  },
+
   subscribeL5Ui(fn: VoidListener): () => void {
     l5UiListeners.add(fn);
     return () => {
@@ -597,6 +608,7 @@ export const tutorialBus = {
     botDemoActive = false;
     manualEqConfirm = false;
     l9ParensFilter = false;
+    l11Config = null;
     l5UiListeners.clear();
     lastEquationResult = null;
     layouts.confirmEqBtn = null;
