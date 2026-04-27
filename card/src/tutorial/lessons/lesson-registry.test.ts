@@ -6,14 +6,19 @@ describe('lesson registry smoke', () => {
     expect(LESSONS.length).toBeGreaterThan(0);
     expect(LESSONS[0].steps.length).toBeGreaterThan(0);
   });
-  it('lessons in order: core five + optional fractions-advanced', () => {
+  it('lessons in order: core six + optional fractions + parens + mini-copy + identical + multi-play', () => {
     expect(LESSONS.map((l) => l.id)).toEqual([
       'fan-basics',
       'tap-card',
       'dice-basics',
       'equation-basics',
       'op-cycle-basics',
+      'possible-results-basics',
       'fractions-advanced',
+      'parens-move',
+      'mini-copy-next-turn',
+      'identical-single',
+      'multi-play-tip',
     ]);
   });
   it('lesson 4 (equation-basics) has 3 steps: play-card, fill-missing-die, full-build', () => {
@@ -43,34 +48,43 @@ describe('lesson registry smoke', () => {
     expect(step.outcome({ kind: 'cardTapped', cardId: 'tut-l4-card-5-123' })).toBe(false);
     expect(step.outcome({ kind: 'eqUserPickedDice', idx: 1 })).toBe(false);
   });
-  it('lesson 5 step 1 (cycle-signs) outcome: l5AllSignsCycled only', () => {
+  it('lesson 5 has two steps: place-op → joker-place', () => {
+    expect(LESSONS[4].steps.map((s) => s.id)).toEqual([
+      'place-op',
+      'joker-place',
+    ]);
+  });
+  it('lesson 5 step 1 (place-op) outcome: only the correct `+` op advances', () => {
     const step = LESSONS[4].steps[0];
-    expect(step.outcome({ kind: 'l5AllSignsCycled' })).toBe(true);
+    // The step is set up as `4 ? 3 = 7`, so only `+` completes it.
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '+', position: 0 })).toBe(true);
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '-', position: 0 })).toBe(false);
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: 'x', position: 0 })).toBe(false);
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '÷', position: 0 })).toBe(false);
     expect(step.outcome({ kind: 'opSelected', op: '+', via: 'cycle' })).toBe(false);
     expect(step.outcome({ kind: 'l5JokerModalOpened' })).toBe(false);
   });
-  it('lesson 5 step 2 (joker-place) requires completed full joker flow', () => {
+  it('lesson 5 step 2 (joker-place) requires completed full joker flow with correct sign (+)', () => {
     const step = LESSONS[4].steps[1];
-    expect(step.outcome({ kind: 'l5JokerFlowCompleted', op: '÷' })).toBe(true);
-    expect(step.outcome({ kind: 'l5JokerPlaced', op: '÷' })).toBe(false);
-    expect(step.outcome({ kind: 'l5JokerPickedInModal', op: '÷' })).toBe(false);
+    expect(step.outcome({ kind: 'l5JokerFlowCompleted', op: '+' })).toBe(true);
+    expect(step.outcome({ kind: 'l5JokerFlowCompleted', op: '-' })).toBe(false);
+    expect(step.outcome({ kind: 'l5JokerFlowCompleted', op: 'x' })).toBe(false);
+    expect(step.outcome({ kind: 'l5JokerFlowCompleted', op: '÷' })).toBe(false);
+    expect(step.outcome({ kind: 'l5JokerPlaced', op: '+' })).toBe(false);
+    expect(step.outcome({ kind: 'l5JokerPickedInModal', op: '+' })).toBe(false);
   });
-  it('lesson 6 (fractions-advanced) outcomes: ack, attacks, defenses', () => {
-    const L6 = LESSONS[5];
-    expect(L6.steps.map((s) => s.id)).toEqual([
+  it('lesson 7 (fractions-advanced) has intro + 2 attacks only', () => {
+    const L7 = LESSONS[6];
+    expect(L7.steps.map((s) => s.id)).toEqual([
       'frac-intro',
-      'frac-theory',
       'frac-attack-half',
       'frac-attack-third',
-      'frac-defend-half',
-      'frac-defend-third',
     ]);
-    expect(L6.steps[0].outcome({ kind: 'fracLessonAck' })).toBe(true);
-    expect(L6.steps[2].outcome({ kind: 'fracAttackPlayed', fraction: '1/2' })).toBe(true);
-    expect(L6.steps[2].outcome({ kind: 'fracAttackPlayed', fraction: '1/3' })).toBe(false);
-    expect(L6.steps[3].outcome({ kind: 'fracAttackPlayed', fraction: '1/3' })).toBe(true);
-    expect(L6.steps[4].outcome({ kind: 'fracDefenseSolved', penaltyDenom: 2 })).toBe(true);
-    expect(L6.steps[5].outcome({ kind: 'fracDefenseSolved', penaltyDenom: 3 })).toBe(true);
+    expect(L7.steps[0].outcome({ kind: 'fracLessonAck' })).toBe(true);
+    expect(L7.steps[0].outcome({ kind: 'fracAttackPlayed', fraction: '1/2' })).toBe(false);
+    expect(L7.steps[1].outcome({ kind: 'fracAttackPlayed', fraction: '1/2' })).toBe(true);
+    expect(L7.steps[1].outcome({ kind: 'fracAttackPlayed', fraction: '1/3' })).toBe(false);
+    expect(L7.steps[2].outcome({ kind: 'fracAttackPlayed', fraction: '1/3' })).toBe(true);
   });
   it('lesson 1 (fan-basics) has the scroll step only', () => {
     expect(LESSONS[0].steps.map(s => s.id)).toEqual(['scroll-fan']);
