@@ -1802,7 +1802,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     while (targets.length > 1 && EQ_RESULT === l11LastResultRef.current);
     l11LastResultRef.current = EQ_RESULT;
     // Derive two addends (split roughly in half).
-    const addA = Math.floor(EQ_RESULT / 2);
+    const addA_raw = Math.floor(EQ_RESULT / 2);
+    const addB_raw = EQ_RESULT - addA_raw;
+    // Ensure addA !== addB so the hand contains two distinct-valued cards.
+    const addA = addA_raw === addB_raw ? addA_raw - 1 : addA_raw;
     const addB = EQ_RESULT - addA; // addA + addB === EQ_RESULT always
     // Publish config so the bot demo in lesson-10-multi-play.ts can read it.
     tutorialBus.setL11Config({ addA, addB });
@@ -2523,7 +2526,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             zIndex: 9000,
           }}
         />
-      ) : (isEquationLesson || isOpCycleLesson || isPossibleResultsLesson || isFracLesson || isParensLesson || isIdenticalLesson) ? (
+      ) : (isEquationLesson || isOpCycleLesson || isPossibleResultsLesson || isFracLesson || isParensLesson || isIdenticalLesson
+          || engine.lessonIndex === MIMIC_SINGLE_IDENTICAL_LESSON_INDEX
+          || engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX) ? (
         null
       ) : (
         <View
