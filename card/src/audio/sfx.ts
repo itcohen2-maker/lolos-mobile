@@ -9,6 +9,7 @@ export type SfxKey =
   | 'complete'
   | 'transition'
   | 'meterCelebrate'
+  | 'meterBounce'
   | 'timerTick'
   | 'timerEnd'
   | 'gameWin';
@@ -28,6 +29,7 @@ const SOURCES: Record<SfxKey, number> = {
   complete: require('../../assets/sounds/sfx_ui_complete.wav'),
   transition: require('../../assets/sounds/sfx_ui_transition.wav'),
   meterCelebrate: require('../../assets/sounds/sfx_meter_celebrate.mp3'),
+  meterBounce: require('../../assets/sounds/sfx_ui_success.wav'),
   timerTick: require('../../assets/sounds/bubble_mid.wav'),
   timerEnd: require('../../assets/sounds/bubble_end.wav'),
   gameWin: require('../../assets/sounds/sfx_game_win.wav'),
@@ -42,6 +44,7 @@ const REGISTRY: Record<SfxKey, SfxState> = {
   complete: { sound: null, loading: false, lastPlayedAt: 0 },
   transition: { sound: null, loading: false, lastPlayedAt: 0 },
   meterCelebrate: { sound: null, loading: false, lastPlayedAt: 0 },
+  meterBounce: { sound: null, loading: false, lastPlayedAt: 0 },
   timerTick: { sound: null, loading: false, lastPlayedAt: 0 },
   timerEnd: { sound: null, loading: false, lastPlayedAt: 0 },
   gameWin: { sound: null, loading: false, lastPlayedAt: 0 },
