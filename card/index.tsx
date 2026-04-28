@@ -11808,6 +11808,10 @@ function GameScreen() {
     if (prevPhaseRef.current !== 'building' && state.phase === 'building') {
       void playSfx('transition', { cooldownMs: 160, volumeOverride: 0.28 });
     }
+    if (prevPhaseRef.current !== 'game-over' && state.phase === 'game-over') {
+      setSfxMuted(false);
+      void playSfx('gameWin', { cooldownMs: 0, volumeOverride: 1.0 });
+    }
     prevDiscardCountRef.current = state.lastDiscardCount;
     prevPhaseRef.current = state.phase;
   }, [state.lastDiscardCount, state.phase, soundOn]);
