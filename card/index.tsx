@@ -268,7 +268,7 @@ interface GameState {
   equationSuccesses: number;
   turnStartedAt: number | null;
   totalEquationResponseMs: number;
-  timerSetting: '30' | '60' | 'off' | 'custom';
+  timerSetting: '60' | '90' | 'off' | 'custom';
   timerCustomSeconds: number;
   winner: Player | null;
   message: string;
@@ -402,7 +402,7 @@ function TournamentInfoModal({
     allowNegativeTargets: boolean;
     showPossibleResults: boolean;
     showSolveExercise: boolean;
-    timerSetting: '30' | '60' | 'off' | 'custom';
+    timerSetting: '60' | '90' | 'off' | 'custom';
     timerCustomSeconds: number;
   };
 }) {
@@ -618,7 +618,7 @@ interface MoveHistoryEntry {
 export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; fractionKinds?: Fraction[]; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '30' | '60' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId | string; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty; isTutorial?: boolean }
+  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; fractionKinds?: Fraction[]; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '60' | '90' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId | string; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty; isTutorial?: boolean }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
@@ -7899,11 +7899,11 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const [fractionKinds, setFractionKinds] = useState<Fraction[]>([...ALL_FRACTION_KINDS]);
   const [showPossibleResults, setShowPossibleResults] = useState(true);
   const [showSolveExercise, setShowSolveExercise] = useState(true);
-  const [timer, setTimer] = useState<'30' | '60' | 'off' | 'custom'>('off');
+  const [timer, setTimer] = useState<'60' | '90' | 'off' | 'custom'>('off');
   const [customTimerSeconds, setCustomTimerSeconds] = useState(60);
   const [timerCustomModalOpen, setTimerCustomModalOpen] = useState(false);
   /** אם לא null — ביטול מודאל המשנה מחזיר לערך הזה; null = כבר היינו ב«מותאם» (רק עורכים שניות) */
-  const timerRestoreOnCancelRef = useRef<'30' | '60' | 'off' | null>(null);
+  const timerRestoreOnCancelRef = useRef<'60' | '90' | 'off' | null>(null);
   const [guidancePromptOpen, setGuidancePromptOpen] = useState(false);
   const [guidanceOn, setGuidanceOn] = useState(false); // הדרכה והסברים — ברירת מחדל: כבוי
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
@@ -7933,8 +7933,8 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const [teacherActionLog, setTeacherActionLog] = useState<string[]>([]);
   const timerWheelOptions = useMemo((): HorizontalWheelOption[] => [
     { key: 'off', label: t('lobby.off'), accessibilityLabel: t('start.timerA11y.off') },
-    { key: '30', label: t('lobby.timerSec', { n: 30 }), accessibilityLabel: t('start.timerA11y.sec30') },
     { key: '60', label: t('lobby.timerMin'), accessibilityLabel: t('start.timerA11y.min1') },
+    { key: '90', label: t('lobby.timerMinHalf'), accessibilityLabel: t('start.timerA11y.minHalf') },
     { key: 'custom', label: t('lobby.timerCustom'), accessibilityLabel: t('start.timerA11y.custom') },
   ], [t]);
   // Minimal welcome layout: mode (0) → player count (1, pass-and-play only) → number range → guidance → advanced.
@@ -8157,11 +8157,11 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   // Reserve enough vertical space for the absolute top action buttons
   // so they never overlap the Salinda hero image.
   // Includes two stacked button rows (shop/themes + rules) plus wrap safety.
-  const TOP_ACTIONS_H = 136;
-  const HERO_TOP = TOP_ACTIONS_TOP + TOP_ACTIONS_H + 8;
+  const TOP_ACTIONS_H = 96;
+  const HERO_TOP = TOP_ACTIONS_TOP + TOP_ACTIONS_H + 4;
   // תמונת סלינדה — גודל מקורי במסך ברוכים הבאים
-  // Shrink hero joker card by ~1/3 to free vertical space for scrolling.
-  const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * (2 / 3);
+  // Shrink hero joker card to free vertical space for scrolling.
+  const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * 0.5;
 
   const stopDemoSimulation = useCallback(() => {
     if (demoSimTimerRef.current) {
@@ -9116,11 +9116,11 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   scrollAfterSelect={(key) => key !== 'custom'}
                   onSelect={(key) => {
                     if (key === 'custom') {
-                      timerRestoreOnCancelRef.current = timer === 'custom' ? null : (timer as '30' | '60' | 'off');
+                      timerRestoreOnCancelRef.current = timer === 'custom' ? null : (timer as '60' | '90' | 'off');
                       setTimer('custom');
                       setTimerCustomModalOpen(true);
                     } else {
-                      setTimer(key as '30' | '60' | 'off');
+                      setTimer(key as '60' | '90' | 'off');
                     }
                   }}
                 />
@@ -10421,8 +10421,8 @@ function TurnTransition() {
         : `${state.timerCustomSeconds}s`)
       : state.timerSetting === '60'
         ? '1:00'
-        : state.timerSetting === '30'
-          ? '30s'
+        : state.timerSetting === '90'
+          ? '1:30'
           : null;
   const compactPlayerScreen = state.roundsPlayed > 0;
 
@@ -11408,10 +11408,10 @@ function GameScreen() {
   const gameTimerHintLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const TIMER_TOTAL = state.timerSetting === 'custom'
     ? state.timerCustomSeconds
-    : state.timerSetting === '30'
-      ? 30
-      : state.timerSetting === '60'
-        ? 60
+    : state.timerSetting === '60'
+      ? 60
+      : state.timerSetting === '90'
+        ? 90
         : 0;
   const timerTurnKeyRef = useRef<string | null>(null);
   const timerConfigKeyRef = useRef<string>('');
@@ -11808,10 +11808,6 @@ function GameScreen() {
     }
     if (prevPhaseRef.current !== 'building' && state.phase === 'building') {
       void playSfx('transition', { cooldownMs: 160, volumeOverride: 0.28 });
-    }
-    if (prevPhaseRef.current !== 'game-over' && state.phase === 'game-over') {
-      setSfxMuted(false);
-      void playSfx('gameWin', { cooldownMs: 0, volumeOverride: 1.0 });
     }
     prevDiscardCountRef.current = state.lastDiscardCount;
     prevPhaseRef.current = state.phase;
