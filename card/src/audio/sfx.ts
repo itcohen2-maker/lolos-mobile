@@ -125,7 +125,10 @@ export async function playSfx(
     }
     const nextVolume = options?.volumeOverride ?? volume;
     await sound.setVolumeAsync(nextVolume);
-    await sound.stopAsync().catch(() => {});
+    const status = await sound.getStatusAsync();
+    if (status.isLoaded && status.isPlaying) {
+      await sound.stopAsync().catch(() => {});
+    }
     await sound.setPositionAsync(0);
     await sound.playAsync();
   } catch (error) {
