@@ -170,7 +170,9 @@ export default function ExcellenceMeter({
     if (celebrate) {
       playCelebrate();
     } else {
-      void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.65 });
+      // Double-tap: first hit at squash start, second at jump apex (220ms later)
+      void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.7 });
+      setTimeout(() => void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.55 }), 220);
       animFill(value, 420);
       playBounce();
     }
