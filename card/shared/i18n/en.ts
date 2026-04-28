@@ -1048,6 +1048,10 @@ export const en: Record<string, string> = {
   'tutorial.l4.botBuild': 'Watch how I solve this…',
   'tutorial.l4.hintTap': 'Tap the card that matches the result',
   'tutorial.l4.celebrate': 'Excellent — your first exercise',
+  'tutorial.l4.didYouKnow': 'Did you know?',
+  'tutorial.l4.didYouKnowBestTip': 'This is the best tip I can give you',
+  'tutorial.l4.didYouKnowBody': 'You can get rid of several cards in one turn',
+  'tutorial.l4.didYouKnowCta': 'Let\'s try',
 
   // Lesson 4b — Fill the missing die
   'tutorial.l4b.botFillDie': 'The framed card hints the result — which die is missing?',
@@ -1179,6 +1183,8 @@ export const en: Record<string, string> = {
   'tutorial.l8.secondExerciseHint': 'Pick a mini card and copy the equation.',
   'tutorial.l8.celebrate': 'Excellent — you moved the parentheses!',
   'tutorial.l8.mismatch': 'Not quite — check the parentheses position and try again',
+  'tutorial.l8.step2.hint': 'Pick a mini card, build the equation with parentheses and confirm',
+  'tutorial.l8.step2.celebrate': 'Excellent! You built a full equation with parentheses!',
 
   // Lesson 9 — mini card + full equation copy
   'tutorial.l9.title': 'Copy From Mini Card',
@@ -1197,7 +1203,7 @@ export const en: Record<string, string> = {
   // ── Lesson 10 (L10): single identical card ──────────────────────────────
   'tutorial.l10.title': 'Identical Card',
   'tutorial.l10.desc': 'Before rolling — check if you have a card matching the top of the pile.',
-  'tutorial.l10.hint': 'Place your identical card on the discard pile before rolling.',
+  'tutorial.l10.hint': 'Tap the matching card in your fan to place it on the pile',
   'tutorial.l10.celebrate': 'Great! You skipped a full dice roll!',
 
   // ── Lesson 11 (L11): multi-play tip ─────────────────────────────────────
@@ -1208,7 +1214,7 @@ export const en: Record<string, string> = {
 
   // Advanced tutorial completion screen
   'tutorial.advancedComplete.title': '🎉 Tutorial complete!',
-  'tutorial.advancedComplete.body': 'You earned 20 coins 🪙',
+  'tutorial.advancedComplete.body': 'You received 20 coins in your bank 🪙',
   'tutorial.advancedComplete.bodySkipped': "This time you won't earn coins 😬",
   'tutorial.advancedComplete.bodyLimitSub': "you've already earned coins twice",
   'tutorial.advancedComplete.realGameBtn': 'Ready for the real game! ›',

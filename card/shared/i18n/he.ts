@@ -1191,6 +1191,8 @@ export const he: Record<string, string> = {
   'tutorial.l8.secondExerciseHint': 'בחר מיני קלף והעתק את המשוואה.',
   'tutorial.l8.celebrate': 'מצוין — הזזתם את הסוגריים!',
   'tutorial.l8.mismatch': 'לא מדויק — בדקו את מיקום הסוגריים ונסו שוב',
+  'tutorial.l8.step2.hint': 'בחר מיני קלף, מלא את המשוואה עם סוגריים ואשר',
+  'tutorial.l8.step2.celebrate': 'מצוין! בנית משוואה שלמה עם סוגריים!',
 
   // שיעור 9 — מיני קלף + העתקת תרגיל מלא
   'tutorial.l9.title': 'העתקה ממיני קלף',
@@ -1209,7 +1211,7 @@ export const he: Record<string, string> = {
   // ── Lesson 10 (L10): single identical card ──────────────────────────────
   'tutorial.l10.title': 'קלף זהה',
   'tutorial.l10.desc': 'לפני הטלת הקוביות — בדקו אם יש לכם קלף זהה לראש הערימה.',
-  'tutorial.l10.hint': 'הניחו את הקלף הזהה לראש הערימה לפני שתטילו קוביות.',
+  'tutorial.l10.hint': 'לחצו במניפה על הקלף הזהה לערימה ותפטרו מהקלף',
   'tutorial.l10.celebrate': 'מצוין! חסכתם הטלת קוביות שלמה!',
 
   // ── Lesson 11 (L11): multi-play tip ─────────────────────────────────────

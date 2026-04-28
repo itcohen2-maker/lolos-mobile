@@ -470,8 +470,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const l7RiggedRef = useRef(false);
   const l7ExerciseRef = useRef(L7_EXERCISE_POOL[0]);
   const l7LastExerciseIdxRef = useRef(-1);
-  const l7CompletedExercisesRef = useRef(0);
-  const [l7CompletedExercises, setL7CompletedExercises] = useState(0);
   const l9LastExerciseIdxRef = useRef(-1);
   // L9 (mini-copy) mismatch feedback.
   const [l9Mismatch, setL9Mismatch] = useState(false);
@@ -697,8 +695,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
 
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX) {
-      l7CompletedExercisesRef.current = 0;
-      setL7CompletedExercises(0);
     }
   }, [engine.lessonIndex]);
 
@@ -1980,7 +1976,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (isL7Await) {
       setL7FanHintHidden(false);
     }
-  }, [engine.lessonIndex, engine.phase, engine.stepIndex, l7CompletedExercises]);
+  }, [engine.lessonIndex, engine.phase, engine.stepIndex]);
 
   useEffect(() => {
     const isL7Await =
@@ -1992,7 +1988,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
         setL7FanHintHidden(true);
       }
     });
-  }, [engine.lessonIndex, engine.phase, l7FanHintHidden, l7CompletedExercises]);
+  }, [engine.lessonIndex, engine.phase, l7FanHintHidden]);
 
 
   // ── L7 stage 0→1: operator set → stop red-chip pulse, start parens-button pulse ──
@@ -2050,64 +2046,45 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     return () => tutorialBus.setManualEqConfirm(false);
   }, [engine.lessonIndex, engine.phase]);
 
-  // ── L7 exercise 2 setup: regenerate validTargets, pre-fill dice, open chip. ──
-  // After exercise 1's CONFIRM_EQUATION, validTargets is cleared. We must
-  // regenerate it and pre-fill the dice slots so getL7ParensResults() has
-  // values and the L7 guided filter can produce mini cards.
+  // ── L7 step 1 (full-build) setup: when entering step 1 await-mimic,
+  //    regenerate validTargets, pre-fill dice, and open the results chip.
+  //    The equation builder shows dice values but operators are empty —
+  //    the learner sets operators + parens themselves. ──
   useEffect(() => {
-    if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX || engine.phase !== 'await-mimic') return;
-    if (l7CompletedExercises === 0) return;
-    // Regenerate validTargets from existing dice (cleared by CONFIRM_EQUATION).
+    if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX) return;
+    if (engine.phase !== 'await-mimic' || engine.stepIndex !== 1) return;
+    // Re-roll same dice to regenerate validTargets (cleared by CONFIRM_EQUATION).
+    const ex = l7ExerciseRef.current;
     gameDispatch({ type: 'TUTORIAL_SET_ENABLED_OPERATORS', operators: ['+', '-', 'x', '÷'] });
     gameDispatch({ type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS', value: true });
-    // Reset equation builder then pre-fill dice so L7 parens filter works.
-    tutorialBus.emitFanDemo({ kind: 'eqReset' });
+    gameDispatch({ type: 'ROLL_DICE', values: { die1: ex.d1, die2: ex.d2, die3: ex.d3 } });
+    // Pre-fill dice slots so getL7ParensResults() can compute the filter.
     setTimeout(() => {
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
       tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 });
-      // Open chip after dice are placed so parens results are computable.
       tutorialBus.emitFanDemo({ kind: 'disarmResultsChipPulse' });
       tutorialBus.emitFanDemo({ kind: 'openResultsChip' });
     }, 100);
-  }, [engine.lessonIndex, engine.phase, gameDispatch, l7CompletedExercises]);
+  }, [engine.lessonIndex, engine.phase, engine.stepIndex, gameDispatch]);
 
-  // ── Lesson 7: outcome check — two-exercise flow.
-  //    Exercise 1 (l7CompletedExercises === 0): parens-only — learner moves parens.
-  //      On correct confirm → increment counter + revert to building for exercise 2.
-  //    Exercise 2 (l7CompletedExercises === 1): full equation — learner fills all.
-  //      On correct confirm → emit l7ParensCopyConfirmed → lesson advances. ──
+  // ── L7 validator: fires for BOTH steps. The engine knows which step is
+  //    active, so the same event (l7ParensCopyConfirmed) advances step 0
+  //    to step 1's celebrate, then step 1 to lesson-done. ──
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX) return;
     if (engine.phase !== 'await-mimic') return;
-    // When phase returns to 'building' after exercise 1, clear the transition guard.
     if (gameState?.phase !== 'solved') return;
     const parensRight = tutorialBus.getParensRightValue();
     const got = gameState.equationResult as number | null;
     const liveRight = tutorialBus.getL7ParensResults()?.right ?? null;
     const expected = liveRight ?? l7ExerciseRef.current.target;
     if (parensRight && got === expected) {
-      if (l7CompletedExercisesRef.current === 0) {
-        // Exercise 1 done — transition to exercise 2.
-        // l7Ex2Active only becomes true AFTER REVERT_TO_BUILDING (via nested
-        // setTimeout) so the exercise-2 validator cannot fire on the same
-        // render where exercise 1's 'solved' phase is still active.
-        l7CompletedExercisesRef.current = 1;
-        setL7CompletedExercises(1);
-        setParensIntroStage(2);
-        tutorialBus.emitFanDemo({ kind: 'clearSolveExerciseChip' });
-        setTimeout(() => {
-          gameDispatch({ type: 'REVERT_TO_BUILDING' });
-          setTimeout(() => setL7Ex2Active(true), 50);
-        }, 0);
-      } else if (l7Ex2Active) {
-        // Exercise 2 done — advance lesson.
-        tutorialBus.emitUserEvent({ kind: 'l7ParensCopyConfirmed' });
-      }
+      tutorialBus.emitUserEvent({ kind: 'l7ParensCopyConfirmed' });
     } else if (got != null) {
       tutorialBus.emitUserEvent({ kind: 'l7ParensCopyMismatch', expected, got });
     }
-  }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.equationResult, gameDispatch, l7CompletedExercises, l7Ex2Active]);
+  }, [engine.lessonIndex, engine.phase, engine.stepIndex, gameState?.phase, gameState?.equationResult, gameDispatch]);
 
   // ── L7→L9 boundary cleanup: once we actually leave parens, reset solved
   //    staging so the next lesson starts from a clean "building" board. ──
@@ -2463,6 +2440,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const isIdenticalLesson = engine.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX;
   const isL10Intro = engine.lessonIndex === MIMIC_SINGLE_IDENTICAL_LESSON_INDEX &&
     engine.stepIndex === 0 &&
+    (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
+  const isL10PlayStep = engine.lessonIndex === MIMIC_SINGLE_IDENTICAL_LESSON_INDEX &&
+    engine.stepIndex === 1 &&
     (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
   const isL11Intro = engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
     engine.stepIndex === 0 &&
@@ -3005,7 +2985,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       </View>
 
       {/* Parens lesson: "Did you know?" style mockup + explicit confirm. */}
-      {isParensLesson && engine.stepIndex === 0 && engine.phase === 'bot-demo' && l7CompletedExercises === 0 && !parensMockupApproved ? (
+      {isParensLesson && engine.stepIndex === 0 && engine.phase === 'bot-demo' && !parensMockupApproved ? (
         <>
           <View
             pointerEvents="auto"
@@ -3082,6 +3062,36 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
           </TouchableOpacity>
         </>
       ) : null}
+
+      {/* L10 step 1: floating discard chip — shows the pile top so the learner knows what to match */}
+      {isL10PlayStep && l10TopDiscardValue !== '?' && (
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', top: 80, left: 0, right: 0, alignItems: 'center', zIndex: 60 }}
+        >
+          <View style={{
+            backgroundColor: 'rgba(5,10,22,0.88)',
+            borderRadius: 14,
+            borderWidth: 2,
+            borderColor: '#f59e0b',
+            paddingVertical: 8,
+            paddingHorizontal: 20,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+          }}>
+            <Text style={{ fontSize: 13, color: '#9ca3af' }}>{t('tutorial.identicalPracticeMockupDiscard')}</Text>
+            <View style={{ width: 44, height: 58, backgroundColor: '#374151', borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#f59e0b' }}>
+              <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#fde68a' }}>{l10TopDiscardValue}</Text>
+            </View>
+            <Text style={{ fontSize: 18, color: '#6b7280' }}>→</Text>
+            <View style={{ width: 44, height: 58, backgroundColor: '#1e3a5f', borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#3b82f6', borderStyle: 'dashed' }}>
+              <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#93c5fd' }}>{l10TopDiscardValue}</Text>
+            </View>
+            <Text style={{ fontSize: 13, color: '#9ca3af' }}>{t('tutorial.identicalPracticeMockupHand')}</Text>
+          </View>
+        </View>
+      )}
 
       {/* L11 step 1: floating result chip — shows the target so the learner knows what to sum to */}
       {isL11PlayStep && l11Target !== null && (
@@ -3295,7 +3305,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
 
       {engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX &&
        engine.phase === 'await-mimic' &&
-       l7CompletedExercises === 0 &&
+       engine.stepIndex === 0 &&
        !l7FanHintHidden &&
        !l7Mismatch ? (
         <View
@@ -3320,32 +3330,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
         </View>
       ) : null}
 
-      {engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX &&
-       engine.phase === 'await-mimic' &&
-       l7CompletedExercises === 1 &&
-       !l7FanHintHidden &&
-       !l7Mismatch ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            bottom: FAN_BOTTOM + 14,
-            left: 0,
-            right: 0,
-            alignItems: 'center',
-            zIndex: 9210,
-          }}
-        >
-          <HappyBubble
-            text={t('tutorial.l8.secondExerciseHint')}
-            tone="celebrate"
-            size="compact"
-            arrowSize="small"
-            maxWidth={320}
-            tailTop={false}
-          />
-        </View>
-      ) : null}
 
       {/* Fractions lesson — pulsing halo around the discard pile.
           The pile is positioned in the game at `top: 50, right: 12` with
