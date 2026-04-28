@@ -14689,21 +14689,7 @@ function GameRouter() {
     void initializeSfx();
   }, []);
 
-  // ── Meter sound — GameRouter is always mounted, so this fires reliably
-  const prevMeterPulseRef = useRef(state.courageRewardPulseId ?? 0);
-  useEffect(() => {
-    const pulse = state.courageRewardPulseId ?? 0;
-    if (pulse === prevMeterPulseRef.current) return;
-    prevMeterPulseRef.current = pulse;
-    if (!soundOn) return;
-    const isFull = state.lastCourageCoinsAwarded;
-    void playSfx(isFull ? 'meterCelebrate' : 'meterCelebrate', {
-      cooldownMs: 0,
-      volumeOverride: isFull ? 1.0 : 0.5,
-    });
-  }, [state.courageRewardPulseId, state.lastCourageCoinsAwarded, soundOn]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Game win sound — phase transition to game-over
+// ── Game win sound — phase transition to game-over
   const prevPhaseRef = useRef(state.phase);
   useEffect(() => {
     if (state.phase === 'game-over' && prevPhaseRef.current !== 'game-over' && soundOn) {

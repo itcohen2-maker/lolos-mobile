@@ -150,8 +150,10 @@ export default function ExcellenceMeter({
     const celebrate = isCelebrating || (prevValue.current === 66 && value === 0);
     prevValue.current = value;
     if (celebrate) {
+      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
       playCelebrate();
     } else {
+      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
       animFill(value, 420);
       playBounce();
     }
