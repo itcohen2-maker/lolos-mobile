@@ -94,6 +94,7 @@ export default function ExcellenceMeter({
 
   // ── Regular bounce (one step up) ─────────────────────────────────
   const playBounce = useCallback(() => {
+    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
     [scaleX, scaleY, transY, glow].forEach(a => a.stopAnimation());
     scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); glow.setValue(0);
 
@@ -108,6 +109,7 @@ export default function ExcellenceMeter({
 
   // ── Celebration (meter filled → double-jump + party) ─────────────
   const playCelebrate = useCallback(() => {
+    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
     [scaleX, scaleY, transY, rot, glow, party].forEach(a => a.stopAnimation());
     scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); rot.setValue(0); glow.setValue(0); party.setValue(0);
 
@@ -150,10 +152,8 @@ export default function ExcellenceMeter({
     const celebrate = isCelebrating || (prevValue.current === 66 && value === 0);
     prevValue.current = value;
     if (celebrate) {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
       playCelebrate();
     } else {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
       animFill(value, 420);
       playBounce();
     }
