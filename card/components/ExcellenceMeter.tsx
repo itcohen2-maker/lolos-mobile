@@ -158,9 +158,6 @@ export default function ExcellenceMeter({
     if (celebrate) {
       playCelebrate();
     } else {
-      // Two-hit: bounce sound at squash start + apex (220ms later)
-      void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.8 });
-      setTimeout(() => void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.6 }), 220);
       animFill(value, 420);
       playBounce();
     }
