@@ -1816,7 +1816,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     // Publish config so the bot demo in lesson-10-multi-play.ts can read it.
     tutorialBus.setL11Config({ addA, addB, target: EQ_RESULT });
     const ts = Date.now();
-    const playerCards = [addA, addB, 0].map((v, i) => ({
+    const usedVals = new Set([addA, addB, 0, EQ_RESULT]);
+    const fillers = [1, 2, 3, 4, 6, 7, 8, 9].filter(v => !usedVals.has(v)).slice(0, 4);
+    const playerCards = [addA, addB, 0, ...fillers].map((v, i) => ({
       id: `tut-l11-num-${v}-${ts}-${i}`, type: 'number' as const, value: v,
     }));
     const wildCard = { id: `tut-l11-wild-${ts}`, type: 'wild' as const };
@@ -1851,7 +1853,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (!cfg) return;
     l11AwaitRiggedRef.current = true;
     const ts = Date.now();
-    const playerCards = [cfg.addA, cfg.addB, 0].map((v, i) => ({
+    const usedVals = new Set([cfg.addA, cfg.addB, 0, cfg.target]);
+    const fillers = [1, 2, 3, 4, 6, 7, 8, 9].filter(v => !usedVals.has(v)).slice(0, 4);
+    const playerCards = [cfg.addA, cfg.addB, 0, ...fillers].map((v, i) => ({
       id: `tut-l11-await-${v}-${ts}-${i}`, type: 'number' as const, value: v,
     }));
     const wildCard = { id: `tut-l11-await-wild-${ts}`, type: 'wild' as const };
