@@ -137,7 +137,10 @@ export type UserEvent =
   | { kind: 'identicalSingleAck' }
   /** Lesson 10 (multi-play intro): fires when the learner taps "בוא ננסה"
    *  on the הידעת? overlay, advancing to the actual play step. */
-  | { kind: 'identicalMultiAck' };
+  | { kind: 'identicalMultiAck' }
+  /** Lesson 4 (full-build intro): fires when the learner taps "בוא ננסה"
+   *  on the הידעת? overlay before the full-build step. */
+  | { kind: 'l4DidYouKnowAck' };
 
 /** Named on-screen targets the tutorial can draw an arrow at. The real game
  *  UI reports the rect of each button via `setLayout`; the tutorial reads it
@@ -272,7 +275,7 @@ let l9ParensFilter = false;
 
 /** Lesson 11 (multi-play) addends — published by InteractiveTutorialScreen
  *  before the bot demo so the bot stages the correct cards. */
-let l11Config: { addA: number; addB: number } | null = null;
+let l11Config: { addA: number; addB: number; target: number } | null = null;
 
 /** Subscribers notified when L5 UI flags change (hide fan / guided mode) so GameScreen can re-render. */
 const l5UiListeners = new Set<VoidListener>();
@@ -552,10 +555,10 @@ export const tutorialBus = {
     return l9ParensFilter;
   },
 
-  setL11Config(cfg: { addA: number; addB: number } | null): void {
+  setL11Config(cfg: { addA: number; addB: number; target: number } | null): void {
     l11Config = cfg;
   },
-  getL11Config(): { addA: number; addB: number } | null {
+  getL11Config(): { addA: number; addB: number; target: number } | null {
     return l11Config;
   },
 

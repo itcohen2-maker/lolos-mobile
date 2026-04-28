@@ -37,7 +37,7 @@ export type DemoApi = {
   l6CopyConfig(): { pickA: number; pickB: number; op: '+' | '-' | 'x' | '÷'; target: number } | null;
   /** Lesson 11 (multi-play) addends — published by InteractiveTutorialScreen
    *  before the bot demo so the bot stages the correct cards. */
-  l11Config(): { addA: number; addB: number } | null;
+  l11Config(): { addA: number; addB: number; target: number } | null;
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

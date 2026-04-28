@@ -472,6 +472,9 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const l7LastExerciseIdxRef = useRef(-1);
   const l7CompletedExercisesRef = useRef(0);
   const [l7CompletedExercises, setL7CompletedExercises] = useState(0);
+  // True from the moment exercise 1 confirms until the game phase reaches 'building'.
+  // Blocks exercise-2 confirm from firing on the same 'solved' render cycle.
+  const l7WaitingForBuildingRef = useRef(false);
   const l9LastExerciseIdxRef = useRef(-1);
   // L9 (mini-copy) mismatch feedback.
   const [l9Mismatch, setL9Mismatch] = useState(false);
@@ -482,6 +485,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const l10LastDiscardRef = useRef(-1);
   const l11RiggedRef = useRef(false);
   const l11LastResultRef = useRef(-1);
+  const l11AwaitRiggedRef = useRef(false);
   const [l7FanHintHidden, setL7FanHintHidden] = useState(false);
   // L7 two-stage intro: 0=info bubble, 1=happy bubble+arrow, 2=gameplay.
   const [parensIntroStage, setParensIntroStage] = useState<0 | 1 | 2>(0);
@@ -911,7 +915,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     const lesson = LESSONS[engine.lessonIndex];
     const step = lesson?.steps[engine.stepIndex];
     if (!step) return;
-    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 2;
+    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 3;
     // Lesson 5 is a two-step placement lesson — fan taps are always the
     // intended first action (pick an operator card in 5.1, tap the joker
     // in 5.2), so they should NEVER trigger the "wrong answer" shake.
@@ -945,7 +949,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   //    and both buttons report their layout via bus. Also reset the sub-phase
   //    every time the step re-enters (e.g. after GO_BACK). ──
   useEffect(() => {
-    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 2 && engine.phase === 'await-mimic';
+    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 3 && engine.phase === 'await-mimic';
     if (isL4Step3) {
       tutorialBus.emitFanDemo({ kind: 'eqReset' });
       tutorialBus.setL4Step3Mode(true);
@@ -1170,7 +1174,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
 
   // ── Lesson 4 step 3 sub-phase transitions driven by user events. ──
   useEffect(() => {
-    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 2 && engine.phase === 'await-mimic';
+    const isL4Step3 = engine.lessonIndex === 3 && engine.stepIndex === 3 && engine.phase === 'await-mimic';
     if (!isL4Step3) return;
     return tutorialBus.subscribeUserEvent((evt) => {
       if (evt.kind === 'eqReadyToConfirm') {
@@ -1730,11 +1734,14 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     const l9BotHand = l9PlayerHand.map((c) => ({ ...c, id: `bot-${c.id}` }));
     gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [l9BotHand, l9PlayerHand] });
     // Ensure human player (index 1) is the active player so UI interactions work.
+    // Discard pile: a number card matching ex.target so the player can play
+    // their matching hand card in stage 2 of the exercise.
+    const l9PileCard = { id: `tut-l9-pile-${ts9}`, type: 'number' as const, value: ex.target };
     gameDispatch({ type: 'TUTORIAL_FRACTION_SETUP', slice: {
       currentPlayerIndex: 1,
       phase: 'building' as const,
       hands: [l9BotHand, l9PlayerHand], // parens-right matching hand
-      discardPile: gameState?.discardPile ?? [],
+      discardPile: [l9PileCard],
       dice: null,
       pendingFractionTarget: null,
       fractionPenalty: 0,
@@ -1742,7 +1749,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       showFractions: false,
       fractionKinds: [] as const,
     }});
-  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch, gameState?.discardPile]);
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
 
   // ── Lesson 10 (single identical): pre-roll with one matching card.
   //    Discard value is randomised every run (avoid repeating). ──
@@ -1807,7 +1814,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     const addA = addA_raw === addB_raw ? addA_raw - 1 : addA_raw;
     const addB = EQ_RESULT - addA; // addA + addB === EQ_RESULT always
     // Publish config so the bot demo in lesson-10-multi-play.ts can read it.
-    tutorialBus.setL11Config({ addA, addB });
+    tutorialBus.setL11Config({ addA, addB, target: EQ_RESULT });
     const ts = Date.now();
     const playerCards = [addA, addB, 0].map((v, i) => ({
       id: `tut-l11-num-${v}-${ts}-${i}`, type: 'number' as const, value: v,
@@ -1829,8 +1836,44 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (engine.lessonIndex !== MIMIC_MULTI_PLAY_LESSON_INDEX) {
       tutorialBus.setL11Config(null);
       l11RiggedRef.current = false;
+      l11AwaitRiggedRef.current = false;
     }
   }, [engine.lessonIndex]);
+
+  // ── L11 step 1 await-mimic: re-rig solved state so the learner gets a fresh
+  //    hand after the bot demo consumed the previous game state (CONFIRM_STAGED). ──
+  useEffect(() => {
+    if (engine.lessonIndex !== MIMIC_MULTI_PLAY_LESSON_INDEX) { l11AwaitRiggedRef.current = false; return; }
+    if (engine.phase !== 'await-mimic') { l11AwaitRiggedRef.current = false; return; }
+    if (engine.stepIndex !== 1) return;
+    if (l11AwaitRiggedRef.current) return;
+    const cfg = tutorialBus.getL11Config();
+    if (!cfg) return;
+    l11AwaitRiggedRef.current = true;
+    const ts = Date.now();
+    const playerCards = [cfg.addA, cfg.addB, 0].map((v, i) => ({
+      id: `tut-l11-await-${v}-${ts}-${i}`, type: 'number' as const, value: v,
+    }));
+    const wildCard = { id: `tut-l11-await-wild-${ts}`, type: 'wild' as const };
+    const jokerCard = { id: `tut-l11-await-joker-${ts}`, type: 'joker' as const };
+    const playerHand = [...playerCards, wildCard, jokerCard];
+    const botHand = playerHand.map((c) => ({ ...c, id: `bot-await-${c.id}` }));
+    gameDispatch({
+      type: 'TUTORIAL_FORCE_SOLVED',
+      equationResult: cfg.target,
+      playerHand,
+      botHand,
+    });
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase, gameDispatch]);
+
+  // ── L11 step 1 await-mimic: enable l4Step3Mode so the "בחרתי" button shows. ──
+  useEffect(() => {
+    const on = engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
+               engine.stepIndex === 1 &&
+               engine.phase === 'await-mimic';
+    if (on) tutorialBus.setL4Step3Mode(true);
+    return () => { if (on) tutorialBus.setL4Step3Mode(false); };
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
   // ── L9: parens filter controls equation builder visibility by stage:
   //    Stage 1 (build equation): l9ParensFilter=true → dice row visible + clickable ──
@@ -2043,20 +2086,30 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX) return;
     if (engine.phase !== 'await-mimic') return;
+    // When phase returns to 'building' after exercise 1, clear the transition guard.
+    if (gameState?.phase === 'building') {
+      l7WaitingForBuildingRef.current = false;
+      return;
+    }
     if (gameState?.phase !== 'solved') return;
+    // Guard: if we just finished exercise 1 and REVERT_TO_BUILDING hasn't
+    // propagated yet, skip this render to avoid double-firing.
+    if (l7WaitingForBuildingRef.current) return;
     const parensRight = tutorialBus.getParensRightValue();
     const got = gameState.equationResult as number | null;
     const liveRight = tutorialBus.getL7ParensResults()?.right ?? null;
     const expected = liveRight ?? l7ExerciseRef.current.target;
     if (parensRight && got === expected) {
-      if (l7CompletedExercises === 0) {
-        // Exercise 1 done — set up exercise 2
+      if (l7CompletedExercisesRef.current === 0) {
+        // Exercise 1 done — set guard + transition to exercise 2.
+        l7WaitingForBuildingRef.current = true;
         l7CompletedExercisesRef.current = 1;
         setL7CompletedExercises(1);
-        setParensIntroStage(0);
+        setParensIntroStage(2);
+        tutorialBus.emitFanDemo({ kind: 'clearSolveExerciseChip' });
         gameDispatch({ type: 'REVERT_TO_BUILDING' });
-      } else {
-        // Exercise 2 done — advance lesson
+      } else if (l7CompletedExercisesRef.current === 1) {
+        // Exercise 2 done — advance lesson.
         tutorialBus.emitUserEvent({ kind: 'l7ParensCopyConfirmed' });
       }
     } else if (got != null) {
@@ -2305,7 +2358,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   // ── Pick the bubble copy for the current phase. ──
   const currentLesson = LESSONS[engine.lessonIndex];
   const currentStep = currentLesson?.steps[engine.stepIndex];
-  const isL4Step3Await = engine.lessonIndex === 3 && engine.stepIndex === 2 && engine.phase === 'await-mimic';
+  const isL4Step3Await = engine.lessonIndex === 3 && engine.stepIndex === 3 && engine.phase === 'await-mimic';
   // Lesson 4 step 3 uses a dynamic bubble: build → confirm → pick → play.
   const l4Step3HintKey: string | null = isL4Step3Await
     ? (l4Step3Phase === 'build' ? 'tutorial.l4c.hintFull'
@@ -2421,6 +2474,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
   const isL11Intro = engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
     engine.stepIndex === 0 &&
+    (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
+  // Lesson 4 step 3 (did-you-know): overlay before the full-build step.
+  const isL4DidYouKnow = engine.lessonIndex === 3 &&
+    engine.stepIndex === 2 &&
     (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
   // Top discard card value — used by the L10 intro overlay mockup.
   const l10TopDiscard = gameState?.discardPile?.[gameState.discardPile.length - 1];
@@ -3073,6 +3130,43 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             >
               <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 16 }}>
                 {t('tutorial.l9.introContinue')}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* L4 step 3 (did-you-know): "הידעת?" overlay before full-build */}
+      {isL4DidYouKnow && (
+        <View
+          pointerEvents="auto"
+          style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(5,10,22,0.93)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            paddingHorizontal: 32,
+          }}
+        >
+          <Text style={{ fontSize: 40, marginBottom: 8 }}>💡</Text>
+          <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#fde68a', marginBottom: 4, textAlign: 'center' }}>
+            {t('tutorial.l4.didYouKnow')}
+          </Text>
+          <Text style={{ fontSize: 14, color: '#9ca3af', marginBottom: 12, textAlign: 'center' }}>
+            {t('tutorial.l4.didYouKnowBestTip')}
+          </Text>
+          <Text style={{ fontSize: 16, color: '#e5e7eb', textAlign: 'center', marginBottom: 24, lineHeight: 24 }}>
+            {t('tutorial.l4.didYouKnowBody')}
+          </Text>
+          {engine.phase === 'await-mimic' && (
+            <TouchableOpacity
+              style={{ backgroundColor: '#f59e0b', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32 }}
+              onPress={() => tutorialBus.emitUserEvent({ kind: 'l4DidYouKnowAck' })}
+            >
+              <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 16 }}>
+                {t('tutorial.l4.didYouKnowCta')}
               </Text>
             </TouchableOpacity>
           )}
