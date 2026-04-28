@@ -3,10 +3,6 @@ import { View, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { playSfx } from '../src/audio/sfx';
 
-// Module-level: tracks the last pulseKey that triggered animation.
-// Prevents double-animation when multiple instances mount with the same pulseKey
-// (e.g. TurnTransition mounts → animates → GameScreen remounts → should skip).
-let _lastAnimatedPulse: number | undefined = undefined;
 
 // Drop positions matching the HTML (dx/dy in px, from bottom-center of fill)
 const DROP_CONFIGS = [
@@ -153,14 +149,6 @@ export default function ExcellenceMeter({
       return;
     }
 
-    // Skip if another ExcellenceMeter instance already animated this pulse
-    // (prevents double-animation when TurnTransition unmounts and GameScreen remounts)
-    if (_lastAnimatedPulse === pulseKey) {
-      prevPulse.current = pulseKey;
-      prevValue.current = value;
-      return;
-    }
-    _lastAnimatedPulse = pulseKey;
     prevPulse.current = pulseKey;
 
     // Detect celebration: meter stepped from 66 → reset to 0 (isCelebrating flag)
@@ -170,9 +158,9 @@ export default function ExcellenceMeter({
     if (celebrate) {
       playCelebrate();
     } else {
-      // Double-tap: first hit at squash start, second at jump apex (220ms later)
-      void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.7 });
-      setTimeout(() => void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.55 }), 220);
+      // Two-hit: bounce sound at squash start + apex (220ms later)
+      void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.8 });
+      setTimeout(() => void playSfx('complete', { cooldownMs: 0, volumeOverride: 0.6 }), 220);
       animFill(value, 420);
       playBounce();
     }
