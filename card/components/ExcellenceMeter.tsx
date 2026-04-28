@@ -156,7 +156,6 @@ export default function ExcellenceMeter({
     if (celebrate) {
       playCelebrate();
     } else {
-      void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.55 });
       animFill(value, 420);
       playBounce();
     }

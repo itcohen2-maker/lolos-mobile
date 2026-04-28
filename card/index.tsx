@@ -1876,8 +1876,10 @@ function gameReducer(
       const denom = fractionDenominator(action.card.fraction!);
 
       // ── BLOCK MODE: fraction-on-fraction during defense ──
+      // Any fraction card is valid. New target = denom of the blocking fraction
+      // (same mechanic as attack mode), always a whole number.
       if (st.pendingFractionTarget !== null) {
-        const newTarget = st.pendingFractionTarget / denom;
+        const newTarget = denom;
         const cardToDiscard = { ...action.card, resolvedTarget: newTarget };
         const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
         let ns = { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true };
@@ -7864,7 +7866,7 @@ const FUTURE_LAB_SPECS: { id: FutureLabId; detailCount: number }[] = [
   { id: 'steal', detailCount: 3 },
 ];
 
-function StartScreen({ onBackToChoice, onHowToPlay, onShop, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; onShop?: () => void; preferredName?: string }) {
+function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; onShop?: () => void; onMyThemes?: () => void; preferredName?: string }) {
   const { t, isRTL } = useLocale();
   const { dispatch, state: gameState } = useGame();
   const safe = useGameSafeArea();
@@ -8604,9 +8606,14 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, preferredName }: { o
           <LulosButton text={t('mode.howToPlay')} color="orange" width={110} height={38} fontSize={12} onPress={onHowToPlay} />
         )}
         <View style={{ flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          {onShop && (
-            <LulosButton text={t('shop.openShop')} color="yellow" width={90} height={38} fontSize={13} onPress={onShop} />
-          )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {onShop && (
+              <LulosButton text={t('shop.openShop')} color="yellow" width={90} height={38} fontSize={13} onPress={onShop} />
+            )}
+            {onMyThemes && (
+              <LulosButton text={t('themes.openMyThemes')} color="yellow" width={90} height={38} fontSize={13} onPress={onMyThemes} />
+            )}
+          </View>
           <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
         </View>
       </View>
@@ -10194,12 +10201,12 @@ function TurnTransition() {
         message: '',
         body: isChallengedMe
           ? t('notification.fractionAttack.bodySelf', {
-              target: String(state.pendingFractionTarget),
+              target: String(Math.round(state.pendingFractionTarget)),
               penalty: String(state.fractionPenalty),
             })
           : t('notification.fractionAttack.bodyWatch', {
               name: challengedPlayer.name,
-              target: String(state.pendingFractionTarget),
+              target: String(Math.round(state.pendingFractionTarget)),
               penalty: String(state.fractionPenalty),
             }),
         emoji: '⚔️',
@@ -10477,16 +10484,6 @@ function TurnTransition() {
                 isCelebrating={!!hp.lastCourageCoinsAwarded}
                 compact
               />
-              {profile?.slinda_owned && !isOnlineSpectator &&
-               (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building') && (
-                <TouchableOpacity
-                  onPress={() => dispatch({ type: 'ADD_SLINDA_TO_HAND' })}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(234,179,8,0.18)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#EAB308', marginTop: 4 }}
-                >
-                  <SlindaCoin size={14} />
-                  <Text style={{ color: '#FCD34D', fontSize: 11, fontWeight: '800' }}>{t('slindaBank.addToHand')}</Text>
-                </TouchableOpacity>
-              )}
             </View>
           ) : null; })()}
         </View>
@@ -11094,16 +11091,12 @@ function PlayerSidebar({
                   width={72}
                   height={32}
                   fontSize={10}
-                  onPress={() => setHistoryPlayerId(p.id)}
+                  onPress={undefined}
                 />
                 {/* מד היצטיינות: בר אופקי + מטבע סלינדה */}
                 <View style={{ width: 66, gap: 2 }}>
                   <View style={{ width: 66, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
                     <View style={{ width: `${meterPct}%`, height: 4, borderRadius: 2, backgroundColor: meterPct >= 66 ? '#F59E0B' : meterPct >= 33 ? '#34D399' : '#60A5FA' }} />
-                  </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
-                    <SlindaCoin size={14} pulseKey={p.courageRewardPulseId} />
-                    <Text style={{ color: '#FDE68A', fontSize: 10, fontWeight: '800' }}>{p.courageCoins ?? 0}</Text>
                   </View>
                 </View>
               </View>
@@ -11152,95 +11145,6 @@ function PlayerSidebar({
           enabledOperators={state.enabledOperators}
           fractionKinds={state.fractionKinds}
         />
-      </AppModal>
-      <AppModal visible={historyPlayerId !== null} onClose={() => setHistoryPlayerId(null)} title={historyPlayer ? t('game.moveHistoryTitle', { name: historyPlayer.name }) : t('game.historyShort')}>
-        <View style={{ paddingVertical: 8 }}>
-          {historyPlayer && (
-            <>
-              <View
-                style={{
-                  marginBottom: 12,
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: 'rgba(251,191,36,0.7)',
-                  backgroundColor: 'rgba(120,53,15,0.2)',
-                  paddingVertical: 10,
-                  paddingHorizontal: 12,
-                }}
-              >
-                <Text style={{ color: '#FCD34D', fontSize: 13, fontWeight: '900', textAlign: 'center', letterSpacing: 0.4 }}>
-                  ✨ טבלת ההצלחות של {historyPlayer.name} ✨
-                </Text>
-              </View>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
-                <View style={{ flex: 1, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(250,204,21,0.6)', backgroundColor: 'rgba(253,230,138,0.12)', paddingVertical: 8, paddingHorizontal: 10 }}>
-                  <Text style={{ color: '#FDE68A', fontSize: 11, fontWeight: '800', textAlign: 'right' }}>{t('game.totalDiscardedLabel', { n: String(totalDiscarded) })}</Text>
-                </View>
-                <View style={{ flex: 1, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(96,165,250,0.45)', backgroundColor: 'rgba(30,58,138,0.25)', paddingVertical: 8, paddingHorizontal: 10 }}>
-                  <Text style={{ color: '#BFDBFE', fontSize: 11, fontWeight: '800', textAlign: 'right' }}>{t('game.movesCountLabel', { n: String(playerMoves.length) })}</Text>
-                </View>
-              </View>
-              <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ paddingBottom: 16 }}>
-                {[...playerMoves].reverse().map((entry, i) => {
-                  const isSuccess = entry.cardsDiscarded > 0;
-                  return (
-                    <View
-                      key={i}
-                      style={{
-                        backgroundColor: isSuccess ? 'rgba(250,204,21,0.12)' : 'rgba(255,255,255,0.06)',
-                        borderRadius: 10,
-                        padding: 10,
-                        marginBottom: 8,
-                        borderWidth: 1,
-                        borderColor: isSuccess ? 'rgba(251,191,36,0.75)' : 'rgba(147,197,253,0.35)',
-                        borderRightWidth: 4,
-                        borderRightColor: isSuccess ? '#F59E0B' : '#93C5FD',
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                        {isSuccess ? (
-                          <View
-                            style={{
-                              borderRadius: 999,
-                              paddingHorizontal: 8,
-                              paddingVertical: 3,
-                              backgroundColor: 'rgba(250,204,21,0.25)',
-                              borderWidth: 1,
-                              borderColor: 'rgba(251,191,36,0.8)',
-                            }}
-                          >
-                            <Text style={{ color: '#FDE68A', fontSize: 10, fontWeight: '900' }}>🎉 הצלחה</Text>
-                          </View>
-                        ) : (
-                          <View
-                            style={{
-                              borderRadius: 999,
-                              paddingHorizontal: 8,
-                              paddingVertical: 3,
-                              backgroundColor: 'rgba(96,165,250,0.16)',
-                              borderWidth: 1,
-                              borderColor: 'rgba(147,197,253,0.45)',
-                            }}
-                          >
-                            <Text style={{ color: '#BFDBFE', fontSize: 10, fontWeight: '800' }}>תור רגיל</Text>
-                          </View>
-                        )}
-                        <Text style={{ color: isSuccess ? '#FCD34D' : '#93C5FD', fontSize: 11, fontWeight: '800' }}>
-                          {isSuccess ? '⭐' : '•'}
-                        </Text>
-                      </View>
-                      <Text style={{ color: '#E2E8F0', fontSize: 13, fontWeight: '700', textAlign: 'right', marginBottom: 2 }}>{entry.description}</Text>
-                      <Text style={{ color: isSuccess ? '#FDE68A' : '#6B7280', fontSize: 11, textAlign: 'right' }}>{t('game.cardsThisTurnHistory', { n: String(entry.cardsDiscarded) })}</Text>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-              {playerMoves.length === 0 && (
-                <Text style={{ color: '#FDE68A', fontSize: 14, textAlign: 'center', marginTop: 16 }}>עדיין אין מהלכים רשומים ✨</Text>
-              )}
-            </>
-          )}
-        </View>
       </AppModal>
     </View>
   );
@@ -12123,6 +12027,15 @@ function GameScreen() {
   );
   const filteredResultsForHand = useMemo(() => {
     if (state.isTutorial && tutorialBus.getL7GuidedMode()) {
+      if (tutorialBus.getL7Step1Mode()) {
+        // L7 step 1: show parens-right results directly from validTargets.
+        // Equation builder is empty — no operators yet — so l7ParensResults is null.
+        // We bypass that filter and show all parens-right equations instead.
+        return state.validTargets.filter((t) => {
+          const eq = t.equation.trimStart();
+          return eq.includes('(') && !eq.startsWith('(');
+        });
+      }
       const pr = tutorialBus.getL7ParensResults();
       if (pr) {
         const allowed = new Set([pr.left, pr.right].filter((v): v is number => v !== null));
@@ -12765,16 +12678,6 @@ function GameScreen() {
                 isCelebrating={!!hp.lastCourageCoinsAwarded}
                 compact
               />
-              {profile?.slinda_owned && !(isOnlineGame && myPerspIdx !== state.currentPlayerIndex) &&
-               (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building') && (
-                <TouchableOpacity
-                  onPress={() => dispatch({ type: 'ADD_SLINDA_TO_HAND' })}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(234,179,8,0.18)', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#EAB308', marginTop: 4 }}
-                >
-                  <SlindaCoin size={14} />
-                  <Text style={{ color: '#FCD34D', fontSize: 11, fontWeight: '800' }}>{t('slindaBank.addToHand')}</Text>
-                </TouchableOpacity>
-              )}
             </View>
           ) : null; })()}
         </View>
@@ -14785,30 +14688,26 @@ function GameRouter() {
     void initializeSfx();
   }, []);
 
-  // ── Excellence meter celebrate sound — fires on transition to turn-transition
-  //    phase AFTER lastCourageCoinsAwarded becomes true. Must live in GameRouter
-  //    (always mounted) because GameScreen unmounts during the phase transition.
-  const prevCourageAwardedRef = useRef(false);
   const humanPlayer = state.players.find(p => !p.isBot) ?? (state.players.length === 1 ? state.players[0] : null);
   const humanCelebrating = !!humanPlayer?.lastCourageCoinsAwarded;
-  useEffect(() => {
-    const justAwarded = humanCelebrating && !prevCourageAwardedRef.current;
-    prevCourageAwardedRef.current = humanCelebrating;
-    if (justAwarded && soundOn && !state.isTutorial) {
-      void playSfx('meterCelebrate', { cooldownMs: 500, volumeOverride: 0.85 });
-    }
-  }, [humanCelebrating, soundOn, state.isTutorial]);
 
-  // ── Excellence meter step sound — fires on every meter advance
-  const prevPulseRef = useRef(0);
-  const humanPulseId = humanPlayer?.courageRewardPulseId ?? 0;
+  // ── Excellence meter sound — fires when courageRewardPulseId increments.
+  //    Played here (not inside ExcellenceMeter) to avoid collision with the
+  //    card-play 'success' sound that fires at the same moment.
+  //    350ms delay lets the card-play sound finish before the meter sound starts.
+  const prevMeterPulseRef = useRef<number | undefined>(undefined);
   useEffect(() => {
-    const stepped = humanPulseId > 0 && humanPulseId !== prevPulseRef.current;
-    if (stepped && soundOn && !state.isTutorial && !humanCelebrating) {
-      void playSfx('success', { cooldownMs: 0, volumeOverride: 0.55 });
-    }
-    prevPulseRef.current = humanPulseId;
-  }, [humanPulseId, soundOn, state.isTutorial, humanCelebrating]);
+    if (!soundOn || !humanPlayer) return;
+    const pulse = humanPlayer.courageRewardPulseId ?? 0;
+    if (prevMeterPulseRef.current === undefined) { prevMeterPulseRef.current = pulse; return; }
+    if (pulse === prevMeterPulseRef.current) return;
+    prevMeterPulseRef.current = pulse;
+    const isFull = !!humanPlayer.lastCourageCoinsAwarded;
+    const delay = setTimeout(() => {
+      void playSfx(isFull ? 'meterCelebrate' : 'meterBounce', { cooldownMs: 0, volumeOverride: isFull ? 0.85 : 0.55 });
+    }, 350);
+    return () => clearTimeout(delay);
+  }, [humanPlayer?.courageRewardPulseId, soundOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Game win sound — phase transition to game-over
   const prevPhaseRef = useRef(state.phase);
@@ -15036,7 +14935,7 @@ function GameRouter() {
       />
     );
   } else if (playMode === 'local') {
-    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
+    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} onMyThemes={() => setShowMyThemes(true)} preferredName={preferredName} />;
     else {
       switch (state.phase) {
         case 'turn-transition': screen = <TurnTransition />; break;
@@ -15050,7 +14949,7 @@ function GameRouter() {
           screen = <GameOver />;
           break;
         default:
-          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
+          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} onMyThemes={() => setShowMyThemes(true)} preferredName={preferredName} />;
       }
     }
   } else if (playMode === 'tutorial') {
