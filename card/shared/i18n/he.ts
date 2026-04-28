@@ -46,8 +46,8 @@ export const he: Record<string, string> = {
   'equation.commitCardNotInHand': 'קלף התרגיל לא נמצא ביד',
   'equation.invalidCommitCard': 'קלף לא חוקי לתרגיל',
   'equation.invalidOpPosition': 'מיקום קלף פעולה לא חוקי',
-  'equation.chooseJokerOp': 'נא לבחור פעולה לג\'וקר',
-  'equation.regularOpNoJoker': 'קלף פעולה רגיל לא צריך בחירת ג\'וקר',
+  'equation.chooseJokerOp': 'נא לבחור פעולה לסלינדה',
+  'equation.regularOpNoJoker': 'קלף פעולה רגיל לא צריך בחירת סלינדה',
   'equation.tooManyCommits': 'יותר מדי קלפי פעולה בתרגיל',
   'equation.duplicateOpPosition': 'משבצת כפולה בתרגיל',
   'equation.duplicateCommitCard': 'אותו קלף הוגדר פעמיים',
@@ -85,13 +85,13 @@ export const he: Record<string, string> = {
   'draw.cannotDrawNow': 'לא ניתן לשלוף קלף כעת',
 
   'operation.onlyInEquation': 'קלף סימן משולב רק בתוך התרגיל',
-  'joker.onlyInEquation': 'ג\'וקר משולב רק בתוך התרגיל',
+  'joker.onlyInEquation': 'סלינדה משולבת רק בתוך התרגיל',
 
   'call.notAvailable': 'פעולה זו אינה זמינה במשחק',
 
   'labels.player': 'שחקן',
   'labels.wild': 'פרא',
-  'labels.joker': 'ג\'וקר',
+  'labels.joker': 'סלינדה',
   'labels.wildWithValue': 'פרא ({{value}})',
 
   // ── Toasts / status messages ──
@@ -270,7 +270,7 @@ export const he: Record<string, string> = {
   'gameTip.fractionDefend': 'טיפ: הנח קלף שמתחלק ב־{{d}} (או פרא עם ערך כזה), שבר מתאים, או שלוף קלף אחד.',
   'gameTip.identical': 'טיפ: יש לך קלף זהה לערימה — הנח אותו כדי לדלג על הקוביות! ★ יש לך פרא? אפשר להניחו כזהה כשראש הערימה מספר.',
   'gameTip.rollOrMatch': 'טיפ: הטל קוביות או הנח קלף זהה לערימה (אם יש).',
-  'gameTip.opInEquation': 'טיפ: קלף סימן/ג\'וקר משולב בתוך התרגיל כדי להיפטר מהקלף.',
+  'gameTip.opInEquation': 'טיפ: קלף סימן/סלינדה משולב בתוך התרגיל כדי להיפטר מהקלף.',
   'gameTip.buildEquation': 'טיפ: בנה תרגיל ממספרי הקוביות (אפשר 2 או 3 קוביות).',
   'gameTip.pickSum': 'טיפ: בחר קלפים שסכומם {{n}} ולחץ "בחרתי".',
   'gameTip.defaultGuide': 'המשחק ינחה אותך בכל תור.',
@@ -310,11 +310,11 @@ export const he: Record<string, string> = {
   'game.playersHeading': 'שחקנים',
   'game.cardsCount': '{{n}} קלפים',
   'game.opChallenge': 'אתגר פעולה: {{op}}',
-  'game.opChallengeHint': 'הגן/י עם קלף פעולה תואם או ג\'וקר מהיד שלך, או קבל/י עונש של 2 קלפים.',
+  'game.opChallengeHint': 'הגן/י עם קלף פעולה תואם או סלינדה מהיד שלך, או קבל/י עונש של 2 קלפים.',
   'game.takePenalty': 'קבל/י עונש',
   'game.drawCard': 'שלוף קלף',
   'game.endTurn': 'סיים תור',
-  'game.pickJokerOp': 'בחר/י פעולה לג\'וקר',
+  'game.pickJokerOp': 'בחר/י פעולה לסלינדה',
   'game.yourHand': 'היד של {{name}}',
   'game.discardPile': 'ערימה',
   'game.discardEmpty': 'ריק',
@@ -340,7 +340,7 @@ export const he: Record<string, string> = {
   'cardLabel.number': 'מספר',
   'cardLabel.fraction': 'שבר',
   'cardLabel.operation': 'פעולה',
-  'cardLabel.joker': 'ג\'וקר',
+  'cardLabel.joker': 'סלינדה',
   'sound.demoTitle': 'דמו סאונד',
   'sound.demoSubtitle': 'מינימום צלילים, מקסימום אפקט',
   'sound.back': 'חזרה',
@@ -362,7 +362,7 @@ export const he: Record<string, string> = {
   'startScreen.cardTypes': 'סוגי קלפים',
   'startScreen.rule8': '8. קלף שבר: מחלק את הקלף העליון במכנה השבר.',
   'startScreen.rule9': "9. קלף פעולה: מוסיף סימן (+, -, x, ÷) לתרגיל.",
-  'startScreen.rule10': '10. ג\'וקר: בוחרים סימן והוא פועל כקלף פעולה גמיש.',
+  'startScreen.rule10': '10. סלינדה: בוחרים סימן והוא פועל כקלף פעולה גמיש.',
 
   // index.tsx local reducer / toasts
   'local.fractionRoundEndedRoll': 'סבב השברים הסתיים — הטל קוביות',
@@ -493,7 +493,7 @@ export const he: Record<string, string> = {
   'demoSim.logOpen': 'פתיחת מסך שליטה למורה',
 
   // Legacy src/context/GameContext (simplified ruleset)
-  'legacy.opChallengeDefend': 'פעולת {{op}}! שחק/י קלף פעולה תואם או ג\'וקר כדי להגן, או סיים/י תור כדי לשלוף 2 קלפים.',
+  'legacy.opChallengeDefend': 'פעולת {{op}}! שחק/י קלף פעולה תואם או סלינדה כדי להגן, או סיים/י תור כדי לשלוף 2 קלפים.',
   'legacy.opChallengePenalty': "אין הגנה מפני {{op}}! שלפת 2 קלפי עונשין. עכשיו הטל/י קוביות.",
   'legacy.diceNoValidTargets': 'אין מספרים תקינים מהקוביות. שחק/י קלפים מיוחדים או שלוף/י.',
   'legacy.playedThisTurn': 'כבר שיחקת קלפים בתור הזה!',
@@ -509,7 +509,7 @@ export const he: Record<string, string> = {
   'legacy.notOperationCard': 'זה לא קלף פעולה!',
   'legacy.operationPlayed': 'שוחק קלף פעולה {{op}}! סיים/י את התור.',
   'legacy.fractionPlayedMath': 'שוחק {{frac}}! {{top}} ÷ {{denom}} = {{result}}. סיים/י את התור.',
-  'legacy.jokerPlayedAs': 'ג\'וקר שוחק כ-{{op}}! סיים/י את התור.',
+  'legacy.jokerPlayedAs': 'סלינדה שוחק כ-{{op}}! סיים/י את התור.',
   'legacy.endTurnAfterPlay': 'כבר שיחקת קלפים בתור הזה! סיים/י את התור.',
   'legacy.noCardsToDraw': 'אין קלפים לשליפה!',
   'legacy.drewCardCount': 'נשלף קלף. ({{n}} קלפים ביד)',
@@ -527,7 +527,7 @@ export const he: Record<string, string> = {
   'sound.label.complete': 'סיום',
   'sound.label.transition': 'מעבר',
 
-  'joker.banner': '★ ג\'וקר! ★',
+  'joker.banner': '★ סלינדה! ★',
 
   'wildModal.title': 'פרא — בחר/י ערך מתחלק במכנה',
   'game.placeCards': 'בחרתי',
@@ -567,7 +567,7 @@ export const he: Record<string, string> = {
   'fraction.defenseNoSolution': '🤷 אין לנו פתרון הפעם',
   'fraction.counterHint': 'שבר נגדי מותר כהגנה — האתגר עובר לשחקן הבא.',
   'fraction.counterHintDetail':
-    'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלפי עונש. ג\'וקר לא מגין מול שבר.',
+    'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלפי עונש. סלינדה לא מגין מול שבר.',
   'notification.fractionAttack.titleSelf': 'אותגרת בקלף שבר',
   'notification.fractionAttack.bodySelf':
     'הגנה:\n• שים קלף שבר והתור יעבור לשחקן הבא\n• או שים מספר שמתחלק ב־{{penalty}} ומתאים לשבר\n\nהמספר הפעיל באתגר: {{target}}',
@@ -815,7 +815,7 @@ export const he: Record<string, string> = {
   'lab.stats.title': '📊 הסתברות וסטטיסטיקות',
   'lab.stats.desc': 'מסך "סטטיסטיקות והסתברות" — הסבר המודל, תוצאות סימולציה (מונטה קרלו), גרפים והתפלגות.',
   'lab.stats.d1':
-    'חפיסה: 0–25 ב־4 עותקים (104), שברים 1/2–1/5 (18), פעולות (16), ג\'וקרים (4) — סה"כ 142 קלפים. 10 קלפים לשחקן; ניצחון = נשארים עם 2 קלפים ביד.',
+    'חפיסה: 0–25 ב־4 עותקים (104), שברים 1/2–1/5 (18), פעולות (16), סלינדות (4) — סה"כ 142 קלפים. 10 קלפים לשחקן; ניצחון = נשארים עם 2 קלפים ביד.',
   'lab.stats.d2':
     'למה אין נוסחה סגורה: מרחב מצבים ענק (חלוקות קלפים, קוביות, בחירות); התנהגות אסטרטגית. חישוב מדויק לא מעשי — רק סימולציה.',
   'lab.stats.d3':
@@ -861,7 +861,7 @@ export const he: Record<string, string> = {
   'lab.zero.title': '0️⃣ קלף אפס',
   'lab.zero.desc': 'מאפס את תוצאת המשוואה או משנה את המספר המבוקש ל־0.',
   'lab.zero.d1':
-    'גרסה א: מאפס את תוצאת המשוואה ל־0 — השחקן (המשחק או הבא בתור) צריך להניח קלף עם ערך 0 או ג\'וקר.',
+    'גרסה א: מאפס את תוצאת המשוואה ל־0 — השחקן (המשחק או הבא בתור) צריך להניח קלף עם ערך 0 או סלינדה.',
   'lab.zero.d2': 'גרסה ב: קלף שמשנה את "המספר המבוקש" ל־0 בתור — מכניס אלמנט של שליטה וחסימה.',
   'lab.zero.d3': 'מאזן: לא להשתמש יתר על המידה; אפשר להגביל למשל קלף אפס אחד למשחק או לתור.',
 
@@ -934,7 +934,7 @@ export const he: Record<string, string> = {
   'botOffline.explain.defendWild': '{{name}} בחר פרא {{card}} (ערך {{value}}) — מתחלק ב־{{penalty}}.',
   'botOffline.explain.defendPenalty': '{{name}} בלי הגנה מתאימה — שולף קלף עונש אחד.',
   'botOffline.explain.confirmEquation': '{{name}} בנה תרגיל: {{equation}} (יעד {{target}}).',
-  'botOffline.explain.confirmEquationJoker': '{{name}} משתמש/ת בג\'וקר בתור {{op}} בתוך התרגיל.',
+  'botOffline.explain.confirmEquationJoker': '{{name}} משתמש/ת בסלינדה בתור {{op}} בתוך התרגיל.',
   'botOffline.explain.confirmEquationOperation': '{{name}} משלב בתרגיל קלף פעולה מסוג {{op}}.',
   'botOffline.explain.stageCard': '{{name}} מניח מהיד את הקלף {{card}} לתוצאת התרגיל.',
   'botOffline.explain.stageNumber': '{{name}} בוחר קלף מספר {{card}} ומניח לתוצאת התרגיל.',
@@ -980,8 +980,8 @@ export const he: Record<string, string> = {
   'tutorial.lesson1.desc': 'הטילו קוביות, מצאו מספר יעד, והניחו קלפים שמסתכמים בו.',
   'tutorial.lesson2.title': 'קלפי פעולה',
   'tutorial.lesson2.desc': 'השתמשו בקלפי פעולה (+, -, x) במשוואה כדי לפתוח יותר יעדים',
-  'tutorial.lesson3.title': 'הג\'וקר',
-  'tutorial.lesson3.desc': 'הג\'וקר יכול להיות כל פעולה. שימו אותו ובחרו מה הוא יהיה',
+  'tutorial.lesson3.title': 'הסלינדה',
+  'tutorial.lesson3.desc': 'הסלינדה יכול להיות כל פעולה. שימו אותו ובחרו מה הוא יהיה',
   'tutorial.lesson4.title': 'קלף פרא',
   'tutorial.lesson4.desc': 'הקלף הפרא יכול להיות כל מספר 0-25. השתמשו בו להשלמת משוואות מורכבות',
   'tutorial.lesson5.title': 'קלף זהה ושברים',
@@ -995,7 +995,7 @@ export const he: Record<string, string> = {
   'tutorial.bot.staging': 'עכשיו אני מניח קלפים שמתאימים ליעד.',
   'tutorial.bot.endTurn': 'סיימתי עכשיו תורכם.',
   'tutorial.bot.useOperation': 'יש לי קלף פעולה אני שם אותו במשוואה לעוד אפשרויות.',
-  'tutorial.bot.useJoker': 'הג\'וקר שלי יכול להיות כל פעולה אני בוחר את מה שאני צריך.',
+  'tutorial.bot.useJoker': 'הסלינדה שלי יכול להיות כל פעולה אני בוחר את מה שאני צריך.',
   'tutorial.bot.useWild': 'הקלף הפרא שלי יכול להיות כל מספר אני קובע אותו לערך שאני צריך.',
 
   'tutorial.hint.tapReady': 'לחצו על מוכן כדי להתחיל את התור',
@@ -1005,7 +1005,7 @@ export const he: Record<string, string> = {
   'tutorial.hint.confirmStaged': 'לחצו אישור כדי להניח את הקלפים.',
   'tutorial.hint.endTurn': 'לחצו סיום תור כדי לסיים.',
   'tutorial.hint.placeOperation': 'לחצו על קלף הפעולה ושימו אותו במשבצת.',
-  'tutorial.hint.useJoker': 'לחצו על הג\'וקר ובחרו פעולה',
+  'tutorial.hint.useJoker': 'לחצו על הסלינדה ובחרו פעולה',
   'tutorial.hint.useWild': 'לחצו על הקלף הפרא — הוא יכול להיות כל מספר',
   'tutorial.hint.playIdentical': 'יש לכם קלף זהה לראש הערימה לחצו עליו לפני ההטלה.',
   'tutorial.hint.wrongAction': 'לא בדיוק — נסו את הפעולה המודגשת',
@@ -1057,6 +1057,10 @@ export const he: Record<string, string> = {
   'tutorial.l4.botBuild': '...תראו איך אני פותר',
   'tutorial.l4.hintTap': 'לחצו על הקלף שמתאים לתוצאה',
   'tutorial.l4.celebrate': 'מצוין — סיימתם תרגיל ראשון',
+  'tutorial.l4.didYouKnow': 'הידעת?',
+  'tutorial.l4.didYouKnowBestTip': 'זה הטיפ הכי טוב שאני יכול לתת לכם',
+  'tutorial.l4.didYouKnowBody': 'אפשר להפטר מכמה קלפים בתור אחד',
+  'tutorial.l4.didYouKnowCta': 'בוא ננסה',
 
   // שיעור 4ב — השלמת מספר חסר
   'tutorial.l4b.botFillDie': '...נמשיך — השלימו את התרגיל',
@@ -1073,13 +1077,13 @@ export const he: Record<string, string> = {
 
   // שיעור 5 — קלפי פעולה וסלינדה
   'tutorial.l5.title': 'סימני הפעולה',
-  'tutorial.l5.desc': '.בוחרים סימן פעולה לתרגיל — אפשר גם להשתמש בג\'וקר',
+  'tutorial.l5.desc': '.בוחרים סימן פעולה לתרגיל — אפשר גם להשתמש בסלינדה',
   // Step 5.1 (place-op): המישוואה מלאה עם + מוצב מראש בסלוט הסימן.
   // השחקן בוחר קלף פעולה מהיד ומניח אותו במקום כדי להחליף את הסימן.
   'tutorial.l5a.botIntro': 'בואו נניח קלף סימן פעולה בתרגיל',
   'tutorial.l5a.hintChooseCard': 'בחרו קלף פעולה מתאים לתרגיל שתוצאתו {{result}}',
   'tutorial.l5a.hintPressEquation': 'עכשיו בחרו מקום בתרגיל כדי להניח את קלף הפעולה',
-  'tutorial.l5a.celebrate': 'יופי — הנחתם קלף פעולה בתרגיל. נמשיך לג\'וקר',
+  'tutorial.l5a.celebrate': 'יופי — הנחתם קלף פעולה בתרגיל. נמשיך לסלינדה',
   // (ישנים — נשמרים למקרה של קישורים חיצוניים, אבל לא בשימוש בצעדים הנוכחיים.)
   'tutorial.l5a.hintCycle': 'לחצו על כפתור הסימן במשוואה — כל לחיצה מחליפה סימן; עברו על כל ארבעת הסימנים',
   'tutorial.l5op.botIntro': 'עכשיו נתרגל — בחרו את הקלף המתאים מהמניפה והניחו אותו בתרגיל',
@@ -1088,12 +1092,12 @@ export const he: Record<string, string> = {
   'tutorial.l5op.wrong': 'לא הסימן הזה — נסו קלף אחר',
   'tutorial.l5op.correctOne': 'יופי! עכשיו עוד תרגיל',
   'tutorial.l5op.celebrate': 'מצוין — בחרת את הקלף הנכון',
-  'tutorial.l5b.botIntro': 'הכירו את הג\'וקר — יש לו את כל הסימנים',
-  'tutorial.l5b.hintTapJoker': 'לחצו על הג\'וקר',
+  'tutorial.l5b.botIntro': 'הכירו את הסלינדה — יש לו את כל הסימנים',
+  'tutorial.l5b.hintTapJoker': 'לחצו על הסלינדה',
   'tutorial.l5b.hintPickInModal': 'בחרו סימן',
   'tutorial.l5b.hintPlaceSign': 'עכשיו לחצו על המיקום בתרגיל',
-  'tutorial.l5b.wrongSign': 'לא הסימן הנכון — לחצו שוב על הג\'וקר',
-  'tutorial.l5b.celebrate': 'כל הכבוד — הכרתם את הג\'וקר',
+  'tutorial.l5b.wrongSign': 'לא הסימן הנכון — לחצו שוב על הסלינדה',
+  'tutorial.l5b.celebrate': 'כל הכבוד — הכרתם את הסלינדה',
   'tutorial.l5c.botIntro': 'עכשיו נתרגל — לפעמים נותנים תרגיל עם תוצאה ואתם בוחרים את הסימן',
   'tutorial.l5c.hintSolve': 'בחרו את הסימן שמשלים את התרגיל ולחצו אשר',
   'tutorial.l5c.correctOne': 'יופי — ועכשיו עוד תרגיל',
@@ -1104,7 +1108,7 @@ export const he: Record<string, string> = {
   'tutorial.l5.opCardLabel.minus': 'חיסור',
   'tutorial.l5.opCardLabel.mul': 'כפל',
   'tutorial.l5.opCardLabel.div': 'חילוק',
-  'tutorial.l5.jokerLabel': 'ג\'וקר',
+  'tutorial.l5.jokerLabel': 'סלינדה',
 
   // בועת פתיחת ההדרכה — מוצגת לפני השיעור הראשון
   'tutorial.welcome.title': '🎓 ברוכים הבאים להדרכה!',
@@ -1216,7 +1220,7 @@ export const he: Record<string, string> = {
 
   // מסך סיום הדרכה מתקדמת
   'tutorial.advancedComplete.title': '🎉 סיימתם את ההדרכה!',
-  'tutorial.advancedComplete.body': 'הרווחתם 20 מטבעות 🪙',
+  'tutorial.advancedComplete.body': 'קיבלתם 20 מטבעות לבנק 🪙',
   'tutorial.advancedComplete.bodySkipped': 'הפעם לא תקבלו מטבעות 😬',
   'tutorial.advancedComplete.bodyLimitSub': 'כבר הרווחתם מטבעות פעמיים',
   'tutorial.advancedComplete.realGameBtn': 'מוכנים למשחק האמיתי! ›',
@@ -1290,7 +1294,7 @@ export const he: Record<string, string> = {
   'themes.currentCombo': 'שילוב פעיל:',
   'themes.openMyThemes': 'הערכות שלי',
   // In-game Slinda bank
-  'slindaBank.addToHand': '+ ג\'וקר',
+  'slindaBank.addToHand': '+ סלינדה',
   // Coin award notification (5 coins)
   'courage.coinAward.title': '⭐ +5 מטבעות!',
   'courage.coinAward.body': 'מד ההצטיינות התמלא — הרווחת 5 מטבעות!',

@@ -55,9 +55,6 @@ import { disposeSfx, initializeSfx, playSfx, setSfxMuted, setSfxVolume } from '.
 // TEMP: capture full stack trace for TypeError
 const _origConsoleError = console.error;
 const sendDebugLog = (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}) => {
-  // #region agent log
-  fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d877cc'},body:JSON.stringify({sessionId:'d877cc',runId:'initial',hypothesisId,location,message,data,timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 };
 console.error = (...args: any[]) => {
   const first = args[0];
@@ -2622,6 +2619,9 @@ function gameReducer(
     case 'TUTORIAL_FORCE_SOLVED': {
       if (!st.isTutorial) return st;
       const pi = st.currentPlayerIndex;
+      // Always restore the human player (index 1) as current player.
+      // After the bot demo runs CONFIRM_STAGED, currentPlayerIndex shifts to 0
+      // (bot's turn). We must reset it to 1 so the fan shows the human's hand.
       return {
         ...st,
         phase: 'solved',
@@ -2630,9 +2630,10 @@ function gameReducer(
         stagedCards: [],
         hasPlayedCards: false,
         selectedCards: [],
+        currentPlayerIndex: 1,
         players: st.players.map((p, i) => {
-          if (i === pi) return { ...p, hand: action.playerHand };
-          if (i === 1 - pi) return { ...p, hand: action.botHand };
+          if (i === 1) return { ...p, hand: action.playerHand };
+          if (i === 0) return { ...p, hand: action.botHand };
           return p;
         }),
         message: '',
@@ -4248,12 +4249,6 @@ function ResultsStripBelowTable({ resultsOpen, filteredResults, fractionCards = 
       Animated.timing(stripSlide, { toValue: 0, duration: 200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
     ]).start();
   }, [resultsOpen, normalizedResults.length]);
-  useEffect(() => {
-    if (!resultsOpen) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c86de'},body:JSON.stringify({sessionId:'8c86de',runId:'run1',hypothesisId:'H2',location:'index.tsx:2156',message:'ResultsStripBelowTable rendered',data:{resultsOpen,filteredLen:filteredResults.length,filteredResults:filteredResults.map(r=>r.result).slice(0,12)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-  }, [resultsOpen, filteredResults]);
   if (!resultsOpen || (normalizedResults.length === 0 && uniqueFractions.length === 0)) return null;
   return (
     <Animated.View style={{flexShrink:0,width:'100%',alignItems:'center',justifyContent:'center',opacity:stripOpacity,transform:[{translateY:stripSlide}]}}>
@@ -6583,9 +6578,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
   const lastPanDecisionLogAt = useRef(0);
   const pinchLoggedRef = useRef(false);
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H5',location:'index.tsx:SimpleHand.waitingModeEffect',message:'Waiting mode state changed',data:{waitingMode,count:cards.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
   }, [waitingMode, cards.length]);
   useEffect(() => {
     const id = scrollX.addListener(({ value }) => {
@@ -6593,9 +6585,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
       const idx = Math.round(Math.max(0, Math.min(cards.length - 1, value)));
       if (idx !== lastCenterIdx.current) {
         lastCenterIdx.current = idx;
-        // #region agent log
-        fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H4',location:'index.tsx:SimpleHand.scrollXListener',message:'Center card index changed',data:{idx,cardsLength:cards.length,scrollValue:value},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         setCenterIdx(idx);
         onCenterCard?.(cards[idx] ?? null);
         // Only count as a tutorial "fan scrolled" event when the change came
@@ -6644,9 +6633,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
   }, [scrollX, cards]);
 
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H4',location:'index.tsx:SimpleHand.countReset',message:'Hand reset due to card count change',data:{count,waitingMode},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     scrollX.setValue(0);
     scrollRef.current = 0;
     lastCenterIdx.current = 0;
@@ -6684,9 +6670,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (evt, gs) => {
         if (evt.nativeEvent.touches.length >= 2) {
-          // #region agent log
-          fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H2',location:'index.tsx:SimpleHand.onMoveShouldSetPanResponder',message:'PanResponder activated for pinch touches',data:{touches:evt.nativeEvent.touches.length,dx:gs.dx,dy:gs.dy},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           return true;
         }
         // Only activate on a clear horizontal swipe.
@@ -6696,9 +6679,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         const now = Date.now();
         if (now - lastPanDecisionLogAt.current > 250) {
           lastPanDecisionLogAt.current = now;
-          // #region agent log
-          fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H1',location:'index.tsx:SimpleHand.onMoveShouldSetPanResponder',message:'Pan decision sampled',data:{shouldSet,dx:gs.dx,dy:gs.dy,dragThreshold:FAN_DRAG_START_DX},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
         }
         return shouldSet;
       },
@@ -6721,9 +6701,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
           clearTimeout(userScrollGestureClearTimerRef.current);
           userScrollGestureClearTimerRef.current = null;
         }
-        // #region agent log
-        fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H3',location:'index.tsx:SimpleHand.onPanResponderGrant',message:'Gesture started',data:{scrollStart:scrollRef.current,count:maxIdxRef.current + 1},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
       },
       onPanResponderMove: (evt, gs) => {
         const touches = evt.nativeEvent.touches;
@@ -6740,9 +6717,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
             pinchStartSpacing.current = spacingRef.current;
             if (!pinchLoggedRef.current) {
               pinchLoggedRef.current = true;
-              // #region agent log
-              fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H2',location:'index.tsx:SimpleHand.onPanResponderMove',message:'Pinch mode entered',data:{dist,pinchStartSpacing:spacingRef.current,touches:touches.length,count:maxIdxRef.current + 1},timestamp:Date.now()})}).catch(()=>{});
-              // #endregion
             }
           } else {
             const scale = dist / pinchStartDist.current;
@@ -6763,9 +6737,6 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         scrollX.setValue(next);
       },
       onPanResponderRelease: (_, gs) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'e973b2'},body:JSON.stringify({sessionId:'e973b2',runId:'run1',hypothesisId:'H3',location:'index.tsx:SimpleHand.onPanResponderRelease',message:'Gesture released',data:{vx:gs.vx,dx:gs.dx,isPinching:isPinching.current,scrollAtRelease:scrollRef.current},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         if (isPinching.current) { isPinching.current = false; snapRef.current(); return; }
         velocityRef.current = gs.vx * 0.25;
         if (Math.abs(velocityRef.current) > 0.02) momentumRef.current();
@@ -7151,9 +7122,6 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
   const cp = state.players[handPlayerIndex];
   if (!cp) return null;
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H3',location:'index.tsx:PlayerHand.useEffect',message:'PlayerHand state snapshot',data:{phase:state.phase,currentPlayerIndex:state.currentPlayerIndex,handPlayerIndex,isOnlineWaiting,handCount:cp.hand.length,hasPlayedCards:state.hasPlayedCards},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
   }, [state.phase, state.currentPlayerIndex, handPlayerIndex, isOnlineWaiting, cp.hand.length, state.hasPlayedCards]);
   const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
   const td = state.discardPile[state.discardPile.length-1];
@@ -7268,18 +7236,12 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
     // (L5.1 (place-op) expects the learner to pick an operation card from
     // the fan, so fan-tap blocking was removed when cycle-signs was retired.)
     if (isOnlineWaiting) {
-      // #region agent log
-      fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H3',location:'index.tsx:PlayerHand.tap',message:'Tap blocked by online waiting',data:{cardId:card.id,cardType:card.type,phase:state.phase,currentPlayerIndex:state.currentPlayerIndex,handPlayerIndex},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       return;
     }
     // במשחק מול הבוט — חסימת לחיצות על קלפים כשהבוט במהלכו
     if (isLocalBotTurn) return;
     console.log('CARD TAP', card.id, card.type, card.type==='operation'?card.operation:'', 'phase=', state.phase, 'hp=', state.hasPlayedCards);
     if (state.hasPlayedCards) {
-      // #region agent log
-      fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H5',location:'index.tsx:PlayerHand.tap',message:'Tap blocked by hasPlayedCards',data:{cardId:card.id,cardType:card.type,phase:state.phase},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       console.log('BLOCKED: hasPlayedCards'); return;
     }
     if (soundOn) playCardSelectSound();
@@ -12191,9 +12153,6 @@ function GameScreen() {
   // Possible results toggle: לחיצה ראשונה — הצגת מיני קלפים + ONB; לחיצה שנייה — הסתרה
   const toggleResultsBadges = useCallback(() => {
     playMiniResultTapSound();
-    // #region agent log
-    fetch('http://127.0.0.1:7639/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c86de'},body:JSON.stringify({sessionId:'8c86de',runId:'run1',hypothesisId:'H3',location:'index.tsx:5842',message:'toggleResultsBadges pressed',data:{resultsOpen,validTargetsLen:state.validTargets.length,phase:state.phase,hasPlayedCards:state.hasPlayedCards},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (resultsOpen) {
       setResultsChipBoostedPulse(false);
       setResultsOpenState(false);
@@ -12703,9 +12662,6 @@ function GameScreen() {
   const topControlsTop = safe.insets.top || 6;
   const botOverlayTopOffset = topControlsTop + 86;
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7552/ingest/c8839a92-328d-4866-8346-19418994ade4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ebb754'},body:JSON.stringify({sessionId:'ebb754',runId:'run1',hypothesisId:'H1',location:'index.tsx:GameScreen.useEffect',message:'Hand layout constants',data:{HAND_INNER_HEIGHT,HAND_STRIP_HEIGHT,HAND_BOTTOM_OFFSET,HAND_ZONE_TOP,bottomPad,phase:state.phase,players:state.players.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
   }, [bottomPad, state.phase, state.players.length]);
   return (
     <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }}>
@@ -14836,7 +14792,6 @@ function GameRouter() {
   useEffect(() => {
     const justAwarded = humanCelebrating && !prevCourageAwardedRef.current;
     prevCourageAwardedRef.current = humanCelebrating;
-    console.warn('[sfx-debug] meterCelebrate effect: humanCelebrating=', humanCelebrating, 'justAwarded=', justAwarded, 'soundOn=', soundOn, 'isTutorial=', state.isTutorial);
     if (justAwarded && soundOn && !state.isTutorial) {
       void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.85 });
     }
@@ -14847,9 +14802,8 @@ function GameRouter() {
   const humanPulseId = humanPlayer?.courageRewardPulseId ?? 0;
   useEffect(() => {
     const stepped = humanPulseId > 0 && humanPulseId !== prevPulseRef.current;
-    console.warn('[sfx-debug] meterStep effect: pulseId=', humanPulseId, 'prev=', prevPulseRef.current, 'stepped=', stepped, 'celebrating=', humanCelebrating, 'soundOn=', soundOn);
     if (stepped && soundOn && !state.isTutorial && !humanCelebrating) {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.85 });
+      void playSfx('success', { cooldownMs: 0, volumeOverride: 0.55 });
     }
     prevPulseRef.current = humanPulseId;
   }, [humanPulseId, soundOn, state.isTutorial, humanCelebrating]);
@@ -14857,7 +14811,6 @@ function GameRouter() {
   // ── Game win sound — phase transition to game-over
   const prevPhaseRef = useRef(state.phase);
   useEffect(() => {
-    console.warn('[sfx-debug] gameWin effect: phase=', state.phase, 'prevPhase=', prevPhaseRef.current, 'soundOn=', soundOn);
     if (state.phase === 'game-over' && prevPhaseRef.current !== 'game-over' && soundOn) {
       void playSfx('gameWin', { cooldownMs: 0, volumeOverride: 0.9 });
     }
