@@ -132,6 +132,9 @@ export type UserEvent =
   /** Lesson 8 (identical card): fires when the learner taps a matching card
    *  in pre-roll, triggering PLAY_IDENTICAL. */
   | { kind: 'identicalPlayed' }
+  /** Lesson 9 (identical-single intro): fires when the learner taps "בוא ננסה"
+   *  on the קלף זהה intro overlay, advancing to the actual play step. */
+  | { kind: 'identicalSingleAck' }
   /** Lesson 10 (multi-play intro): fires when the learner taps "בוא ננסה"
    *  on the הידעת? overlay, advancing to the actual play step. */
   | { kind: 'identicalMultiAck' };

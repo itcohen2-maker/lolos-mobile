@@ -535,7 +535,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     advancedCompleteProcessedRef.current = true;
     if (skipCount > 2) return;
     setTutorialCoinsEarnedCount((prev) => {
-      if (prev >= 2) return prev;
       const next = prev + 1;
       void AsyncStorage.setItem(TUTORIAL_COINS_KEY, String(next));
       void supabase.rpc('award_coins', { p_amount: 20, p_source: 'tutorial_advanced' });
@@ -1872,26 +1871,13 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     });
   }, [engine.lessonIndex, engine.phase, l9Stage]);
 
-  // ── L9 stage 1→2: equation confirmed correctly → unlock fan for card play ──
-  useEffect(() => {
-    if (engine.lessonIndex !== MIMIC_IDENTICAL_LESSON_INDEX || engine.phase !== 'await-mimic' || l9Stage !== 1) return;
-    return tutorialBus.subscribeUserEvent((e) => {
-      if (e.kind === 'l6CopyConfirmed') setL9Stage(2);
-    });
-  }, [engine.lessonIndex, engine.phase, l9Stage]);
-
-  // ── L9 stage 1: enable manual eq confirm so the "אשר" button is visible. ──
+  // ── L9 stage 1: equation confirmed correctly → lesson outcome fires directly ──
+  // The lesson outcome is now `l6CopyConfirmed`, so emitting it from tutorialBus
+  // triggers OUTCOME_MATCHED in the engine → celebrate phase with כל הכבוד bubble.
   useEffect(() => {
     const on = engine.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX && engine.phase === 'await-mimic' && l9Stage === 1;
     tutorialBus.setManualEqConfirm(on);
     return () => tutorialBus.setManualEqConfirm(false);
-  }, [engine.lessonIndex, engine.phase, l9Stage]);
-
-  // ── L9 stage 2: enable L4Step3Mode so the "בחרתי" button emits userPlayedCards ──
-  useEffect(() => {
-    if (engine.lessonIndex !== MIMIC_IDENTICAL_LESSON_INDEX || engine.phase !== 'await-mimic' || l9Stage !== 2) return;
-    tutorialBus.setL4Step3Mode(true);
-    return () => tutorialBus.setL4Step3Mode(false);
   }, [engine.lessonIndex, engine.phase, l9Stage]);
 
 
@@ -2049,10 +2035,11 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     return () => clearInterval(id);
   }, [engine.lessonIndex, engine.phase, gameDispatch, l7CompletedExercises]);
 
-  // ── Lesson 7: outcome check — confirm when learner solved with right-side
-  //    parentheses. We prefer the LIVE right-side result from EquationBuilder
-  //    (more forgiving if the learner explores mini-cards), then fallback to
-  //    the seeded lesson target. ──
+  // ── Lesson 7: outcome check — two-exercise flow.
+  //    Exercise 1 (l7CompletedExercises === 0): parens-only — learner moves parens.
+  //      On correct confirm → increment counter + revert to building for exercise 2.
+  //    Exercise 2 (l7CompletedExercises === 1): full equation — learner fills all.
+  //      On correct confirm → emit l7ParensCopyConfirmed → lesson advances. ──
   useEffect(() => {
     if (engine.lessonIndex !== MIMIC_PARENS_LESSON_INDEX) return;
     if (engine.phase !== 'await-mimic') return;
@@ -2062,11 +2049,20 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     const liveRight = tutorialBus.getL7ParensResults()?.right ?? null;
     const expected = liveRight ?? l7ExerciseRef.current.target;
     if (parensRight && got === expected) {
-      tutorialBus.emitUserEvent({ kind: 'l7ParensCopyConfirmed' });
+      if (l7CompletedExercises === 0) {
+        // Exercise 1 done — set up exercise 2
+        l7CompletedExercisesRef.current = 1;
+        setL7CompletedExercises(1);
+        setParensIntroStage(0);
+        gameDispatch({ type: 'REVERT_TO_BUILDING' });
+      } else {
+        // Exercise 2 done — advance lesson
+        tutorialBus.emitUserEvent({ kind: 'l7ParensCopyConfirmed' });
+      }
     } else if (got != null) {
       tutorialBus.emitUserEvent({ kind: 'l7ParensCopyMismatch', expected, got });
     }
-  }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.equationResult, gameDispatch]);
+  }, [engine.lessonIndex, engine.phase, gameState?.phase, gameState?.equationResult, gameDispatch, l7CompletedExercises]);
 
   // ── L7→L9 boundary cleanup: once we actually leave parens, reset solved
   //    staging so the next lesson starts from a clean "building" board. ──
@@ -2178,6 +2174,11 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (engine.lessonIndex >= MIMIC_FIRST_FRACTION_LESSON_INDEX &&
         engine.lessonIndex < MIMIC_PARENS_LESSON_INDEX &&
         engine.stepIndex === 0) {
+      dispatchEngine({ type: 'CELEBRATE_DONE' });
+      return;
+    }
+    // L10 (single identical) step 0 (intro overlay): skip celebrate instantly.
+    if (engine.lessonIndex === MIMIC_SINGLE_IDENTICAL_LESSON_INDEX && engine.stepIndex === 0) {
       dispatchEngine({ type: 'CELEBRATE_DONE' });
       return;
     }
@@ -2346,10 +2347,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       ? 'tutorial.l9.selectMini'
       : null;
   const l9BuildEqKey: string | null = null;
-  const l9ChooseCardKey: string | null =
-    isL9Lesson && engine.phase === 'await-mimic' && l9Stage === 2
-      ? 'tutorial.l9.chooseCard'
-      : null;
+  const l9ChooseCardKey: string | null = null; // stage 2 removed — lesson ends on l6CopyConfirmed
   const isL7ParensAwait = engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX && engine.phase === 'await-mimic';
   const l7MismatchHintKey: string | null = isL7ParensAwait && l7Mismatch ? 'tutorial.l8.mismatch' : null;
   // Fractions intro step uses custom dedicated bubbles — suppress default bubble.
@@ -2418,9 +2416,15 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     engine.lessonIndex < MIMIC_PARENS_LESSON_INDEX;
   const isParensLesson = engine.lessonIndex === MIMIC_PARENS_LESSON_INDEX;
   const isIdenticalLesson = engine.lessonIndex === MIMIC_IDENTICAL_LESSON_INDEX;
+  const isL10Intro = engine.lessonIndex === MIMIC_SINGLE_IDENTICAL_LESSON_INDEX &&
+    engine.stepIndex === 0 &&
+    (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
   const isL11Intro = engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
     engine.stepIndex === 0 &&
     (engine.phase === 'await-mimic' || engine.phase === 'bot-demo');
+  // Top discard card value — used by the L10 intro overlay mockup.
+  const l10TopDiscard = gameState?.discardPile?.[gameState.discardPile.length - 1];
+  const l10TopDiscardValue = l10TopDiscard?.value ?? '?';
 
   // Step progress indicator:
   // first step in a lesson shows "N"; additional steps show "N.1", "N.2"...
@@ -3025,6 +3029,55 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
           </TouchableOpacity>
         </>
       ) : null}
+
+      {/* L10 (single identical) step 0: "קלף זהה" intro overlay with discard mockup */}
+      {isL10Intro && (
+        <View
+          pointerEvents="auto"
+          style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(5,10,22,0.93)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            paddingHorizontal: 32,
+          }}
+        >
+          <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#fde68a', marginBottom: 8, textAlign: 'center' }}>
+            {t('tutorial.l9.intro.title')}
+          </Text>
+          <Text style={{ fontSize: 14, color: '#d1d5db', textAlign: 'center', marginBottom: 20, lineHeight: 22 }}>
+            {t('tutorial.l9.intro.desc')}
+          </Text>
+          {/* Mockup: discard pile top card → matching hand card */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24, gap: 16 }}>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{t('tutorial.identicalPracticeMockupDiscard')}</Text>
+              <View style={{ width: 52, height: 72, backgroundColor: '#374151', borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#f59e0b' }}>
+                <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#fde68a' }}>{l10TopDiscardValue}</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 24, color: '#9ca3af' }}>→</Text>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{t('tutorial.identicalPracticeMockupHand')}</Text>
+              <View style={{ width: 52, height: 72, backgroundColor: '#1e3a5f', borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#3b82f6' }}>
+                <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#93c5fd' }}>{l10TopDiscardValue}</Text>
+              </View>
+            </View>
+          </View>
+          {engine.phase === 'await-mimic' && (
+            <TouchableOpacity
+              style={{ backgroundColor: '#f59e0b', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32 }}
+              onPress={() => tutorialBus.emitUserEvent({ kind: 'identicalSingleAck' })}
+            >
+              <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 16 }}>
+                {t('tutorial.l9.introContinue')}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* L11 (multi-play) step 0: "הידעת?" intro overlay */}
       {isL11Intro && (
@@ -3665,7 +3718,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               }}
             >
               <Text style={{ color: '#FFFFFF', fontWeight: '900', fontSize: 16 }}>
-                {locale === 'he' ? 'הדרכה מתקדמים' : 'Advanced Tutorial'}
+                {locale === 'he' ? 'הדרכת מיתקדמים' : 'Advanced Tutorial'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -3860,15 +3913,13 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             <Text style={{ color: '#FEF3C7', fontSize: 26, fontWeight: '900', textAlign: 'center' }}>
               {t('tutorial.advancedComplete.title')}
             </Text>
-            {(skipCount > 2 || tutorialCoinsEarnedCount >= 2) ? (
+            {skipCount > 2 ? (
               <>
                 <Text style={{ color: '#FCA5A5', fontSize: 20, fontWeight: '800', textAlign: 'center' }}>
                   {t('tutorial.advancedComplete.bodySkipped')}
                 </Text>
                 <Text style={{ color: '#FCA5A5', fontSize: 13, fontWeight: '600', textAlign: 'center', opacity: 0.75, marginTop: -6 }}>
-                  {tutorialCoinsEarnedCount >= 2
-                    ? t('tutorial.advancedComplete.bodyLimitSub')
-                    : t('tutorial.coreComplete.bodySkippedSub')}
+                  {t('tutorial.coreComplete.bodySkippedSub')}
                 </Text>
               </>
             ) : (

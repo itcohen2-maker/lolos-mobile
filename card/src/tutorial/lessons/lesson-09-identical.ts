@@ -12,6 +12,18 @@ export const lesson09Identical: Lesson = {
   descKey: 'tutorial.l10.desc',
   steps: [
     {
+      // Step 0 — intro mockup showing the identical card concept.
+      // InteractiveTutorialScreen renders the overlay; outcome fires when
+      // the learner taps "בוא ננסה". Game is already rigged (pre-roll + matching card)
+      // so the overlay can display the actual top-of-pile card value.
+      id: 'identical-single-intro',
+      botDemo: async (api) => {
+        await api.wait(500);
+      },
+      outcome: (e) => e.kind === 'identicalSingleAck',
+    },
+    {
+      // Step 1 — learner taps the matching card in pre-roll to skip dice.
       id: 'identical-single-play',
       botDemo: async (api) => {
         await api.wait(1000);
