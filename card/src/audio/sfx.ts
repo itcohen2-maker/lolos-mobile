@@ -7,7 +7,11 @@ export type SfxKey =
   | 'errorSoft'
   | 'start'
   | 'complete'
-  | 'transition';
+  | 'transition'
+  | 'meterCelebrate'
+  | 'timerTick'
+  | 'timerEnd'
+  | 'gameWin';
 
 type SfxState = {
   sound: Audio.Sound | null;
@@ -23,6 +27,10 @@ const SOURCES: Record<SfxKey, number> = {
   start: require('../../assets/sounds/sfx_ui_start.wav'),
   complete: require('../../assets/sounds/sfx_ui_complete.wav'),
   transition: require('../../assets/sounds/sfx_ui_transition.wav'),
+  meterCelebrate: require('../../assets/sounds/sfx_meter_celebrate.mp3'),
+  timerTick: require('../../assets/sounds/bubble_mid.wav'),
+  timerEnd: require('../../assets/sounds/bubble_end.wav'),
+  gameWin: require('../../assets/sounds/sfx_game_win.wav'),
 };
 
 const REGISTRY: Record<SfxKey, SfxState> = {
@@ -33,6 +41,10 @@ const REGISTRY: Record<SfxKey, SfxState> = {
   start: { sound: null, loading: false, lastPlayedAt: 0 },
   complete: { sound: null, loading: false, lastPlayedAt: 0 },
   transition: { sound: null, loading: false, lastPlayedAt: 0 },
+  meterCelebrate: { sound: null, loading: false, lastPlayedAt: 0 },
+  timerTick: { sound: null, loading: false, lastPlayedAt: 0 },
+  timerEnd: { sound: null, loading: false, lastPlayedAt: 0 },
+  gameWin: { sound: null, loading: false, lastPlayedAt: 0 },
 };
 
 let initialized = false;
@@ -41,7 +53,7 @@ let volume = 0.33;
 
 async function ensureAudioMode(): Promise<void> {
   await Audio.setAudioModeAsync({
-    playsInSilentModeIOS: false,
+    playsInSilentModeIOS: true,
     staysActiveInBackground: false,
     shouldDuckAndroid: true,
     playThroughEarpieceAndroid: false,
@@ -65,9 +77,7 @@ async function ensureLoaded(key: SfxKey): Promise<Audio.Sound | null> {
     slot.sound = sound;
     return sound;
   } catch (error) {
-    if (__DEV__) {
-      console.warn('[sfx] failed to load', key, error);
-    }
+    if (__DEV__) console.warn('[sfx] failed to load', key, error);
     return null;
   } finally {
     slot.loading = false;
@@ -112,12 +122,11 @@ export async function playSfx(
     }
     const nextVolume = options?.volumeOverride ?? volume;
     await sound.setVolumeAsync(nextVolume);
+    await sound.stopAsync().catch(() => {});
     await sound.setPositionAsync(0);
     await sound.playAsync();
   } catch (error) {
-    if (__DEV__) {
-      console.warn('[sfx] play failed', key, error);
-    }
+    if (__DEV__) console.warn('[sfx] play failed', key, error);
   }
 }
 
