@@ -142,22 +142,7 @@ export default function ExcellenceMeter({
     setTimeout(() => animFill(100, 300), 280);
   }, [scaleX, scaleY, transY, rot, glow, party, fireSplash, animFill]);
 
-  // ── Sound: fires on every value change ───────────────────────────
-  const prevValueForSound = useRef(value);
-  useEffect(() => {
-    const prev = prevValueForSound.current;
-    prevValueForSound.current = value;
-    if (prev === value) return;
-    if (prev === 66 && value === 0) {
-      // meter filled and reset → celebrate sound
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
-    } else if (value > prev) {
-      // step up → bounce sound
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
-    }
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Animation: fires on pulseKey change ──────────────────────────
+  // ── Animation + sound on pulseKey change ─────────────────────────
   useEffect(() => {
     if (pulseKey === undefined || pulseKey === prevPulse.current) {
       prevValue.current = value;
@@ -169,8 +154,10 @@ export default function ExcellenceMeter({
     prevValue.current = value;
 
     if (celebrate) {
+      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
       playCelebrate();
     } else {
+      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
       animFill(value, 420);
       playBounce();
     }
