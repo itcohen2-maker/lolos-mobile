@@ -147,14 +147,7 @@ export default function ExcellenceMeter({
       prevValue.current = value;
       return;
     }
-    const isFirstMount = prevPulse.current === undefined;
     prevPulse.current = pulseKey;
-
-    if (isFirstMount) {
-      // Initial mount: just sync the fill silently, no animation or sound.
-      prevValue.current = value;
-      return;
-    }
 
     // Detect celebration: meter stepped from 66 → reset to 0 (isCelebrating flag)
     const celebrate = isCelebrating || (prevValue.current === 66 && value === 0);
