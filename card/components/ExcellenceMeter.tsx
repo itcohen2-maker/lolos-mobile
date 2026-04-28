@@ -3,6 +3,10 @@ import { View, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { playSfx } from '../src/audio/sfx';
 
+// Tracks the last pulse that triggered a full animation+sound sequence.
+// Prevents double-play: TurnTransition fires first → GameScreen remount skips.
+let _lastAnimatedPulse: number | undefined = undefined;
+
 
 // Drop positions matching the HTML (dx/dy in px, from bottom-center of fill)
 const DROP_CONFIGS = [
@@ -109,7 +113,7 @@ export default function ExcellenceMeter({
 
   // ── Celebration (meter filled → double-jump + party) ─────────────
   const playCelebrate = useCallback(() => {
-    void playSfx('meterCelebrate', { cooldownMs: 500, volumeOverride: 0.85 });
+    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
     [scaleX, scaleY, transY, rot, glow, party].forEach(a => a.stopAnimation());
     scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); rot.setValue(0); glow.setValue(0); party.setValue(0);
 
@@ -149,6 +153,13 @@ export default function ExcellenceMeter({
       return;
     }
 
+    // Skip if TurnTransition already played this pulse — GameScreen remount should be silent
+    if (_lastAnimatedPulse === pulseKey) {
+      prevPulse.current = pulseKey;
+      prevValue.current = value;
+      return;
+    }
+    _lastAnimatedPulse = pulseKey;
     prevPulse.current = pulseKey;
 
     // Detect celebration: meter stepped from 66 → reset to 0 (isCelebrating flag)
