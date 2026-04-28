@@ -3,10 +3,6 @@ import { View, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { playSfx } from '../src/audio/sfx';
 
-// Prevents double animation+sound when GameScreen remounts after TurnTransition.
-let _lastAnimatedPulse: number | undefined = undefined;
-
-
 // Drop positions matching the HTML (dx/dy in px, from bottom-center of fill)
 const DROP_CONFIGS = [
   { dx: -22, dy: -50 },
@@ -112,7 +108,6 @@ export default function ExcellenceMeter({
 
   // ── Celebration (meter filled → double-jump + party) ─────────────
   const playCelebrate = useCallback(() => {
-    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
     [scaleX, scaleY, transY, rot, glow, party].forEach(a => a.stopAnimation());
     scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); rot.setValue(0); glow.setValue(0); party.setValue(0);
 
@@ -145,28 +140,18 @@ export default function ExcellenceMeter({
     setTimeout(() => animFill(100, 300), 280);
   }, [scaleX, scaleY, transY, rot, glow, party, fireSplash, animFill]);
 
-  // ── Animation + sound on pulseKey change ─────────────────────────
+  // ── Animation on pulseKey change ─────────────────────────────────
   useEffect(() => {
     if (pulseKey === undefined || pulseKey === prevPulse.current) {
       prevValue.current = value;
       return;
     }
-    if (_lastAnimatedPulse === pulseKey) {
-      prevPulse.current = pulseKey;
-      prevValue.current = value;
-      return;
-    }
-    _lastAnimatedPulse = pulseKey;
     prevPulse.current = pulseKey;
-
     const celebrate = isCelebrating || (prevValue.current === 66 && value === 0);
     prevValue.current = value;
-
     if (celebrate) {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
       playCelebrate();
     } else {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
       animFill(value, 420);
       playBounce();
     }
