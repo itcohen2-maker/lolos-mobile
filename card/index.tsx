@@ -86,6 +86,7 @@ import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from 
 import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
 import { displayFontFamily } from './src/theme/fonts';
 import { ThemeProvider, useActiveTheme } from './src/theme/ThemeContext';
+import { resolveGameTableSurface } from './src/theme/gameTableSurface';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -8151,6 +8152,12 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const bottomPad = safe.SAFE_BOTTOM_PAD || 12;
   const PLAY_BTN_H = 56;
   const totalBottomH = MENU_H + PLAY_BTN_H + bottomPad;
+  const TOP_ACTIONS_TOP = safe.insets.top || 12;
+  // Reserve enough vertical space for the absolute top action buttons
+  // so they never overlap the Salinda hero image.
+  // Includes two stacked button rows (shop/themes + rules) plus wrap safety.
+  const TOP_ACTIONS_H = 136;
+  const HERO_TOP = TOP_ACTIONS_TOP + TOP_ACTIONS_H + 8;
   // תמונת סלינדה — גודל מקורי במסך ברוכים הבאים
   // Shrink hero joker card by ~1/3 to free vertical space for scrolling.
   const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * (2 / 3);
@@ -8598,7 +8605,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent' }}>
       {/* כפתור חזרה + חוקים — בצד למעלה */}
-      <View style={{ position: 'absolute', top: safe.insets.top || 12, left: 16, right: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', zIndex: 20, flexWrap: 'wrap', gap: 8 }}>
+      <View style={{ position: 'absolute', top: TOP_ACTIONS_TOP, left: 16, right: 16, minHeight: TOP_ACTIONS_H, flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', zIndex: 20, flexWrap: 'wrap', gap: 8 }}>
         {onBackToChoice && (
           <LulosButton text={t('lobby.backToMode')} color="blue" width={130} height={38} fontSize={11} onPress={onBackToChoice} />
         )}
@@ -9168,7 +9175,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
         </View>
       )}
       {/* סלינדה — מוצמדת מתחת לשורת הכפתורים העליונה (top + buttons + margin) */}
-      <View style={{ alignItems: 'center', justifyContent: 'flex-start', paddingTop: (safe.insets.top || 12) + 50 }}>
+      <View style={{ alignItems: 'center', justifyContent: 'flex-start', paddingTop: HERO_TOP }}>
         <Animated.View style={{
           transform: [{ translateY: bounceAnim }],
           width: JOKER_SIZE,
@@ -9187,7 +9194,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
       </View>
 
       {/* Bottom menu — הגלילה מתחילה מתחת לסלינדה ומשתרעת עד לתחתית */}
-      <View style={{ position: 'absolute', top: (safe.insets.top || 12) + 50 + JOKER_SIZE + 10, bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: 'transparent', zIndex: 10 }}>
+      <View style={{ position: 'absolute', top: HERO_TOP + JOKER_SIZE + 10, bottom: 0, left: 0, right: 0, paddingHorizontal: 20, paddingBottom: bottomPad, backgroundColor: 'transparent', zIndex: 10 }}>
         <Animated.ScrollView
           style={{ maxHeight: '100%', backgroundColor: 'transparent' }}
           contentContainerStyle={{ paddingTop: WHEEL_PADDING_V, paddingBottom: WHEEL_PADDING_V }}
@@ -10481,7 +10488,7 @@ function TurnTransition() {
               <ExcellenceMeter
                 value={hp.courageMeterPercent ?? 0}
                 pulseKey={hp.courageRewardPulseId ?? 0}
-                isCelebrating={!!hp.lastCourageCoinsAwarded}
+                isCelebrating={state.lastCourageCoinsAwarded}
                 compact
               />
             </View>
@@ -12593,18 +12600,7 @@ function GameScreen() {
       )}
       {/* שולחן — ניתן לשינוי דרך ערכות נושא. */}
       {!state.isTutorial && (
-        activeTableSkin ? (
-          <Image
-            source={activeTableSkin.image}
-            resizeMode="contain"
-            style={{
-              position: 'absolute',
-              width: '100%',
-              height: '100%',
-              opacity: 1,
-            }}
-          />
-        ) : table.image ? (
+        table.image ? (
           <ImageBackground source={table.image} resizeMode="cover" style={[StyleSheet.absoluteFill, { backgroundColor: table.imageTint, opacity: 0.85 }]} />
         ) : (
           <LinearGradient colors={table.gradient!} style={[StyleSheet.absoluteFill, { opacity: 0.75 }]} />
@@ -12675,7 +12671,7 @@ function GameScreen() {
               <ExcellenceMeter
                 value={hp.courageMeterPercent ?? 0}
                 pulseKey={hp.courageRewardPulseId ?? 0}
-                isCelebrating={!!hp.lastCourageCoinsAwarded}
+                isCelebrating={state.lastCourageCoinsAwarded}
                 compact
               />
             </View>
@@ -12804,7 +12800,7 @@ function GameScreen() {
       <View style={{position:'absolute',top:EQUATION_TABLE_TOP,left:17,right:7,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0,transform:[{translateX:EQUATION_TABLE_SHIFT_X}]}}>
         <View style={{flex:1,minWidth:0,justifyContent:'flex-end',paddingBottom:75}}>
           <ImageBackground
-            source={pokerTableImg}
+            source={resolveGameTableSurface(activeTableSkin?.image ?? null, pokerTableImg) as any}
             style={{
               alignSelf:'center',
               width:'100%',
@@ -14687,27 +14683,6 @@ function GameRouter() {
   useEffect(() => {
     void initializeSfx();
   }, []);
-
-  const humanPlayer = state.players.find(p => !p.isBot) ?? (state.players.length === 1 ? state.players[0] : null);
-  const humanCelebrating = !!humanPlayer?.lastCourageCoinsAwarded;
-
-  // ── Excellence meter sound — fires when courageRewardPulseId increments.
-  //    Played here (not inside ExcellenceMeter) to avoid collision with the
-  //    card-play 'success' sound that fires at the same moment.
-  //    350ms delay lets the card-play sound finish before the meter sound starts.
-  const prevMeterPulseRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (!soundOn || !humanPlayer) return;
-    const pulse = humanPlayer.courageRewardPulseId ?? 0;
-    if (prevMeterPulseRef.current === undefined) { prevMeterPulseRef.current = pulse; return; }
-    if (pulse === prevMeterPulseRef.current) return;
-    prevMeterPulseRef.current = pulse;
-    const isFull = !!humanPlayer.lastCourageCoinsAwarded;
-    const delay = setTimeout(() => {
-      void playSfx(isFull ? 'meterCelebrate' : 'meterBounce', { cooldownMs: 0, volumeOverride: isFull ? 0.85 : 0.55 });
-    }, 350);
-    return () => clearTimeout(delay);
-  }, [humanPlayer?.courageRewardPulseId, soundOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Game win sound — phase transition to game-over
   const prevPhaseRef = useRef(state.phase);

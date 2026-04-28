@@ -3,6 +3,11 @@ import { View, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { playSfx } from '../src/audio/sfx';
 
+// Module-level: tracks the last pulseKey that triggered animation.
+// Prevents double-animation when multiple instances mount with the same pulseKey
+// (e.g. TurnTransition mounts → animates → GameScreen remounts → should skip).
+let _lastAnimatedPulse: number | undefined = undefined;
+
 // Drop positions matching the HTML (dx/dy in px, from bottom-center of fill)
 const DROP_CONFIGS = [
   { dx: -22, dy: -50 },
@@ -147,6 +152,15 @@ export default function ExcellenceMeter({
       prevValue.current = value;
       return;
     }
+
+    // Skip if another ExcellenceMeter instance already animated this pulse
+    // (prevents double-animation when TurnTransition unmounts and GameScreen remounts)
+    if (_lastAnimatedPulse === pulseKey) {
+      prevPulse.current = pulseKey;
+      prevValue.current = value;
+      return;
+    }
+    _lastAnimatedPulse = pulseKey;
     prevPulse.current = pulseKey;
 
     // Detect celebration: meter stepped from 66 → reset to 0 (isCelebrating flag)
@@ -156,6 +170,7 @@ export default function ExcellenceMeter({
     if (celebrate) {
       playCelebrate();
     } else {
+      void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.65 });
       animFill(value, 420);
       playBounce();
     }
