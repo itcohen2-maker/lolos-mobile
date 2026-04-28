@@ -2346,7 +2346,7 @@ function gameReducer(
         // playIdentical — pick wild vs normal copy by the card type.
         const card = s.players[s.currentPlayerIndex]?.hand.find((c) => c.id === a.cardId);
         if (card?.type === 'wild') {
-          return { ...base, emoji: '🃏', message: tf('botOffline.explain.useIdenticalWild', { name }) };
+          return { ...base, emoji: '', message: tf('botOffline.explain.useIdenticalWild', { name }) };
         }
         return { ...base, emoji: '♻️', message: tf('botOffline.explain.useIdentical', { name }) };
       }
@@ -5733,7 +5733,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
                 alignItems: 'center', justifyContent: 'center',
                 transform: [{ rotate: '-7deg' }, { translateX: -3 }, { translateY: 1 }],
               }}>
-                <Text style={{ fontSize: 12 }}>🃏</Text>
+                <Text style={{ fontSize: 12 }}></Text>
               </View>
               <View style={{
                 width: 32, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
@@ -12095,7 +12095,7 @@ function GameScreen() {
             id: `guidance-results-info-fee-${Date.now()}`,
             title: 'תוצאות אפשריות',
             message: 'שימו לב: בפעם הבאה שתפעילו "תוצאות אפשריות" תשלפו קלף תשלום מהערימה.',
-            emoji: '🃏',
+            emoji: '',
             style: 'warning',
             requireAck: true,
           },
@@ -13126,7 +13126,7 @@ function GameScreen() {
       {/* ── איזור תחתון מאוחד: כפתורי תור + שלוף קלף ויתור + חזרה לתרגיל (נסדר כפתורים אחר כך) ── */}
       {(() => {
         const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
-        const fracMin = false;
+        const fracMin = pr && state.pendingFractionTarget !== null;
         const showDraw = (bl||so)&&!state.hasPlayedCards&&state.pendingFractionTarget===null&&!state.isTutorial;
         const showFracDraw = fracMin && !state.hasPlayedCards;
         const btnCount = (canRoll?1:0)+(showDraw?1:0)+(showFracDraw?1:0);
@@ -13172,7 +13172,7 @@ function GameScreen() {
       })()}
 
       {/* כפתור זהב במיקום אבסולוטי למסך: Y מדויק לפי רשת (עם clamp לגובה המסך כדי לא להיעלם) */}
-      {canRoll && !state.isTutorial && (
+      {canRoll && (!state.isTutorial || state.showFractions) && (
         <View style={{ position: 'absolute', top: GOLD_ACTION_BUTTON_TOP, left: 0, right: 0, zIndex: 25, alignItems: 'center' }} pointerEvents="box-none">
           <View style={{ position: 'relative', alignItems: 'center', overflow: 'visible' }}>
             {showDicePulse && (
