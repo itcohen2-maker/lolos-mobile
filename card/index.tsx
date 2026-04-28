@@ -690,6 +690,7 @@ type GameAction =
       equationResult: number;
       playerHand: Card[];
       botHand: Card[];
+      discardPile?: Card[];
     };
 
 // Global mutable intercept for fraction card taps (tutorial + hint)
@@ -2631,6 +2632,7 @@ function gameReducer(
         hasPlayedCards: false,
         selectedCards: [],
         currentPlayerIndex: 1,
+        discardPile: action.discardPile ?? st.discardPile,
         players: st.players.map((p, i) => {
           if (i === 1) return { ...p, hand: action.playerHand };
           if (i === 0) return { ...p, hand: action.botHand };
@@ -14793,7 +14795,7 @@ function GameRouter() {
     const justAwarded = humanCelebrating && !prevCourageAwardedRef.current;
     prevCourageAwardedRef.current = humanCelebrating;
     if (justAwarded && soundOn && !state.isTutorial) {
-      void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.85 });
+      void playSfx('meterCelebrate', { cooldownMs: 500, volumeOverride: 0.85 });
     }
   }, [humanCelebrating, soundOn, state.isTutorial]);
 
