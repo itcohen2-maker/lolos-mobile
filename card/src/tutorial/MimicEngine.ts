@@ -54,7 +54,7 @@ export const MIMIC_SINGLE_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX 
 /** Multi-play tip lesson index (lesson-10). */
 export const MIMIC_MULTI_PLAY_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 4;
 
-/** Mini-copy lesson index (lesson-08) — final advanced lesson. */
+/** Legacy mini-copy lesson index (removed from active advanced flow). */
 export const MIMIC_IDENTICAL_LESSON_INDEX = MIMIC_LAST_CORE_LESSON_INDEX + 5;
 
 export type LessonShape = { id: string; stepCount: number };
@@ -167,7 +167,7 @@ export function mimicReducer(
     if (atCoreEnd) {
       return { ...state, phase: 'core-complete' };
     }
-    // Multi-play is the final advanced lesson — show the advanced completion screen.
+    // Multi-play is now the final advanced lesson — show the advanced completion screen.
     if (state.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX) {
       return { ...state, phase: 'advanced-complete' };
     }

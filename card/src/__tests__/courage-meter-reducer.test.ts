@@ -4,43 +4,89 @@ import type { GameAction, GameState } from '../../index';
 const tf = (key: string): string => key;
 
 function basePlayer(hand: GameState['players'][number]['hand']): GameState['players'][number] {
-  return { id: 0, name: 'P1', hand, calledLolos: false, isBot: false };
+  return {
+    id: 0,
+    name: 'P1',
+    hand,
+    calledLolos: false,
+    isBot: false,
+    courageMeterStep: 0,
+    courageMeterPercent: 0,
+    courageRewardPulseId: 0,
+    courageCoins: 0,
+    lastCourageCoinsAwarded: false,
+    courageDiscardSuccessStreak: 0,
+  };
 }
 
 function preRollIdenticalState(overrides: Partial<GameState> = {}): GameState {
   const matchingCard = { id: 'n7', type: 'number' as const, value: 7 };
-  return {
+  const baseState: GameState = {
     ...initialState,
     phase: 'pre-roll',
     players: [basePlayer([matchingCard])],
     currentPlayerIndex: 0,
     discardPile: [{ id: 'top7', type: 'number', value: 7 }],
-    ...overrides,
   };
+  const next = { ...baseState, ...overrides };
+  next.players = next.players.map((player, index) =>
+    index === 0
+      ? {
+          ...player,
+          courageMeterStep: next.courageMeterStep,
+          courageMeterPercent: next.courageMeterPercent,
+          courageRewardPulseId: next.courageRewardPulseId,
+          courageCoins: next.courageCoins,
+          courageDiscardSuccessStreak: next.courageDiscardSuccessStreak,
+          lastCourageCoinsAwarded: next.lastCourageCoinsAwarded,
+        }
+      : player,
+  );
+  return next;
 }
 
 function solvedConfirmState(overrides: Partial<GameState> = {}): GameState {
   const staged = { id: 'n5', type: 'number' as const, value: 5 };
-  return {
+  const opA = { id: 'op-plus', type: 'operation' as const, operation: '+' as const };
+  const opB = { id: 'op-minus', type: 'operation' as const, operation: '-' as const };
+  const baseState: GameState = {
     ...initialState,
     phase: 'solved',
-    players: [basePlayer([staged, { id: 'extra', type: 'number', value: 9 }])],
+    players: [basePlayer([staged, opA, opB, { id: 'extra', type: 'number', value: 9 }])],
     currentPlayerIndex: 0,
     discardPile: [{ id: 'top3', type: 'number', value: 3 }],
     stagedCards: [staged],
     equationResult: 5,
-    lastEquationDisplay: '2+3',
+    lastEquationDisplay: '1+2+2',
     equationHandSlots: [null, null],
-    ...overrides,
+    equationCommits: [
+      { cardId: opA.id, position: 0, jokerAs: null },
+      { cardId: opB.id, position: 1, jokerAs: null },
+    ],
   };
+  const next = { ...baseState, ...overrides };
+  next.players = next.players.map((player, index) =>
+    index === 0
+      ? {
+          ...player,
+          courageMeterStep: next.courageMeterStep,
+          courageMeterPercent: next.courageMeterPercent,
+          courageRewardPulseId: next.courageRewardPulseId,
+          courageCoins: next.courageCoins,
+          courageDiscardSuccessStreak: next.courageDiscardSuccessStreak,
+          lastCourageCoinsAwarded: next.lastCourageCoinsAwarded,
+        }
+      : player,
+  );
+  return next;
 }
 
 describe('courage meter reducer rules', () => {
-  it('does not progress on PLAY_IDENTICAL', () => {
+  it('progresses on PLAY_IDENTICAL', () => {
     const st = preRollIdenticalState({ courageMeterStep: 1, courageMeterPercent: 33, courageCoins: 0 });
     const next = gameReducer(st, { type: 'PLAY_IDENTICAL', card: st.players[0].hand[0] } as GameAction, tf);
-    expect(next.courageMeterStep).toBe(1);
-    expect(next.courageMeterPercent).toBe(33);
+    expect(next.courageMeterStep).toBe(2);
+    expect(next.courageMeterPercent).toBe(66);
     expect(next.courageCoins).toBe(0);
   });
 
@@ -57,7 +103,7 @@ describe('courage meter reducer rules', () => {
     expect(n2.courageMeterPercent).toBe(66);
   });
 
-  it('auto-resets at full and grants 5 coins', () => {
+  it('auto-resets at full and grants 1 coin', () => {
     const st = solvedConfirmState({
       courageMeterStep: 2,
       courageMeterPercent: 66,
@@ -67,8 +113,8 @@ describe('courage meter reducer rules', () => {
     const next = gameReducer(st, { type: 'CONFIRM_STAGED' } as GameAction, tf);
     expect(next.courageMeterStep).toBe(0);
     expect(next.courageMeterPercent).toBe(0);
-    expect(next.courageCoins).toBe(12);
-    expect(next.courageDiscardSuccessStreak).toBe(0);
+    expect(next.courageCoins).toBe(8);
+    expect(next.courageDiscardSuccessStreak).toBe(1);
     expect(next.courageRewardPulseId).toBe(5);
   });
 });

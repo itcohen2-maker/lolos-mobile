@@ -26,6 +26,7 @@ export interface DiceResult {
 export type GamePhase =
   | 'setup'
   | 'turn-transition'
+  | 'identical-tutorial'
   | 'roll-dice'
   | 'select-cards'
   | 'declare-equation'
@@ -64,6 +65,7 @@ export type GameAction =
   | { type: 'START_GAME'; players: { name: string }[]; difficulty: 'easy' | 'full' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
+  | { type: 'COMPLETE_IDENTICAL_TUTORIAL' }
   | { type: 'ROLL_DICE' }
   | { type: 'SELECT_CARD'; card: Card }
   | { type: 'PLAY_CARDS' }

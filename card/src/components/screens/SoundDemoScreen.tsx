@@ -4,19 +4,19 @@ import { playSfx, setSfxMuted, setSfxVolume, stopAllSfx, type SfxKey } from '../
 import { useLocale } from '../../i18n/LocaleContext';
 import { brand } from '../../theme/brand';
 
-type DemoItem = { key: SfxKey; label: string; hintKey: string };
+type DemoItem = { key: SfxKey; labelKey: string; hintKey: string };
 
 export default function SoundDemoScreen({ onBack }: { onBack: () => void }) {
   const { t } = useLocale();
   const ITEMS: DemoItem[] = useMemo(
     () => [
-      { key: 'tap', label: 'Tap', hintKey: 'sound.hint.tap' },
-      { key: 'success', label: 'Success', hintKey: 'sound.hint.success' },
-      { key: 'combo', label: 'Combo', hintKey: 'sound.hint.combo' },
-      { key: 'errorSoft', label: 'Error Soft', hintKey: 'sound.hint.errorSoft' },
-      { key: 'start', label: 'Start', hintKey: 'sound.hint.start' },
-      { key: 'complete', label: 'Complete', hintKey: 'sound.hint.complete' },
-      { key: 'transition', label: 'Transition', hintKey: 'sound.hint.transition' },
+      { key: 'tap', labelKey: 'sound.label.tap', hintKey: 'sound.hint.tap' },
+      { key: 'success', labelKey: 'sound.label.success', hintKey: 'sound.hint.success' },
+      { key: 'combo', labelKey: 'sound.label.combo', hintKey: 'sound.hint.combo' },
+      { key: 'errorSoft', labelKey: 'sound.label.errorSoft', hintKey: 'sound.hint.errorSoft' },
+      { key: 'start', labelKey: 'sound.label.start', hintKey: 'sound.hint.start' },
+      { key: 'complete', labelKey: 'sound.label.complete', hintKey: 'sound.hint.complete' },
+      { key: 'transition', labelKey: 'sound.label.transition', hintKey: 'sound.hint.transition' },
     ],
     [],
   );
@@ -45,7 +45,7 @@ export default function SoundDemoScreen({ onBack }: { onBack: () => void }) {
         <TouchableOpacity style={styles.smallBtn} onPress={() => stepVolume(-0.05)}>
           <Text style={styles.smallBtnText}>-</Text>
         </TouchableOpacity>
-        <Text style={styles.volumeText}>SFX: {volumePct}%</Text>
+        <Text style={styles.volumeText}>{t('sound.sfxVolume', { pct: volumePct })}</Text>
         <TouchableOpacity style={styles.smallBtn} onPress={() => stepVolume(0.05)}>
           <Text style={styles.smallBtnText}>+</Text>
         </TouchableOpacity>
@@ -62,7 +62,7 @@ export default function SoundDemoScreen({ onBack }: { onBack: () => void }) {
             onPress={() => playSfx(item.key, { cooldownMs: 120 })}
           >
             <View>
-              <Text style={styles.rowTitle}>{item.label}</Text>
+              <Text style={styles.rowTitle}>{t(item.labelKey)}</Text>
               <Text style={styles.rowHint}>{t(item.hintKey)}</Text>
             </View>
             <Text style={styles.playText}>{t('sound.play')}</Text>

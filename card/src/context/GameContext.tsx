@@ -150,6 +150,10 @@ function gameReducer(
           }
         }
       }
+      return { ...state, phase: 'identical-tutorial', message: '' }
+    }
+
+    case 'COMPLETE_IDENTICAL_TUTORIAL': {
       return { ...state, phase: 'roll-dice', message: '' }
     }
 

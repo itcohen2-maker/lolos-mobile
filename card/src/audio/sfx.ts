@@ -9,6 +9,8 @@ export type SfxKey =
   | 'complete'
   | 'transition'
   | 'meterCelebrate'
+  | 'meterCelebrateIntro'
+  | 'meterCelebrateCoins'
   | 'meterBounce'
   | 'timerTick'
   | 'timerEnd'
@@ -29,10 +31,12 @@ const SOURCES: Record<SfxKey, number> = {
   complete: require('../../assets/sounds/sfx_ui_complete.wav'),
   transition: require('../../assets/sounds/sfx_ui_transition.wav'),
   meterCelebrate: require('../../assets/sounds/sfx_meter_celebrate.mp3'),
-  meterBounce: require('../../assets/sounds/sfx_ui_success.wav'),
+  meterCelebrateIntro: require('../../assets/sounds/sfx_meter_intro_custom.mp3'),
+  meterCelebrateCoins: require('../../assets/sounds/sfx_meter_coins_custom.mp3'),
+  meterBounce: require('../../assets/sounds/sfx_meter_bounce.mp3'),
   timerTick: require('../../assets/sounds/bubble_mid.wav'),
   timerEnd: require('../../assets/sounds/bubble_end.wav'),
-  gameWin: require('../../assets/sounds/sfx_game_win.wav'),
+  gameWin: require('../../assets/sounds/sfx_game_win.mp3'),
 };
 
 const REGISTRY: Record<SfxKey, SfxState> = {
@@ -44,6 +48,8 @@ const REGISTRY: Record<SfxKey, SfxState> = {
   complete: { sound: null, loading: false, lastPlayedAt: 0 },
   transition: { sound: null, loading: false, lastPlayedAt: 0 },
   meterCelebrate: { sound: null, loading: false, lastPlayedAt: 0 },
+  meterCelebrateIntro: { sound: null, loading: false, lastPlayedAt: 0 },
+  meterCelebrateCoins: { sound: null, loading: false, lastPlayedAt: 0 },
   meterBounce: { sound: null, loading: false, lastPlayedAt: 0 },
   timerTick: { sound: null, loading: false, lastPlayedAt: 0 },
   timerEnd: { sound: null, loading: false, lastPlayedAt: 0 },
@@ -133,6 +139,63 @@ export async function playSfx(
     await sound.playAsync();
   } catch (error) {
     if (__DEV__) console.warn('[sfx] play failed', key, error);
+  }
+}
+
+async function playLoadedSoundUntilFinish(sound: Audio.Sound): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (!status.isLoaded) return;
+      if (status.didJustFinish && !settled) {
+        settled = true;
+        sound.setOnPlaybackStatusUpdate(null);
+        resolve();
+      }
+    });
+    setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sound.setOnPlaybackStatusUpdate(null);
+      resolve();
+    }, 12000);
+  });
+}
+
+export async function playMeterCelebrateSequence(options?: { cooldownMs?: number; volumeOverride?: number }): Promise<void> {
+  if (muted) {
+    return;
+  }
+  const slot = REGISTRY.meterCelebrate;
+  const now = Date.now();
+  const cooldownMs = options?.cooldownMs ?? 300;
+  if (cooldownMs > 0 && now - slot.lastPlayedAt < cooldownMs) {
+    return;
+  }
+  slot.lastPlayedAt = now;
+  REGISTRY.meterCelebrateIntro.lastPlayedAt = now;
+  REGISTRY.meterCelebrateCoins.lastPlayedAt = now;
+
+  try {
+    await ensureAudioMode();
+    const sequenceKeys: SfxKey[] = ['meterCelebrateIntro', 'meterCelebrateCoins'];
+    const nextVolume = options?.volumeOverride ?? volume;
+    for (const key of sequenceKeys) {
+      const sound = await ensureLoaded(key);
+      if (!sound) {
+        continue;
+      }
+      await sound.setVolumeAsync(nextVolume);
+      const status = await sound.getStatusAsync();
+      if (status.isLoaded && status.isPlaying) {
+        await sound.stopAsync().catch(() => {});
+      }
+      await sound.setPositionAsync(0);
+      await sound.playAsync();
+      await playLoadedSoundUntilFinish(sound);
+    }
+  } catch (error) {
+    if (__DEV__) console.warn('[sfx] meter celebration sequence failed', error);
   }
 }
 

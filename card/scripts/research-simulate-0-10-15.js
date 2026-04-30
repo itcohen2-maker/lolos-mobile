@@ -113,7 +113,7 @@ function makeId() {
   return `c${++cardId}`;
 }
 
-/** חפיסה: מספרים 0..maxNum, עותקים; שברים כמו server deck; 4× + ו־4× −; 4 ג'וקרים */
+/** חפיסה: מספרים 0..maxNum, עותקים; שברים כמו server deck; 4× + ו־4× −; 4 קלפי סלינדה */
 function generateDeck(maxNum, copies, includeFractions) {
   cardId = 0;
   const cards = [];

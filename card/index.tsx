@@ -36,6 +36,7 @@ import { CasinoButton } from './components/CasinoButton';
 import { WalkingDice } from './components/WalkingDice';
 import FuseTimer from './components/FuseTimer';
 import ExcellenceMeter from './components/ExcellenceMeter';
+import TutorialProgressMeter from './components/TutorialProgressMeter';
 import { SlindaCoin } from './components/SlindaCoin';
 import { HorizontalOptionWheel, type HorizontalWheelOption } from './components/HorizontalOptionWheel';
 import * as Localization from 'expo-localization';
@@ -51,7 +52,7 @@ import { buildEqOpDisplayCycle, normalizeOperationToken } from './shared/equatio
 const WELCOME_NOTIFICATION_TITLES = new Set([t('he', 'welcome.title'), t('en', 'welcome.title')]);
 const RESULTS_POSSIBLE_TITLES = new Set([t('he', 'results.possibleTitle'), t('en', 'results.possibleTitle')]);
 import { LocaleProvider, useLocale } from './src/i18n/LocaleContext';
-import { disposeSfx, initializeSfx, playSfx, setSfxMuted, setSfxVolume } from './src/audio/sfx';
+import { disposeSfx, initializeSfx, playMeterCelebrateSequence, playSfx, setSfxMuted, setSfxVolume } from './src/audio/sfx';
 // TEMP: capture full stack trace for TypeError
 const _origConsoleError = console.error;
 const sendDebugLog = (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}) => {
@@ -83,6 +84,8 @@ import { AuthProvider, useAuth } from './src/hooks/useAuth';
 import { ShopScreen } from './src/screens/ShopScreen';
 import { MyThemesScreen } from './src/screens/MyThemesScreen';
 import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/LobbyScreens';
+import { CelebrationMockupRoom } from './src/screens/CelebrationMockupRoom';
+import { ExtractedMeterCelebrationOverlayCard } from './src/components/ExtractedMeterCelebration';
 import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
 import { displayFontFamily } from './src/theme/fonts';
 import { ThemeProvider, useActiveTheme } from './src/theme/ThemeContext';
@@ -194,6 +197,22 @@ interface Player {
   courageDiscardSuccessStreak: number;
 }
 
+interface StoredPlayerProgressSnapshot {
+  courageMeterStep: number;
+  courageMeterPercent: number;
+  courageCoins: number;
+}
+
+interface StoredPlayerProfile extends StoredPlayerProgressSnapshot {
+  name: string;
+  updatedAt: string;
+}
+
+interface StoredPlayerProfilesState {
+  activePlayerName: string | null;
+  profiles: Record<string, StoredPlayerProfile>;
+}
+
 interface DiceResult { die1: number; die2: number; die3: number; }
 interface EquationOption { equation: string; result: number; }
 
@@ -203,6 +222,131 @@ const EMPTY_ID_SET = new Set<string>();
 type AbVariant = 'control_0_12_plus' | 'variant_0_15_plus';
 
 const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
+const EMPTY_STORED_PLAYER_PROFILES: StoredPlayerProfilesState = { activePlayerName: null, profiles: {} };
+
+function sanitizeStoredPlayerName(name: string): string {
+  return (name || '').trim().slice(0, 7);
+}
+
+function getStoredPlayerProfileKey(name: string): string {
+  return sanitizeStoredPlayerName(name).toLocaleLowerCase();
+}
+
+function zeroStoredPlayerProgress(): StoredPlayerProgressSnapshot {
+  return {
+    courageMeterStep: 0,
+    courageMeterPercent: 0,
+    courageCoins: 0,
+  };
+}
+
+function snapshotProgressFromPlayer(player: Player | { courageMeterStep?: number; courageMeterPercent?: number; courageCoins?: number }): StoredPlayerProgressSnapshot {
+  return {
+    courageMeterStep: clampCourageStep(player.courageMeterStep ?? 0),
+    courageMeterPercent: Math.max(0, Math.min(100, player.courageMeterPercent ?? 0)),
+    courageCoins: Math.max(0, Math.floor(player.courageCoins ?? 0)),
+  };
+}
+
+function buildStoredProfile(name: string, progress?: StoredPlayerProgressSnapshot | null): StoredPlayerProfile {
+  return {
+    name: sanitizeStoredPlayerName(name),
+    ...zeroStoredPlayerProgress(),
+    ...(progress ?? {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getStoredProgressForName(
+  store: StoredPlayerProfilesState,
+  name: string,
+): StoredPlayerProgressSnapshot | null {
+  const clean = sanitizeStoredPlayerName(name);
+  if (!clean) return null;
+  const profile = store.profiles[getStoredPlayerProfileKey(clean)];
+  return profile ? snapshotProgressFromPlayer(profile) : null;
+}
+
+function normalizeStoredPlayerProfiles(raw: unknown): StoredPlayerProfilesState {
+  if (!raw || typeof raw !== 'object') return EMPTY_STORED_PLAYER_PROFILES;
+  const payload = raw as { activePlayerName?: unknown; profiles?: unknown };
+  const nextProfiles: Record<string, StoredPlayerProfile> = {};
+  if (payload.profiles && typeof payload.profiles === 'object') {
+    for (const value of Object.values(payload.profiles as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object') continue;
+      const candidate = value as Partial<StoredPlayerProfile>;
+      const cleanName = sanitizeStoredPlayerName(typeof candidate.name === 'string' ? candidate.name : '');
+      if (!cleanName) continue;
+      nextProfiles[getStoredPlayerProfileKey(cleanName)] = buildStoredProfile(cleanName, {
+        courageMeterStep: typeof candidate.courageMeterStep === 'number' ? candidate.courageMeterStep : 0,
+        courageMeterPercent: typeof candidate.courageMeterPercent === 'number' ? candidate.courageMeterPercent : 0,
+        courageCoins: typeof candidate.courageCoins === 'number' ? candidate.courageCoins : 0,
+      });
+    }
+  }
+  const activePlayerName =
+    typeof payload.activePlayerName === 'string' ? sanitizeStoredPlayerName(payload.activePlayerName) : null;
+  return {
+    activePlayerName: activePlayerName || null,
+    profiles: nextProfiles,
+  };
+}
+
+async function loadStoredPlayerProfiles(): Promise<StoredPlayerProfilesState> {
+  try {
+    const [profilesRaw, legacyName] = await Promise.all([
+      AsyncStorage.getItem(PLAYER_PROFILES_STORAGE_KEY),
+      AsyncStorage.getItem(PLAYER_SAVED_NAME_KEY),
+    ]);
+    const parsed = profilesRaw ? normalizeStoredPlayerProfiles(JSON.parse(profilesRaw)) : EMPTY_STORED_PLAYER_PROFILES;
+    const cleanLegacyName = sanitizeStoredPlayerName(legacyName ?? '');
+    if (!cleanLegacyName) {
+      return parsed;
+    }
+    const legacyKey = getStoredPlayerProfileKey(cleanLegacyName);
+    if (parsed.activePlayerName === cleanLegacyName && parsed.profiles[legacyKey]) {
+      return parsed;
+    }
+    const migrated: StoredPlayerProfilesState = {
+      activePlayerName: cleanLegacyName,
+      profiles: {
+        ...parsed.profiles,
+        [legacyKey]: parsed.profiles[legacyKey] ?? buildStoredProfile(cleanLegacyName),
+      },
+    };
+    await AsyncStorage.setItem(PLAYER_PROFILES_STORAGE_KEY, JSON.stringify(migrated));
+    return migrated;
+  } catch {
+    return EMPTY_STORED_PLAYER_PROFILES;
+  }
+}
+
+async function saveStoredPlayerProfiles(store: StoredPlayerProfilesState): Promise<void> {
+  const payload = JSON.stringify(store);
+  await AsyncStorage.setItem(PLAYER_PROFILES_STORAGE_KEY, payload);
+  if (store.activePlayerName) {
+    await AsyncStorage.setItem(PLAYER_SAVED_NAME_KEY, store.activePlayerName);
+  }
+}
+
+function mergePlayersIntoStoredProfiles(
+  store: StoredPlayerProfilesState,
+  players: Array<Pick<Player, 'name' | 'isBot' | 'courageMeterStep' | 'courageMeterPercent' | 'courageCoins'>>,
+  activePlayerName?: string | null,
+): StoredPlayerProfilesState {
+  const profiles = { ...store.profiles };
+  for (const player of players) {
+    if (player.isBot) continue;
+    const cleanName = sanitizeStoredPlayerName(player.name);
+    if (!cleanName) continue;
+    profiles[getStoredPlayerProfileKey(cleanName)] = buildStoredProfile(cleanName, snapshotProgressFromPlayer(player));
+  }
+  const cleanActive = sanitizeStoredPlayerName(activePlayerName ?? '') || store.activePlayerName;
+  return {
+    activePlayerName: cleanActive || null,
+    profiles,
+  };
+}
 
 /** שברי ברירת מחדל למסך ההגדרות המתקדמות. */
 
@@ -252,7 +396,8 @@ interface GameState {
   lastDiscardCount: number;
   lastEquationDisplay: string | null;
   difficulty: 'easy' | 'full';
-  diceMode: '3';
+  mode: 'pass-and-play' | 'vs-bot';
+  diceMode: '2' | '3';
   showFractions: boolean;
   /** מכנים לכלול בחבילה כש־showFractions */
   fractionKinds: Fraction[];
@@ -618,7 +763,7 @@ interface MoveHistoryEntry {
 export type EquationCommitPayload = { cardId: string; position: 0 | 1; jokerAs: Operation | null };
 
 type GameAction =
-  | { type: 'START_GAME'; players: { name: string; isBot?: boolean }[]; difficulty: 'easy' | 'full'; fractions: boolean; fractionKinds?: Fraction[]; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '60' | '90' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId | string; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty; isTutorial?: boolean }
+  | { type: 'START_GAME'; players: { name: string; isBot?: boolean; progress?: StoredPlayerProgressSnapshot | null }[]; difficulty: 'easy' | 'full'; fractions: boolean; fractionKinds?: Fraction[]; showPossibleResults: boolean; showSolveExercise: boolean; timerSetting: '60' | '90' | 'off' | 'custom'; timerCustomSeconds?: number; difficultyStage?: DifficultyStageId | string; enabledOperators?: Operation[]; allowNegativeTargets?: boolean; mathRangeMax?: 12 | 25; abVariant?: AbVariant; mode: 'pass-and-play' | 'vs-bot'; botDifficulty?: BotDifficulty; isTutorial?: boolean }
   | { type: 'PLAY_AGAIN' }
   | { type: 'NEXT_TURN' }
   | { type: 'BEGIN_TURN' }
@@ -658,7 +803,7 @@ type GameAction =
   | { type: 'RESTORE_NOTIFICATIONS'; payload: Notification[] }
   | { type: 'SET_GUIDANCE_ENABLED'; enabled: boolean }
   | { type: 'SET_SOUNDS_ENABLED'; enabled: boolean }
-  | { type: 'UPDATE_PLAYER_NAME'; playerIndex: number; name: string }
+  | { type: 'UPDATE_PLAYER_NAME'; playerIndex: number; name: string; progress?: StoredPlayerProgressSnapshot | null }
   | { type: 'DISMISS_INTRO_HINT' }
   | { type: 'USE_POSSIBLE_RESULTS_INFO' }
   | { type: 'BOT_STEP' }
@@ -692,6 +837,8 @@ type GameAction =
       playerHand: Card[];
       botHand: Card[];
       discardPile?: Card[];
+      dice?: DiceResult | null;
+      equationDisplay?: string;
     };
 
 // Global mutable intercept for fraction card taps (tutorial + hint)
@@ -1180,7 +1327,7 @@ const initialState: GameState = {
   courageMeterPercent: 0, courageMeterStep: 0, courageDiscardSuccessStreak: 0, courageRewardPulseId: 0, courageCoins: 0,
   lastCourageRewardReason: null, lastCourageCoinsAwarded: false,
   lastMoveMessage: null, lastDiscardCount: 0, lastEquationDisplay: null,
-  difficulty: 'full', diceMode: '3', showFractions: true, fractionKinds: [...ALL_FRACTION_KINDS],
+  difficulty: 'full', mode: 'pass-and-play', diceMode: '3', showFractions: true, fractionKinds: [...ALL_FRACTION_KINDS],
   showPossibleResults: true, showSolveExercise: true,
   difficultyStage: 'H', stageTransitions: 7, mathRangeMax: 25, enabledOperators: ['x', '÷'], allowNegativeTargets: true, abVariant: 'control_0_12_plus',
   equationAttempts: 0, equationSuccesses: 0, turnStartedAt: null, totalEquationResponseMs: 0,
@@ -1264,7 +1411,16 @@ function checkWin(st: GameState): GameState {
       if (row.playerId === cp.id) return { ...row, wins: row.wins + 1 };
       return { ...row, losses: row.losses + 1 };
     });
-    return { ...st, phase: 'game-over', winner: cp, tournamentTable };
+    const winningPlayedCards = st.currentTurnPlayedCards.length > 0
+      ? st.currentTurnPlayedCards
+      : st.lastTurnPlayedCards;
+    return {
+      ...st,
+      phase: 'game-over',
+      winner: cp,
+      tournamentTable,
+      lastTurnPlayedCards: winningPlayedCards,
+    };
   }
   return st;
 }
@@ -1334,6 +1490,7 @@ const COURAGE_STEP_TO_PERCENT: Readonly<Record<number, number>> = {
   2: 66,
   3: 100,
 };
+const EXCELLENCE_METER_FULL_REWARD_COINS = 1;
 
 function clampCourageStep(step: number): number {
   return Math.max(0, Math.min(3, step));
@@ -1352,7 +1509,7 @@ function applyCourageStepReward(st: GameState, reason: string): GameState {
     courageMeterStep: isFull ? 0 : nextStep,
     courageMeterPercent: isFull ? 0 : nextPercent,
     courageRewardPulseId: (cp.courageRewardPulseId ?? 0) + 1,
-    courageCoins: (cp.courageCoins ?? 0) + (isFull ? 5 : 0),
+    courageCoins: (cp.courageCoins ?? 0) + (isFull ? EXCELLENCE_METER_FULL_REWARD_COINS : 0),
     lastCourageCoinsAwarded: isFull,
   };
   return {
@@ -1362,7 +1519,7 @@ function applyCourageStepReward(st: GameState, reason: string): GameState {
     courageMeterStep: isFull ? 0 : nextStep,
     courageMeterPercent: isFull ? 0 : nextPercent,
     courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
-    courageCoins: (st.courageCoins ?? 0) + (isFull ? 5 : 0),
+    courageCoins: (st.courageCoins ?? 0) + (isFull ? EXCELLENCE_METER_FULL_REWARD_COINS : 0),
     lastCourageRewardReason: reason,
     lastCourageCoinsAwarded: isFull,
   };
@@ -1377,9 +1534,13 @@ function gameReducer(
     case 'START_GAME':
     case 'PLAY_AGAIN': {
       AsyncStorage.removeItem('lulos_guidance_notifications');
-      const playersSeed =
+      const playersSeed: { name: string; isBot?: boolean; progress?: StoredPlayerProgressSnapshot | null }[] =
         action.type === 'PLAY_AGAIN'
-          ? st.players.map((p) => ({ name: p.name, isBot: p.isBot }))
+          ? st.players.map((p) => ({
+              name: p.name,
+              isBot: p.isBot,
+              progress: snapshotProgressFromPlayer(p),
+            }))
           : action.players;
       const difficulty = action.type === 'PLAY_AGAIN' ? st.difficulty : action.difficulty;
       const stage = migrateDifficultyStage(
@@ -1454,7 +1615,7 @@ function gameReducer(
         hasSeenSolvedHint: st.hasSeenSolvedHint,
         soundsEnabled: st.soundsEnabled,
         guidanceEnabled: st.guidanceEnabled,
-        phase: 'turn-transition', difficulty, diceMode,
+        phase: 'turn-transition', difficulty, mode: action.type === 'PLAY_AGAIN' ? st.mode : action.mode, diceMode,
         difficultyStage: stage,
         stageTransitions: action.type === 'PLAY_AGAIN' ? st.stageTransitions : STAGE_SEQUENCE.indexOf(stage),
         mathRangeMax,
@@ -1470,7 +1631,22 @@ function gameReducer(
         showPossibleResults,
         showSolveExercise,
         timerSetting, timerCustomSeconds,
-        players: playersSeed.map((p, i) => ({ id: i, name: p.name, hand: hands[i], calledLolos: false, isBot: (p as { isBot?: boolean }).isBot ?? false, courageMeterStep: 0, courageMeterPercent: 0, courageRewardPulseId: 0, courageCoins: 0, lastCourageCoinsAwarded: false, courageDiscardSuccessStreak: 0 })),
+        players: playersSeed.map((p, i) => {
+          const progress = 'progress' in p ? (p.progress ?? zeroStoredPlayerProgress()) : zeroStoredPlayerProgress();
+          return {
+            id: i,
+            name: p.name,
+            hand: hands[i],
+            calledLolos: false,
+            isBot: (p as { isBot?: boolean }).isBot ?? false,
+            courageMeterStep: progress.courageMeterStep,
+            courageMeterPercent: progress.courageMeterPercent,
+            courageRewardPulseId: 0,
+            courageCoins: progress.courageCoins,
+            lastCourageCoinsAwarded: false,
+            courageDiscardSuccessStreak: 0,
+          };
+        }),
         currentPlayerIndex: firstPlayerIndex,
         openingDrawId: localOpeningDrawId,
         drawPile, discardPile: firstDiscard ? [firstDiscard] : [],
@@ -1521,7 +1697,7 @@ function gameReducer(
         lastDiscardCount: 0,
         pendingFractionTarget: null,
         fractionPenalty: 0,
-        fractionAttackResolved: false,
+        fractionAttackResolved: st.fractionAttackResolved,
         equationHandSlots: [null, null],
         equationHandPick: null,
         possibleResultsInfoCountedThisTurn: false,
@@ -1698,6 +1874,15 @@ function gameReducer(
       const stOpCards = st.stagedCards.filter(c => c.type === 'operation');
       const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
       if (stNumbers.length === 0) return { ...st, message: tf('confirm.needNumberOrWild') };
+      if (st.isTutorial && tutorialBus.getL6WildStepMode()) {
+        const hasWild = stNumbers.some(c => c.type === 'wild');
+        if (!hasWild) return { ...st, message: 'בחרו גם קלף פרא' };
+        if (stOpCard == null) return { ...st, message: 'בחרו גם קלף סימן' };
+        if (stNumbers.length < 3) return { ...st, message: 'בחרו פרא יחד עם 0 ועם עוד קלף' };
+      }
+      if (st.isTutorial && !st.showPossibleResults && (st.lastEquationDisplay?.includes('(') ?? false) && stNumbers.length < 2) {
+        return { ...st, message: 'בחרו לפחות שני קלפים' };
+      }
       if (st.equationResult === null) return st;
       if (!validateStagedCards(stNumbers, stOpCard, st.equationResult, st.mathRangeMax ?? 25)) {
         return { ...st, message: tf('confirm.sumMismatch') };
@@ -1766,6 +1951,7 @@ function gameReducer(
         currentTurnPlayedCards: [...st.currentTurnPlayedCards, cardToDiscard],
         message: '',
       };
+      ns = applyCourageStepReward(ns, tf('courage.reason.identicalPlay'));
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return { ...ns, identicalAlert: null };
       return ns; // Stay — modal shown, DISMISS_IDENTICAL_ALERT will call endTurnLogic
@@ -1883,7 +2069,13 @@ function gameReducer(
         const newTarget = denom;
         const cardToDiscard = { ...action.card, resolvedTarget: newTarget };
         const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-        let ns = { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true };
+        let ns = {
+          ...st,
+          players: np,
+          discardPile: [...st.discardPile, cardToDiscard],
+          hasPlayedCards: true,
+          currentTurnPlayedCards: [...st.currentTurnPlayedCards, cardToDiscard],
+        };
         ns = checkWin(ns);
         if (ns.phase === 'game-over') return ns;
         const next = (ns.currentPlayerIndex + 1) % ns.players.length;
@@ -1913,7 +2105,13 @@ function gameReducer(
       console.log('SET pendingFractionTarget:', newTarget);
       const cardToDiscard = { ...action.card, resolvedTarget: denom };
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
-      let ns = { ...st, players: np, discardPile: [...st.discardPile, cardToDiscard], hasPlayedCards: true };
+      let ns: GameState = {
+        ...st,
+        players: np,
+        discardPile: [...st.discardPile, cardToDiscard],
+        hasPlayedCards: true,
+        currentTurnPlayedCards: [...st.currentTurnPlayedCards, cardToDiscard],
+      };
       ns = checkWin(ns);
       if (ns.phase === 'game-over') return ns;
       const next = (ns.currentPlayerIndex + 1) % ns.players.length;
@@ -1959,7 +2157,7 @@ function gameReducer(
       }
       const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== action.card.id) } : p);
       const defMsg = tf('toast.defenseOk');
-      let ns = {
+      let ns: GameState = {
         ...st,
         players: np,
         discardPile: [...st.discardPile, cardToDiscard],
@@ -1971,6 +2169,7 @@ function gameReducer(
         lastMoveMessage: defMsg,
         message: tf('msg.defenseOk'),
         moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 1, description: defMsg }],
+        currentTurnPlayedCards: [...st.currentTurnPlayedCards, cardToDiscard],
         notifications: (st.notifications ?? []).filter((n) => !n.id.startsWith('frac-')),
       };
       ns = checkWin(ns);
@@ -1980,15 +2179,15 @@ function gameReducer(
     case 'DEFEND_FRACTION_PENALTY': {
       if (st.pendingFractionTarget === null) return st;
       const cp = st.players[st.currentPlayerIndex];
-      let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
-      const penMsg = tf('toast.penaltyDraw', { name: cp.name, count: String(st.fractionPenalty) });
+      let s: GameState = drawFromPile(st, 1, st.currentPlayerIndex);
+      const penMsg = tf('toast.penaltyDraw', { name: cp.name, count: '1' });
       s = {
         ...s,
         pendingFractionTarget: null,
         fractionPenalty: 0,
         fractionAttackResolved: true,
         lastMoveMessage: penMsg,
-        message: tf('msg.penaltyDraw', { name: cp.name, count: String(st.fractionPenalty) }),
+        message: tf('msg.penaltyDraw', { name: cp.name, count: '1' }),
         moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: penMsg }],
         notifications: (s.notifications ?? []).filter((n) => !n.id.startsWith('frac-')),
       };
@@ -2073,13 +2272,29 @@ function gameReducer(
     case 'SET_SOUNDS_ENABLED':
       return { ...st, soundsEnabled: action.enabled };
     case 'UPDATE_PLAYER_NAME':
-      return {
-        ...st,
-        players: st.players.map((p, i) => i === action.playerIndex ? { ...p, name: action.name.slice(0, 7) } : p),
-        tournamentTable: st.tournamentTable.map((row) =>
-          row.playerId === action.playerIndex ? { ...row, playerName: action.name.slice(0, 7) } : row
-        ),
-      };
+      {
+        const nextName = action.name.slice(0, 7);
+        const progress = action.progress ?? null;
+        return {
+          ...st,
+          players: st.players.map((p, i) =>
+            i === action.playerIndex
+              ? {
+                  ...p,
+                  name: nextName,
+                  courageMeterStep: progress?.courageMeterStep ?? p.courageMeterStep,
+                  courageMeterPercent: progress?.courageMeterPercent ?? p.courageMeterPercent,
+                  courageCoins: progress?.courageCoins ?? p.courageCoins,
+                  courageRewardPulseId: progress ? 0 : p.courageRewardPulseId,
+                  lastCourageCoinsAwarded: false,
+                }
+              : p
+          ),
+          tournamentTable: st.tournamentTable.map((row) =>
+            row.playerId === action.playerIndex ? { ...row, playerName: nextName } : row
+          ),
+        };
+      }
     case 'SET_GUIDANCE_ENABLED':
       return { ...st, guidanceEnabled: action.enabled };
     case 'DISMISS_INTRO_HINT':
@@ -2630,8 +2845,9 @@ function gameReducer(
       return {
         ...st,
         phase: 'solved',
+        dice: action.dice ?? st.dice,
         equationResult: action.equationResult,
-        lastEquationDisplay: `■ + ■ = ${action.equationResult}`,
+        lastEquationDisplay: action.equationDisplay ?? `■ + ■ = ${action.equationResult}`,
         stagedCards: [],
         hasPlayedCards: false,
         selectedCards: [],
@@ -5086,7 +5302,11 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   const showBuilder = (state.phase === 'building' || state.phase === 'solved') && state.dice && state.pendingFractionTarget === null;
   const isSolved = state.phase === 'solved';
-  const diceValues = state.dice ? [state.dice.die1, state.dice.die2, state.dice.die3] : [0, 0, 0];
+  const diceValues = React.useMemo(
+    () => state.dice ? [state.dice.die1, state.dice.die2, state.dice.die3] : [0, 0, 0],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.dice?.die1, state.dice?.die2, state.dice?.die3],
+  );
 
   // Which dice indices are placed
   const usedDice = new Set([dice1, dice2, dice3].filter(d => d !== null) as number[]);
@@ -5365,6 +5585,76 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     diceValues[0],
     diceValues[1],
     diceValues[2],
+  ]);
+
+  const tutorialSolvedAutofillKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const shouldPrefill =
+      state.isTutorial &&
+      state.phase === 'solved' &&
+      !state.hasPlayedCards &&
+      !state.showPossibleResults;
+    if (!shouldPrefill) {
+      tutorialSolvedAutofillKeyRef.current = null;
+      return;
+    }
+    const parsed = parseEquationDisplayForUi(state.lastEquationDisplay);
+    if (!parsed) return;
+    const runKey = `${state.currentPlayerIndex}|${state.lastEquationDisplay}|${state.equationResult ?? 'x'}`;
+    const used = [false, false, false];
+    const pickIndexForValue = (value: number): number | null => {
+      let idx = diceValues.findIndex((v, i) => v === value && !used[i]);
+      if (idx === -1) idx = diceValues.findIndex((v) => v === value);
+      if (idx === -1) return null;
+      used[idx] = true;
+      return idx;
+    };
+    const idx0 = pickIndexForValue(parsed.numbers[0] ?? Number.NaN);
+    const idx1 = pickIndexForValue(parsed.numbers[1] ?? Number.NaN);
+    const idx2 =
+      parsed.numbers.length >= 3
+        ? pickIndexForValue(parsed.numbers[2] ?? Number.NaN)
+        : null;
+    if (idx0 === null || idx1 === null) return;
+    const alreadyFilled =
+      tutorialSolvedAutofillKeyRef.current === runKey &&
+      dice1 === idx0 &&
+      dice2 === idx1 &&
+      dice3 === idx2 &&
+      op1 === (parsed.operators[0] ?? '+') &&
+      op2 === (parsed.operators[1] ?? null) &&
+      parensRight === parsed.parensRight;
+    if (alreadyFilled) return;
+    const prefill = () => {
+      tutorialSolvedAutofillKeyRef.current = runKey;
+      setParensRight(parsed.parensRight);
+      setDice1(idx0);
+      dice1Ref.current = idx0;
+      setDice2(idx1);
+      dice2Ref.current = idx1;
+      setDice3(idx2);
+      dice3Ref.current = idx2;
+      setOp1(parsed.operators[0] ?? '+');
+      setOp2(parsed.operators[1] ?? null);
+    };
+    prefill();
+    const retry = setTimeout(prefill, 60);
+    return () => clearTimeout(retry);
+  }, [
+    state.isTutorial,
+    state.phase,
+    state.hasPlayedCards,
+    state.showPossibleResults,
+    state.lastEquationDisplay,
+    state.equationResult,
+    state.currentPlayerIndex,
+    diceValues,
+    dice1,
+    dice2,
+    dice3,
+    op1,
+    op2,
+    parensRight,
   ]);
 
   // Effective operators: hand cards override local cycle when placed in position 0 or 1
@@ -6307,12 +6597,13 @@ const FAN_DEFAULT_SPACING = 1.0;
 const PINCH_CARD_THRESHOLD = 8;
 const FAN_DRAG_START_DX = 6;
 
-function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandPendingId, defenseValidCardIds, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false, botTeachingActive = false, botCandidateCardId = null, botTeachingDifficulty = 'medium' }: {
+function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandPendingId, defenseValidCardIds, tutorialHighlightCardIds = null, forwardCardId: _forwardCardId, onTap, onCenterCard, waitingMode = false, botTeachingActive = false, botCandidateCardId = null, botTeachingDifficulty = 'medium' }: {
   cards: Card[];
   stagedCardIds: Set<string>;
   equationHandPlacedIds: Set<string>;
   equationHandPendingId: string | null;
   defenseValidCardIds: Set<string> | null;
+  tutorialHighlightCardIds?: Set<string> | null;
   forwardCardId: string | null;
   onTap: (card: Card) => void;
   onCenterCard?: (card: Card | null) => void;
@@ -6781,7 +7072,9 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
         const isEqPending = equationHandPendingId === card.id;
         const isEqPlacedInSlot = equationHandPlacedIds.has(card.id);
         const isEqOp = isEqPending || isEqPlacedInSlot;
-        const isDefenseValid = defenseValidCardIds !== null && defenseValidCardIds.has(card.id);
+        const isDefenseValid =
+          (defenseValidCardIds !== null && defenseValidCardIds.has(card.id)) ||
+          (tutorialHighlightCardIds !== null && tutorialHighlightCardIds.has(card.id));
         const isDefenseInvalid = defenseValidCardIds !== null && !defenseValidCardIds.has(card.id);
         const isForward = false;
         const isBotCandidate = botTeachingActive && botCandidateCardId === card.id;
@@ -7390,6 +7683,75 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
         }).map(c => c.id),
       )
     : null;
+  const tutorialPairHighlightIds =
+    state.isTutorial &&
+    tutorialBus.getL7Step1Mode() &&
+    state.phase === 'solved' &&
+    !state.showPossibleResults &&
+    state.equationResult != null
+      ? new Set<string>(
+          sorted
+            .filter((c) =>
+              c.type === 'number' &&
+              c.value != null &&
+              (c.value === 1 || c.value === (state.equationResult ?? 0) - 1),
+            )
+            .map((c) => c.id),
+        )
+      : null;
+  const tutorialWildLessonHighlightIds =
+    state.isTutorial &&
+    tutorialBus.getL6WildStepMode() &&
+    state.phase === 'solved'
+      ? new Set<string>(
+          sorted
+            .filter((c) =>
+              c.type === 'wild' ||
+              (c.type === 'operation' && c.operation === '-') ||
+              (c.type === 'number' &&
+                (c.value === 0 || c.value === Math.max(1, Math.min(4, (state.equationResult ?? 0) - 1)))),
+            )
+            .map((c) => c.id),
+        )
+      : null;
+  const l11Cfg = tutorialBus.getL11Config();
+  const l11StagedPositiveNumberCount = state.stagedCards.filter(
+    (c) => c.type === 'number' && (c.value ?? 0) > 0,
+  ).length;
+  const l11HasZeroStaged = state.stagedCards.some((c) => c.type === 'number' && c.value === 0);
+  const l11HasWildStaged = state.stagedCards.some((c) => c.type === 'wild');
+  const tutorialMultiPlayHighlightIds =
+    state.isTutorial &&
+    state.phase === 'solved' &&
+    !state.showPossibleResults &&
+    l11Cfg != null
+      ? new Set<string>(
+          sorted
+            .filter((c) => {
+              if (l11Cfg.includeZero) {
+                if (l11StagedPositiveNumberCount >= 2 && !l11HasWildStaged) {
+                  return c.type === 'wild';
+                }
+                if (state.stagedCards.length >= 1 && !l11HasZeroStaged) {
+                  return c.type === 'number' && c.value === 0;
+                }
+              }
+              return (
+                (c.type === 'number' &&
+                  c.value != null &&
+                  (c.value === l11Cfg.addA || c.value === l11Cfg.addB)) ||
+                (c.type === 'wild' && l11Cfg.includeWild)
+              );
+            })
+            .map((c) => c.id),
+        )
+      : null;
+  const tutorialHighlightIds =
+    tutorialWildLessonHighlightIds && tutorialWildLessonHighlightIds.size > 0
+      ? tutorialWildLessonHighlightIds
+      : tutorialMultiPlayHighlightIds && tutorialMultiPlayHighlightIds.size > 0
+        ? tutorialMultiPlayHighlightIds
+        : tutorialPairHighlightIds;
 
   const forwardCardId = null;
   const equationHandPlacedIds = new Set(
@@ -7436,10 +7798,11 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
       <View style={{ width: '100%', overflow: 'visible' }} pointerEvents="box-none">
         <SimpleHand
           cards={sorted}
-          stagedCardIds={(state.isTutorial && !tutorialBus.getL9ParensFilter()) ? emptySet : stagedIds}
+          stagedCardIds={stagedIds}
           equationHandPlacedIds={equationHandPlacedIds}
           equationHandPendingId={equationHandPendingId}
           defenseValidCardIds={defenseValidIds}
+          tutorialHighlightCardIds={tutorialHighlightIds}
           forwardCardId={forwardCardId}
           onTap={tap}
           onCenterCard={onCenterCard}
@@ -7605,7 +7968,7 @@ function BottomControlsBar() {
         ) : (
           <View style={{ width: '100%', alignItems: 'center' }}>
             <LulosButton
-              text={t('game.pickCards_revert')}
+              text={t('game.pickCards')}
               color="blue"
               textColor="#FFFFFF"
               width={160}
@@ -7882,11 +8245,14 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   // so startGame always reads the latest value, even if the user taps
   // "play" before the async load resolves.
   const savedPlayerNameRef = useRef('');
+  const storedProfilesRef = useRef<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
   const [, setSavedPlayerNameTrigger] = useState(0);
   useEffect(() => {
-    AsyncStorage.getItem(PLAYER_SAVED_NAME_KEY).then((v) => {
-      if (v) {
-        savedPlayerNameRef.current = v;
+    loadStoredPlayerProfiles().then((store) => {
+      storedProfilesRef.current = store;
+      const activeName = sanitizeStoredPlayerName(store.activePlayerName ?? '');
+      if (activeName) {
+        savedPlayerNameRef.current = activeName;
         setSavedPlayerNameTrigger((n) => n + 1);
       }
     });
@@ -7901,9 +8267,6 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const [showSolveExercise, setShowSolveExercise] = useState(true);
   const [timer, setTimer] = useState<'60' | '90' | 'off' | 'custom'>('off');
   const [customTimerSeconds, setCustomTimerSeconds] = useState(60);
-  const [timerCustomModalOpen, setTimerCustomModalOpen] = useState(false);
-  /** אם לא null — ביטול מודאל המשנה מחזיר לערך הזה; null = כבר היינו ב«מותאם» (רק עורכים שניות) */
-  const timerRestoreOnCancelRef = useRef<'60' | '90' | 'off' | null>(null);
   const [guidancePromptOpen, setGuidancePromptOpen] = useState(false);
   const [guidanceOn, setGuidanceOn] = useState(false); // הדרכה והסברים — ברירת מחדל: כבוי
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
@@ -8102,17 +8465,19 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const startGame = () => {
     // השם מגיע קודם כל מתוך ה-prop (ChoiceScreen), ואז מ-AsyncStorage (PlayerNameModal קודם),
     // ורק לבסוף נופל לברירת המחדל "שחקן 1". מסונכרן לשני המפתחות כדי שמסכים עתידיים יקראו אותו.
-    const effectiveSavedName = (preferredName?.trim() || savedPlayerNameRef.current || '').slice(0, 7);
+    const effectiveSavedName = sanitizeStoredPlayerName(preferredName?.trim() || savedPlayerNameRef.current || '');
     if (effectiveSavedName) {
       void AsyncStorage.setItem(PLAYER_SAVED_NAME_KEY, effectiveSavedName);
     }
     const humanName = effectiveSavedName || t('start.playerPlaceholder', { n: String(1) });
+    const storedProfiles = storedProfilesRef.current;
     const players =
       gameMode === 'vs-bot'
         ? [
             {
               name: humanName,
               isBot: false,
+              progress: getStoredProgressForName(storedProfiles, humanName),
             },
             {
               name: botDisplayName.trim() || t('botOffline.botName'),
@@ -8124,6 +8489,12 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               ? effectiveSavedName
               : t('start.playerPlaceholder', { n: String(i + 1) }),
             isBot: false,
+            progress: getStoredProgressForName(
+              storedProfiles,
+              i === 0 && effectiveSavedName
+                ? effectiveSavedName
+                : t('start.playerPlaceholder', { n: String(i + 1) })
+            ),
           }));
     if (gameState.soundsEnabled !== false) {
       void playSfx('start', { cooldownMs: 250, volumeOverride: 0.4 });
@@ -8157,11 +8528,10 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   // Reserve enough vertical space for the absolute top action buttons
   // so they never overlap the Salinda hero image.
   // Includes two stacked button rows (shop/themes + rules) plus wrap safety.
-  const TOP_ACTIONS_H = 96;
-  const HERO_TOP = TOP_ACTIONS_TOP + TOP_ACTIONS_H + 4;
-  // תמונת סלינדה — גודל מקורי במסך ברוכים הבאים
+  const TOP_ACTIONS_H = 74;
+  const HERO_TOP = TOP_ACTIONS_TOP + TOP_ACTIONS_H + 2;
   // Shrink hero joker card to free vertical space for scrolling.
-  const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * 0.5;
+  const JOKER_SIZE = Math.min(SCREEN_W * 0.52, 220) * 0.38;
 
   const stopDemoSimulation = useCallback(() => {
     if (demoSimTimerRef.current) {
@@ -8606,24 +8976,20 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent' }}>
       {/* כפתור חזרה + חוקים — בצד למעלה */}
-      <View style={{ position: 'absolute', top: TOP_ACTIONS_TOP, left: 16, right: 16, minHeight: TOP_ACTIONS_H, flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', zIndex: 20, flexWrap: 'wrap', gap: 8 }}>
+      <View style={{ position: 'absolute', top: TOP_ACTIONS_TOP, left: 16, right: 16, minHeight: TOP_ACTIONS_H, flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', zIndex: 20, flexWrap: 'wrap', gap: 5 }}>
         {onBackToChoice && (
-          <LulosButton text={t('lobby.backToMode')} color="blue" width={130} height={38} fontSize={11} onPress={onBackToChoice} />
+          <LulosButton text={t('lobby.backToMode')} color="blue" width={120} height={32} fontSize={10} onPress={onBackToChoice} />
         )}
         {onHowToPlay && (
-          <LulosButton text={t('mode.howToPlay')} color="orange" width={110} height={38} fontSize={12} onPress={onHowToPlay} />
+          <LulosButton text={t('mode.howToPlay')} color="orange" width={100} height={32} fontSize={11} onPress={onHowToPlay} />
         )}
-        <View style={{ flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {onShop && (
-              <LulosButton text={t('shop.openShop')} color="yellow" width={90} height={38} fontSize={13} onPress={onShop} />
-            )}
-            {onMyThemes && (
-              <LulosButton text={t('themes.openMyThemes')} color="yellow" width={90} height={38} fontSize={13} onPress={onMyThemes} />
-            )}
-          </View>
-          <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
-        </View>
+        {onShop && (
+          <LulosButton text={t('shop.openShop')} color="yellow" width={80} height={32} fontSize={11} onPress={onShop} />
+        )}
+        {onMyThemes && (
+          <LulosButton text={t('themes.openMyThemes')} color="yellow" width={80} height={32} fontSize={11} onPress={onMyThemes} />
+        )}
+        <LulosButton text={t('start.rulesButton')} color="blue" width={80} height={32} fontSize={11} onPress={() => setRulesOpen(true)} />
       </View>
       <AppModal
         visible={rulesOpen}
@@ -9115,13 +9481,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   snapFocus="leading"
                   scrollAfterSelect={(key) => key !== 'custom'}
                   onSelect={(key) => {
-                    if (key === 'custom') {
-                      timerRestoreOnCancelRef.current = timer === 'custom' ? null : (timer as '60' | '90' | 'off');
-                      setTimer('custom');
-                      setTimerCustomModalOpen(true);
-                    } else {
-                      setTimer(key as '60' | '90' | 'off');
-                    }
+                    setTimer(key as '60' | '90' | 'off' | 'custom');
                   }}
                 />
               </View>
@@ -9129,15 +9489,31 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
           </LinearGradient>
           {timer === 'custom' && (
             <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-              <View style={[hsS.row, hsS.rowTimer, { marginTop: -4, flexDirection: 'row', alignItems: 'center' }]}>
-                <Text style={[hsS.rowLabel, { flex: 1, fontSize: 12, color: 'rgba(255,255,255,0.85)', textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
-                  {customTimerSeconds >= 60
-                    ? t('start.customTimerMinSec', {
-                        min: String(Math.floor(customTimerSeconds / 60)),
-                        sec: String(customTimerSeconds % 60),
-                      })
-                    : t('start.customTimerSecOnly', { sec: String(customTimerSeconds) })}
-                </Text>
+              <View style={[hsS.row, { paddingVertical: 10, flexDirection: 'row', justifyContent: 'center', gap: 24 }]}>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity onPress={() => setCustomTimerSeconds((s) => Math.max(1, s - 60))} style={{ backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '700' }}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={{ color: '#FFF', fontSize: 22, fontWeight: '900', minWidth: 28, textAlign: 'center' }}>{Math.floor(customTimerSeconds / 60)}</Text>
+                    <TouchableOpacity onPress={() => setCustomTimerSeconds((s) => Math.min(300, s + 60))} style={{ backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '700' }}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity onPress={() => setCustomTimerSeconds((s) => Math.max(1, Math.floor(s / 60) * 60 + Math.max(0, (s % 60) - 5)))} style={{ backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '700' }}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={{ color: '#FFF', fontSize: 22, fontWeight: '900', minWidth: 28, textAlign: 'center' }}>{String(customTimerSeconds % 60).padStart(2, '0')}</Text>
+                    <TouchableOpacity onPress={() => setCustomTimerSeconds((s) => Math.min(300, Math.floor(s / 60) * 60 + Math.min(55, (s % 60) + 5)))} style={{ backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }}>
+                      <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '700' }}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
             </LinearGradient>
           )}
@@ -9353,58 +9729,6 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
         </View>
         </Animated.ScrollView>
 
-        <RNModal visible={timerCustomModalOpen} transparent animationType="fade">
-          <TouchableOpacity
-            activeOpacity={1}
-            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
-            onPress={() => {
-              const r = timerRestoreOnCancelRef.current;
-              if (r != null) setTimer(r);
-              setTimerCustomModalOpen(false);
-            }}
-          >
-            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ backgroundColor: '#1F2937', borderRadius: 16, padding: 20, width: '100%', maxWidth: 320 }}>
-              <Text style={{ color: '#FFF', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 }}>{t('lobby.timerCustomHint')}</Text>
-              <View style={{ flexDirection: Platform.OS === 'android' ? 'row-reverse' : 'row', justifyContent: 'center', gap: 24, marginBottom: 20 }}>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerMin')}</Text>
-                  <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                    {Array.from({ length: 6 }, (_, i) => i).map((m) => (
-                      <TouchableOpacity key={m} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(1, (m * 60) + (prev % 60))))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: customTimerSeconds >= 60 ? Math.floor(customTimerSeconds / 60) === m ? '#FBBC05' : '#9CA3AF' : m === 0 ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{m}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '700', marginBottom: 4 }}>{t('start.timerPickerSec')}</Text>
-                  <ScrollView style={{ height: 120 }} showsVerticalScrollIndicator={false} snapToInterval={36} decelerationRate="fast">
-                    {Array.from({ length: 60 }, (_, i) => i).map((s) => (
-                      <TouchableOpacity key={s} onPress={() => setCustomTimerSeconds(prev => Math.min(300, Math.max(1, Math.floor(prev / 60) * 60 + s)))} style={{ height: 36, justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: (customTimerSeconds % 60) === s ? '#FBBC05' : '#9CA3AF', fontSize: 18, fontWeight: '700' }}>{s}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              </View>
-              <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'center' }}>
-                <TouchableOpacity
-                  onPress={() => {
-                    const r = timerRestoreOnCancelRef.current;
-                    if (r != null) setTimer(r);
-                    setTimerCustomModalOpen(false);
-                  }}
-                  style={{ backgroundColor: '#374151', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}
-                >
-                  <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('ui.cancel')}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => { setTimer('custom'); timerRestoreOnCancelRef.current = null; setTimerCustomModalOpen(false); }} style={{ backgroundColor: '#34A853', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}>
-                  <Text style={{ color: '#FFF', fontWeight: '700' }}>{t('start.timerModalStart')}</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </RNModal>
         {/* Start button — למטה, ללא מסגרת/רקע נוסף סביב הכפתור */}
         <View style={{ marginTop: 40, marginBottom: 4, alignItems: 'center' }}>
           <CasinoButton text={t('start.letsPlay')} width={220} height={48} fontSize={19} onPress={startGame} />
@@ -9819,6 +10143,7 @@ function BotDifficultySettingsBlock({
 const PLAYER_NAME_MODAL_SEEN_KEY = 'lulos_player_name_modal_seen';
 /** שם השחקן האנושי — נשמר אחרי הזנה ראשונה, משמש ב-startGame כדי לא לחזור ל-"שחקן 1". */
 const PLAYER_SAVED_NAME_KEY = 'lulos_player_saved_name';
+const PLAYER_PROFILES_STORAGE_KEY = 'lulos_player_profiles_v1';
 
 /** האם השם הוא ברירת מחדל (שחקן N) — אם כן, תמיד להציג את המוקאפ גם אם המפתח נשמר (ועדת חקירה: מונע "הוא לא מופיע") */
 function isDefaultPlayerName(name: string): boolean {
@@ -9883,6 +10208,11 @@ function PlayerNameModal({
     // Persist the name for future games so startGame uses it instead of
     // reverting to "שחקן 1" every time.
     void AsyncStorage.setItem(PLAYER_SAVED_NAME_KEY, finalName);
+    void loadStoredPlayerProfiles()
+      .then((store) => saveStoredPlayerProfiles(mergePlayersIntoStoredProfiles(store, [
+        { name: finalName, isBot: false, ...zeroStoredPlayerProgress() },
+      ], finalName)))
+      .catch(() => {});
     setShow(false);
     onConfirm(finalName);
     onClose?.();
@@ -10127,13 +10457,15 @@ function IdenticalWildStarHint({ compact }: { compact?: boolean }) {
   );
 }
 
-function TurnTransition() {
+function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const { state, dispatch } = useGame();
   const soundOn = state.soundsEnabled !== false;
   const mp = useMultiplayerOptional();
   const { profile } = useAuth();
+  const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
+  const [storedPlayerProfiles, setStoredPlayerProfiles] = useState<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
   const cp = state.players[state.currentPlayerIndex];
   const myPlayerIndex = (state as { myPlayerIndex?: number }).myPlayerIndex;
   const myPlayerState =
@@ -10173,6 +10505,17 @@ function TurnTransition() {
   const turnPlayerIdxRef = useRef(state.currentPlayerIndex);
   const beginReadyBlinkOpacity = useRef(new Animated.Value(1)).current;
   const beginReadyBlinkLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadStoredPlayerProfiles()
+      .then((store) => {
+        if (!cancelled) setStoredPlayerProfiles(store);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   /** null לפני הידרציה נחשב «הדרכה דולקת» — כמו ב־reducer (guidanceEnabled !== false) */
   const guidanceOn = state.guidanceEnabled !== false;
 
@@ -10292,8 +10635,8 @@ function TurnTransition() {
     }, 180);
     return () => clearInterval(id);
   }, [state.phase, state.currentPlayerIndex, state.roundsPlayed, isOnlineSpectator, isLocalBotTurn, mp?.gameOverride, dispatch]);
-  const startTurnDeadlineAt = isLocalBotTurn ? null : (isMyTurnOnline ? (state.turnDeadlineAt ?? null) : localStartTurnDeadlineAt);
-  const showSmallTurnTimerHint = state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
+  const startTurnDeadlineAt = state.isTutorial ? null : (isLocalBotTurn ? null : (isMyTurnOnline ? (state.turnDeadlineAt ?? null) : localStartTurnDeadlineAt));
+  const showSmallTurnTimerHint = !state.isTutorial && state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
   useEffect(() => {
     if (startTurnDeadlineAt == null) return;
     const id = setInterval(() => setStartTurnNowMs(Date.now()), 140);
@@ -10384,9 +10727,14 @@ function TurnTransition() {
   const [editingPlayerIndex, setEditingPlayerIndex] = useState<number | null>(null);
   const handlePlayerNameConfirm = useCallback((name: string) => {
     const targetIndex = editingPlayerIndex ?? currentIdx;
-    dispatch({ type: 'UPDATE_PLAYER_NAME', playerIndex: targetIndex, name });
+    dispatch({
+      type: 'UPDATE_PLAYER_NAME',
+      playerIndex: targetIndex,
+      name,
+      progress: getStoredProgressForName(storedPlayerProfiles, name) ?? zeroStoredPlayerProgress(),
+    });
     setEditingPlayerIndex(null);
-  }, [dispatch, currentIdx, editingPlayerIndex]);
+  }, [dispatch, currentIdx, editingPlayerIndex, storedPlayerProfiles]);
 
   const [showAllPlayers, setShowAllPlayers] = useState(false);
   const [nameModalOpen, setNameModalOpen] = useState(false);
@@ -10436,12 +10784,12 @@ function TurnTransition() {
       case 'number': return `קלף מספר (${card.value}) — הנח אותו בתרגיל כדי לפתור את המשוואה`;
       case 'fraction': {
         const fracTips: Record<string, string> = {
-          '1/2': 'קלף שבר — מחלק את היעד ב-2. יעד 10 הופך ל-5. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא.',
-          '1/3': 'קלף שבר — מחלק את היעד ב-3. יעד 9 הופך ל-3. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא.',
-          '1/4': 'קלף שבר — מחלק את היעד ב-4. יעד 12 הופך ל-3. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא.',
-          '1/5': 'קלף שבר — מחלק את היעד ב-5. יעד 10 הופך ל-2. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא.',
+          '1/2': 'קלף שבר — מחלק את היעד ב-2. יעד 10 הופך ל-5. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא. אם הוא לא מגן, הוא שולף קלף אחד.',
+          '1/3': 'קלף שבר — מחלק את היעד ב-3. יעד 9 הופך ל-3. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא. אם הוא לא מגן, הוא שולף קלף אחד.',
+          '1/4': 'קלף שבר — מחלק את היעד ב-4. יעד 12 הופך ל-3. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא. אם הוא לא מגן, הוא שולף קלף אחד.',
+          '1/5': 'קלף שבר — מחלק את היעד ב-5. יעד 10 הופך ל-2. גם קלף התקפה: הנח על הערימה כדי לאתגר את השחקן הבא. אם הוא לא מגן, הוא שולף קלף אחד.',
         };
-        return fracTips[card.fraction] ?? `קלף שבר (${card.fraction}). גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא.`;
+        return (card.fraction ? fracTips[card.fraction] : null) ?? `קלף שבר (${card.fraction}). גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. אם אין הגנה, שולפים קלף אחד.`;
       }
       case 'operation': return `קלף פעולה (${card.operation}) — שלב אותו בתוך התרגיל כדי להיפטר מהקלף.`;
       case 'joker': return `ג'וקר — תחליף לסימן (+, −, ×, ÷). שלבו אותו בתרגיל והיפטרו מקלף. לא מגן מפני אתגר שבר.`;
@@ -10478,23 +10826,68 @@ function TurnTransition() {
       <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
       {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
       <View pointerEvents="box-none" style={{flexDirection:'row',direction:'ltr' as any,alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
+        {!state.isTutorial ? (
         <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
           <LulosButton text={t('ui.exitGame')} color="red" width={72} height={32} fontSize={11} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
           {!state.isTutorial && (
             <LulosButton text={t('ui.tournament')} color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           )}
+          {!state.isTutorial && onOpenShop ? (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={onOpenShop}
+              style={{
+                width: 78,
+                height: 42,
+                marginBottom: -6,
+                borderRadius: 21,
+                borderWidth: 2,
+                borderColor: '#FDE68A',
+                overflow: 'hidden',
+                shadowColor: '#F59E0B',
+                shadowOpacity: 0.34,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 7,
+              }}
+            >
+              <LinearGradient
+                colors={['#FFF4B8', '#FBBF24', '#D97706']}
+                start={{ x: 0.1, y: 0 }}
+                end={{ x: 0.92, y: 1 }}
+                style={{
+                  flex: 1,
+                  borderRadius: 19,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
+              >
+                <SlindaCoin size={18} />
+                <Text style={{ color: '#5B2D00', fontSize: 16, fontWeight: '900' }}>{totalCoins}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : null}
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
-          {!state.isTutorial && (() => { const hp = state.players.find(p => !p.isBot) ?? (state.players.length === 1 ? state.players[0] : null); return hp ? (
-            <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
-              <ExcellenceMeter
-                value={hp.courageMeterPercent ?? 0}
-                pulseKey={hp.courageRewardPulseId ?? 0}
-                isCelebrating={state.lastCourageCoinsAwarded}
-                compact
-              />
-            </View>
-          ) : null; })()}
+          {!state.isTutorial && (() => {
+            const meterPlayer =
+              (cp && !cp.isBot ? cp : null) ??
+              state.players.find(p => !p.isBot) ??
+              (state.players.length === 1 ? state.players[0] : null);
+            return meterPlayer ? (
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
+                <ExcellenceMeter
+                  value={meterPlayer.courageMeterPercent ?? 0}
+                  pulseKey={meterPlayer.courageRewardPulseId ?? 0}
+                  isCelebrating={state.lastCourageCoinsAwarded}
+                  compact
+                />
+              </View>
+            ) : null;
+          })()}
         </View>
+        ) : null}
         <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-end',gap:2,flex:1,minWidth:0,marginTop:-65,marginLeft:8}}>
           {/* תגי מידע (שברים/טיימר/פתרון תרגיל) הועברו לטורניר — שורות 446, 458, 461 ב-TournamentInfoModal */}
           <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end',alignSelf:'flex-end',marginTop:2,marginRight:4}}>
@@ -10668,23 +11061,6 @@ function TurnTransition() {
               >
                 {state.lastCourageRewardReason}
               </Text>
-            </View>
-          </View>
-        )}
-
-        {/* +5 coins animated notification — shown only when meter fills and resets */}
-        {!!state.lastCourageCoinsAwarded && !state.players[lastPlayerIndex]?.isBot && !state.isTutorial && (
-          <View style={{ alignSelf: 'center', marginBottom: 8, maxWidth: 360, width: '100%', alignItems: 'center' }}>
-            <View style={[alertBubbleStyle.box, { paddingVertical: 12, paddingHorizontal: 20, maxWidth: 340, backgroundColor: '#854D0E', borderColor: '#FDE68A', borderWidth: 3, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
-              <SlindaCoin size={28} spin pulseKey={state.courageRewardPulseId} />
-              <View style={{ flex: 1 }}>
-                <Text style={[alertBubbleStyle.title, { fontSize: 18, color: '#FEF3C7', marginBottom: 2, textAlign: isRTL ? 'right' : 'left' }]}>
-                  {t('courage.coinAward.title')}
-                </Text>
-                <Text style={{ color: '#FDE68A', fontSize: 13, textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }}>
-                  {t('courage.coinAward.body')}
-                </Text>
-              </View>
             </View>
           </View>
         )}
@@ -11099,7 +11475,7 @@ function PlayerSidebar({
                   width={72}
                   height={32}
                   fontSize={10}
-                  onPress={undefined}
+                  onPress={() => {}}
                 />
                 {/* מד היצטיינות: בר אופקי + מטבע סלינדה */}
                 <View style={{ width: 66, gap: 2 }}>
@@ -11215,13 +11591,15 @@ async function clearAllLulosOnboardingKeys(): Promise<void> {
   await AsyncStorage.multiRemove(keys);
 }
 
-function GameScreen() {
+function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { state, dispatch } = useGame();
   const { t, isRTL } = useLocale();
-  const { profile } = useAuth();
+  const { profile, awardCoins } = useAuth();
   const { table, background, activeTableSkin } = useActiveTheme();
   const safe = useGameSafeArea();
   const soundOn = state.soundsEnabled !== false;
+  const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
+  const [storedPlayerProfiles, setStoredPlayerProfiles] = useState<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
   // Parens-right טוגל — מצב גלובלי לבנאי המשוואה (מוצג כטוגל חיצוני מעל השולחן)
   const [parensRight, setParensRight] = useState<boolean>(false);
   // אתחול בכל שלב building חדש
@@ -11256,7 +11634,49 @@ function GameScreen() {
     setSfxMuted(!soundOn);
     void setSfxVolume(soundOn ? 0.33 : 0);
   }, [soundOn]);
+  const lastAwardSyncedPulseRef = useRef<number>(0);
+  useEffect(() => {
+    if (state.isTutorial || !state.lastCourageCoinsAwarded) return;
+    const pulseId = state.courageRewardPulseId ?? 0;
+    if (pulseId <= 0 || lastAwardSyncedPulseRef.current === pulseId) return;
+    lastAwardSyncedPulseRef.current = pulseId;
+    void awardCoins(EXCELLENCE_METER_FULL_REWARD_COINS, 'excellence_meter_full');
+  }, [awardCoins, state.courageRewardPulseId, state.lastCourageCoinsAwarded, state.isTutorial]);
+  const [showMeterCelebrationOverlay, setShowMeterCelebrationOverlay] = useState(false);
+  const [meterCelebrationRewardCoins, setMeterCelebrationRewardCoins] = useState(EXCELLENCE_METER_FULL_REWARD_COINS);
+  const lastOverlayPulseRef = useRef<number>(0);
+  useEffect(() => {
+    if (state.isTutorial || !state.lastCourageCoinsAwarded) return;
+    const pulseId = state.courageRewardPulseId ?? 0;
+    if (pulseId <= 0 || lastOverlayPulseRef.current === pulseId) return;
+    lastOverlayPulseRef.current = pulseId;
+    setMeterCelebrationRewardCoins(EXCELLENCE_METER_FULL_REWARD_COINS);
+    setShowMeterCelebrationOverlay(true);
+    if (state.soundsEnabled !== false) {
+      void playMeterCelebrateSequence({ cooldownMs: 0, volumeOverride: 0.8 });
+    }
+  }, [state.courageRewardPulseId, state.lastCourageCoinsAwarded, state.isTutorial]);
   const cp = state.players[state.currentPlayerIndex];
+  useEffect(() => {
+    let cancelled = false;
+    loadStoredPlayerProfiles()
+      .then((store) => {
+        if (!cancelled) setStoredPlayerProfiles(store);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (state.isTutorial) return;
+    const activeHumanName = cp && !cp.isBot ? cp.name : null;
+    setStoredPlayerProfiles((prev) => {
+      const next = mergePlayersIntoStoredProfiles(prev, state.players, activeHumanName);
+      void saveStoredPlayerProfiles(next);
+      return next;
+    });
+  }, [cp, state.isTutorial, state.players]);
   const mpOptional = useMultiplayerOptional();
   const gameScreenMyIndex = (state as { myPlayerIndex?: number }).myPlayerIndex;
   const isOnlineGame = !!mpOptional?.gameOverride;
@@ -11354,7 +11774,7 @@ function GameScreen() {
     setLocalGameTurnDeadlineAt(Date.now() + START_TURN_TIMER_SECONDS * 1000);
     gameTurnTimeoutFiredRef.current = false;
   }, [state.phase, state.currentPlayerIndex, state.roundsPlayed, state.hasPlayedCards, state.dice, state.pendingFractionTarget]);
-  const gameTurnDeadlineAt = state.turnDeadlineAt ?? localGameTurnDeadlineAt;
+  const gameTurnDeadlineAt = state.isTutorial ? null : (state.turnDeadlineAt ?? localGameTurnDeadlineAt);
   useEffect(() => {
     if (gameTurnDeadlineAt == null) return;
     const id = setInterval(() => setGameTurnNowMs(Date.now()), 200);
@@ -11415,13 +11835,23 @@ function GameScreen() {
         : 0;
   const timerTurnKeyRef = useRef<string | null>(null);
   const timerConfigKeyRef = useRef<string>('');
-  const showSmallTurnTimerHint = state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
+  const showSmallTurnTimerHint = !state.isTutorial && state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
   const bubbleMidRef = useRef<Audio.Sound | null>(null);
   const bubbleEndRef = useRef<Audio.Sound | null>(null);
   const gameTimerFinal7Ref = useRef<Audio.Sound | null>(null);
   const bubbleTickLastSecondRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (state.isTutorial) {
+      setTimerRunning(false);
+      setSecsLeft(0);
+      setTimerExpiredOverlay(false);
+      timerExpiredRef.current = false;
+      timerTurnKeyRef.current = null;
+      timerConfigKeyRef.current = '';
+      bubbleTickLastSecondRef.current = null;
+      return;
+    }
     if (state.timerSetting === 'off') {
       setTimerRunning(false);
       timerTurnKeyRef.current = null;
@@ -11457,7 +11887,7 @@ function GameScreen() {
       timerConfigKeyRef.current = configKey;
     }
     setTimerRunning(true);
-  }, [state.phase, state.hasPlayedCards, state.timerSetting, TIMER_TOTAL]);
+  }, [state.isTutorial, state.phase, state.hasPlayedCards, state.timerSetting, TIMER_TOTAL]);
 
   // כשהטיימר מגיע ל־0: מציגים הודעה חוסמת בתחתית, אחרי 2.5 שניות — שלוף קלף ומעבר לתור הבא
   const [timerExpiredOverlay, setTimerExpiredOverlay] = useState(false);
@@ -11679,8 +12109,10 @@ function GameScreen() {
         setResultsChipBoostedPulse(false);
       } else if (cmd.kind === 'clearSolveExerciseChip') {
         setSelectedEquationForDisplay(null);
+        setSolveExerciseHidden(false);
       } else if (cmd.kind === 'setSolveChip') {
         setSelectedEquationForDisplay({ equation: cmd.equation, result: cmd.result });
+        setSolveExerciseHidden(false);
         setSolveChipPulseKey((prev) => prev + 1);
       }
     });
@@ -11846,8 +12278,16 @@ function GameScreen() {
   // ── Guidance notification system (first-time full, then short) ──
   const guidanceSeen = useRef(new Set<string>());
 
+  // Ref so showOnb can read notifications without capturing them in the
+  // useCallback dep array — prevents the callback from being recreated (and
+  // all its dependent effects from re-running) every time a notification is
+  // pushed, which was the root cause of the "Maximum update depth exceeded"
+  // loop in tutorial building phase.
+  const notificationsRef = useRef(state.notifications);
+  useEffect(() => { notificationsRef.current = state.notifications; }, [state.notifications]);
+
   const showOnb = useCallback((key: OnbKey, emoji: string, title: string, body: string) => {
-    const hasOpenOnbAck = (state.notifications ?? []).some((n) => n.requireAck && n.id.startsWith('onb-'));
+    const hasOpenOnbAck = (notificationsRef.current ?? []).some((n) => n.requireAck && n.id.startsWith('onb-'));
     if (__DEV__) console.log('[ONB] showOnb called:', key, 'alreadySeen:', onbSeen.current.has(key), 'hasOpenOnbAck:', hasOpenOnbAck);
     if (onbSeen.current.has(key) || hasOpenOnbAck) return;
     dispatch({ type: 'PUSH_NOTIFICATION', payload: {
@@ -11859,7 +12299,7 @@ function GameScreen() {
       style: 'info',
       requireAck: true,
     }});
-  }, [dispatch, state.notifications]);
+  }, [dispatch]);
 
   useEffect(() => {
     (state.notifications ?? []).forEach((n) => {
@@ -11949,6 +12389,7 @@ function GameScreen() {
   }, [state.phase]);
   /** חץ לכפתור הקוביות — מופיע ב־5 השניות האחרונות של טיימר תחילת התור */
   const showRollArrow =
+    !state.isTutorial &&
     canRoll &&
     (gameTurnSecsLeft != null && gameTurnSecsLeft > 0 && gameTurnSecsLeft <= 5);
   useEffect(() => {
@@ -12230,6 +12671,7 @@ function GameScreen() {
             const tapDelay = setTimeout(() => {
               playMiniResultTapSound();
               setSelectedEquationForDisplay(targetEq);
+              setSolveExerciseHidden(false);
               setSolveChipPulseKey((prev) => prev + 1);
             }, 500);
             return () => clearTimeout(tapDelay);
@@ -12240,6 +12682,7 @@ function GameScreen() {
       botDemoOpenedResultsRef.current = false;
       setResultsOpenState(false);
       setSelectedEquationForDisplay(null);
+      setSolveExerciseHidden(false);
       resultsStripArrowLoopRef.current?.stop();
       resultsStripArrowLoopRef.current = null;
       resultsStripArrowAnim.setValue(0);
@@ -12249,6 +12692,7 @@ function GameScreen() {
 
   // תרגיל נבחר להצגה באזור האפור (רק כש־showSolveExercise מופעל)
   const [selectedEquationForDisplay, setSelectedEquationForDisplay] = useState<EquationOption | null>(null);
+  const [solveExerciseHidden, setSolveExerciseHidden] = useState(false);
   const [solveChipPulseKey, setSolveChipPulseKey] = useState(0);
 
   // ── Bot: always open the red "solve exercise" chip with the bot's
@@ -12267,6 +12711,7 @@ function GameScreen() {
       botEquationShownRef.current = buildKey;
       const first = state.validTargets[0];
       setSelectedEquationForDisplay({ result: first.result, equation: first.equation });
+      setSolveExerciseHidden(false);
       setSolveChipPulseKey((prev) => prev + 1);
       if (!resultsOpen) {
         botDemoOpenedResultsRef.current = true;
@@ -12280,6 +12725,7 @@ function GameScreen() {
         result: state.equationResult ?? 0,
         equation: state.lastEquationDisplay,
       });
+      setSolveExerciseHidden(false);
       setSolveChipPulseKey((prev) => prev + 1);
     }
   }, [isBotTurnAny, state.phase, state.hasPlayedCards, state.lastEquationDisplay, state.equationResult, state.validTargets, state.roundsPlayed, state.currentPlayerIndex, resultsOpen]);
@@ -12287,6 +12733,7 @@ function GameScreen() {
   const handleMiniResultSelect = useCallback((eq: EquationOption) => {
     playMiniResultTapSound();
     setSelectedEquationForDisplay(eq);
+    setSolveExerciseHidden(false);
     setSolveChipPulseKey(prev => prev + 1);
     // Tutorial (lesson 6 step 6.2) watches for this event as the outcome
     // predicate — without the emit the lesson never advances.
@@ -12425,11 +12872,12 @@ function GameScreen() {
 
   // בנה תרגיל — רק אחרי הטלת קוביות (שלב building עם קוביות)
   useEffect(() => {
+    if (state.isTutorial) return; // tutorial has its own guidance system
     if (!midGameHintsUnlocked) return;
     if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
     if (state.phase !== 'building' || !state.dice) return;
     showOnb('onb_build_equation', '🧮', t('onb.buildEquation.title'), t('onb.buildEquation.body'));
-  }, [midGameHintsUnlocked, tutLoaded, onbBlocked, state.phase, state.dice, showOnb, t]);
+  }, [state.isTutorial, midGameHintsUnlocked, tutLoaded, onbBlocked, state.phase, state.dice, showOnb, t]);
 
   // מיני קלפים — רק בפעם הראשונה שהרצועה זמינה (לפי הגדרות המשחק)
   useEffect(() => {
@@ -12444,14 +12892,16 @@ function GameScreen() {
 
   // 7. First discard — after cards are discarded
   useEffect(() => {
+    if (state.isTutorial) return;
     if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
     if (state.lastDiscardCount > 0) {
       showOnb('onb_first_discard', '💡', t('onb.firstDiscard.title'), t('onb.firstDiscard.body'));
     }
-  }, [tutLoaded, onbBlocked, state.lastDiscardCount, t]);
+  }, [state.isTutorial, tutLoaded, onbBlocked, state.lastDiscardCount, t]);
 
   // 8. Choose cards — first time entering solved phase (בחר קלפים שסכומם שווה לתוצאה)
   useEffect(() => {
+    if (state.isTutorial) return;
     if (!guidanceEnabledRef.current || !tutLoaded || onbBlocked) return;
     if (state.phase === 'solved' && state.equationResult !== null && !state.hasPlayedCards) {
       showOnb(
@@ -12461,7 +12911,7 @@ function GameScreen() {
         t('onb.chooseCardsAfterConfirm.body'),
       );
     }
-  }, [tutLoaded, onbBlocked, state.phase, state.equationResult, state.hasPlayedCards, t]);
+  }, [state.isTutorial, tutLoaded, onbBlocked, state.phase, state.equationResult, state.hasPlayedCards, t]);
 
   // G1. Fraction attack — defender enters pre-roll with pendingFractionTarget
   // הודעות שבר מוצגות בבועות NotificationZone בלבד (ללא וילון תחתון).
@@ -12650,8 +13100,49 @@ function GameScreen() {
           paddingBottom: 4,
         }}
       >
+        {!state.isTutorial ? (
         <View style={{ flexShrink: 0, gap: 0, marginTop: -65 }}>
           <LulosButton text={t('ui.exitGame')} color="red" width={72} height={32} fontSize={11} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
+          {!state.isTutorial && (
+            <LulosButton text={t('start.rulesButton')} color="blue" width={72} height={32} fontSize={11} onPress={() => setGameRulesOpen(true)} style={{ marginBottom: -8 }} />
+          )}
+          {!state.isTutorial && (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => onOpenShop?.()}
+              style={{
+                width: 78,
+                height: 42,
+                marginBottom: -6,
+                borderRadius: 21,
+                borderWidth: 2,
+                borderColor: '#FDE68A',
+                overflow: 'hidden',
+                shadowColor: '#F59E0B',
+                shadowOpacity: 0.34,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 6 },
+                elevation: 7,
+              }}
+            >
+              <LinearGradient
+                colors={['#FFF4B8', '#FBBF24', '#D97706']}
+                start={{ x: 0.1, y: 0 }}
+                end={{ x: 0.92, y: 1 }}
+                style={{
+                  flex: 1,
+                  borderRadius: 19,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
+              >
+                <SlindaCoin size={18} />
+                <Text style={{ color: '#5B2D00', fontSize: 16, fontWeight: '900' }}>{totalCoins}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
           {!state.isTutorial && (
             <LulosButton text={t('ui.tournament')} color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
           )}
@@ -12667,17 +13158,24 @@ function GameScreen() {
             />
           )}
           <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={toggleSoundsInGame} />
-          {!state.isTutorial && (() => { const hp = state.players.find(p => !p.isBot) ?? (state.players.length === 1 ? state.players[0] : null); return hp ? (
-            <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
-              <ExcellenceMeter
-                value={hp.courageMeterPercent ?? 0}
-                pulseKey={hp.courageRewardPulseId ?? 0}
-                isCelebrating={state.lastCourageCoinsAwarded}
-                compact
-              />
-            </View>
-          ) : null; })()}
+          {!state.isTutorial && (() => {
+            const meterPlayer =
+              (cp && !cp.isBot ? cp : null) ??
+              state.players.find(p => !p.isBot) ??
+              (state.players.length === 1 ? state.players[0] : null);
+            return meterPlayer ? (
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
+                <ExcellenceMeter
+                  value={meterPlayer.courageMeterPercent ?? 0}
+                  pulseKey={meterPlayer.courageRewardPulseId ?? 0}
+                  isCelebrating={state.lastCourageCoinsAwarded}
+                  compact
+                />
+              </View>
+            ) : null;
+          })()}
         </View>
+        ) : null}
         {!state.isTutorial && (
           <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, marginLeft: 8, marginTop: -65 }}>
             <PlayerSidebar
@@ -13100,9 +13598,6 @@ function GameScreen() {
                   fontSize={20}
                   textColor="#FFFFFF"
                   onPress={() => {
-                    if (state.isTutorial && tutorialBus.getL4Step3Mode()) {
-                      tutorialBus.emitUserEvent({ kind: 'userPlayedCards' });
-                    }
                     dispatch({ type: 'CONFIRM_STAGED' });
                   }}
                 />
@@ -13113,13 +13608,13 @@ function GameScreen() {
       )}
 
       {/* כפתור פתרון תרגיל — ליד כפתור תוצאות אפשריות, ממורכז לגובה הערימה וברווח 20px */}
-      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (!state.isTutorial || state.showPossibleResults) && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise || state.showPossibleResults) && selectedEquationForDisplay !== null && (
+      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (!state.isTutorial || state.showPossibleResults) && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise || state.showPossibleResults) && selectedEquationForDisplay !== null && !solveExerciseHidden && (
         <View style={{ position: 'absolute', top: 84, right: 224, zIndex: 8 }} pointerEvents="box-none">
           <SolveExerciseChip
             equation={selectedEquationForDisplay.equation}
             pulseKey={solveChipPulseKey}
             loopPulse={state.isTutorial && tutorialBus.getL7SolveChipLoopPulse()}
-            onPress={state.isTutorial ? () => {} : () => setSelectedEquationForDisplay(null)}
+            onPress={state.isTutorial ? () => {} : () => setSolveExerciseHidden(true)}
           />
         </View>
       )}
@@ -13139,6 +13634,13 @@ function GameScreen() {
         const drawVisible = showDraw || showFracDraw || showFallback;
         const showSolvedRow = so && !state.hasPlayedCards;
         const hasStaged = showSolvedRow && state.stagedCards.length > 0;
+        const showBackToEquation =
+          !state.isTutorial &&
+          (bl || so) &&
+          !state.hasPlayedCards &&
+          state.pendingFractionTarget === null &&
+          selectedEquationForDisplay !== null &&
+          solveExerciseHidden;
         return (
           <View pointerEvents="box-none" style={{ position: 'absolute', bottom: 30, left: 0, right: 0, minHeight: BOTTOM_BAR_HEIGHT + safe.insets.bottom, zIndex: 20, overflow: 'visible', backgroundColor: 'transparent', paddingHorizontal: 20, paddingTop: 12, paddingBottom: barPaddingBottom }}>
             <View pointerEvents="box-none" style={{flex:1,justifyContent:'flex-end'}}>
@@ -13150,6 +13652,9 @@ function GameScreen() {
                 {/* איפוס התרגיל — רק ב-building */}
                 {bl && !state.hasPlayedCards && state.dice && state.pendingFractionTarget === null && !state.isTutorial && (
                   <LulosButton text={t('game.resetEquation')} color="blue" width={120} height={38} fontSize={14} onPress={() => eqBuilderRef.current?.resetAll()} />
+                )}
+                {showBackToEquation && (
+                  <LulosButton text={t('game.backToEquation')} color="blue" width={132} height={38} fontSize={14} onPress={() => setSolveExerciseHidden(false)} />
                 )}
               </View>
               {/* שורה שנייה — שלוף קלף, מופרדת כדי למנוע חפיפה */}
@@ -13281,6 +13786,31 @@ function GameScreen() {
 
       {showCel && <CelebrationFlash onDone={()=>setShowCel(false)} />}
 
+      {showMeterCelebrationOverlay && !cp?.isBot && !state.isTutorial && (
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 85,
+            backgroundColor: 'rgba(6,12,17,0.76)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: 18,
+          }}
+        >
+          <ExtractedMeterCelebrationOverlayCard
+            rewardCoins={meterCelebrationRewardCoins}
+            onContinue={() => setShowMeterCelebrationOverlay(false)}
+            badge="מד ההצטיינות התמלא"
+            title={t('courage.coinAward.title')}
+            body="זו האנימציה המקורית מהקובץ שהבאת, ועכשיו היא מוצגת גם בתוך חלון החגיגה של המשחק."
+          />
+        </View>
+      )}
+
       
 
       
@@ -13310,8 +13840,8 @@ function GameScreen() {
         </View>
       )}
 
-      {/* בחר קלפים / ערוך תרגיל — הנחיה לשחקן בשלב הסטייג׳ */}
-      {state.phase === 'solved' && !state.hasPlayedCards && state.stagedCards.length === 0 && !l5GuidedTutorial && (!state.isTutorial || tutorialBus.getL9ParensFilter()) && (
+      {/* בחר קלפים — בעיגון התחתון המקורי כדי לא להסתיר את תוצאת התרגיל */}
+      {state.phase === 'solved' && !state.hasPlayedCards && state.stagedCards.length === 0 && !l5GuidedTutorial && (!state.isTutorial || tutorialBus.getL4Step3Mode() || tutorialBus.getL9ParensFilter()) && (
         <View
           style={[
             StyleSheet.absoluteFillObject,
@@ -13325,7 +13855,7 @@ function GameScreen() {
             pointerEvents="box-none"
           >
             <LulosButton
-              text={state.isTutorial ? t('game.pickCards') : t('game.pickCards_revert')}
+              text={t('game.pickCards')}
               color={state.isTutorial ? 'orange' : 'blue'}
               textColor="#FFFFFF"
               width={160}
@@ -13396,6 +13926,9 @@ function GameOver() {
   const { state } = useGame();
   const { dispatch } = useGame();
   const sorted = [...state.players].sort((a,b)=>a.hand.length-b.hand.length);
+  const winningPlayedCards = (state.lastTurnPlayedCards?.length ?? 0) > 0
+    ? state.lastTurnPlayedCards
+    : state.currentTurnPlayedCards;
   return (
     <View style={{flex:1,justifyContent:'center',alignItems:'center',padding:24}}>
       <Confetti />
@@ -13408,7 +13941,64 @@ function GameOver() {
           withTail={false}
         />
       </View>
-      <ScrollView style={{width:'100%',maxHeight:220}} contentContainerStyle={{paddingHorizontal:8,alignItems:'center'}} showsVerticalScrollIndicator={false}>
+      <ScrollView style={{width:'100%',maxHeight:360}} contentContainerStyle={{paddingHorizontal:8,alignItems:'center'}} showsVerticalScrollIndicator={false}>
+        {(state.lastEquationDisplay || winningPlayedCards.length > 0) ? (
+          <View style={{backgroundColor:'rgba(15,23,42,0.72)',borderRadius:12,padding:16,width:'100%',marginBottom:14}}>
+            <Text style={{color:'#C7D2FE',fontSize:11,fontWeight:'700',letterSpacing:1,marginBottom:10,textAlign:'center'}}>המהלך המנצח</Text>
+            {state.lastEquationDisplay ? (
+              <Text style={{color:'#F8FAFC',fontSize:20,fontWeight:'800',textAlign:'center'}}>
+                {formatEquationForDisplay(state.lastEquationDisplay)}
+              </Text>
+            ) : null}
+            {winningPlayedCards.length > 0 ? (
+              <View style={{marginTop: state.lastEquationDisplay ? 12 : 0, alignItems:'center'}}>
+                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700', marginBottom: 6, textAlign: 'center' }}>
+                  הקלפים שהונחו
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', gap: 6, paddingHorizontal: 8 }}>
+                  {winningPlayedCards.map((card: Card, i: number) => {
+                    if (card.type === 'number') {
+                      return <MiniResultCard key={card.id} value={card.value!} index={i} />;
+                    }
+                    if (card.type === 'wild') {
+                      const wLabel = card.resolvedValue != null ? String(card.resolvedValue) : '★';
+                      return (
+                        <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#5B21B6', borderWidth: 2, borderColor: '#A78BFA', alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ color: '#EDE9FE', fontSize: 14, fontWeight: '900' }}>{wLabel}</Text>
+                        </View>
+                      );
+                    }
+                    if (card.type === 'operation') {
+                      const op = card.operation ?? '+';
+                      const cl = opColors[op] ?? opColors['+'];
+                      const opGlyph = opDisplay[op] ?? op;
+                      return (
+                        <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: cl.face, alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ color: cl.face, fontSize: 16, fontWeight: '900' }}>{opGlyph}</Text>
+                        </View>
+                      );
+                    }
+                    if (card.type === 'fraction') {
+                      const den = (card.fraction ?? '1/2').split('/')[1] ?? '2';
+                      const fc = fracColors[den] ?? numRed;
+                      const fracLabel = card.fraction === '1/2' ? '½' : card.fraction === '1/3' ? '⅓' : card.fraction === '1/4' ? '¼' : card.fraction === '1/5' ? '⅕' : card.fraction ?? '?';
+                      return (
+                        <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: fc.face, borderWidth: 2, borderColor: fc.dark, alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '900' }}>{fracLabel}</Text>
+                        </View>
+                      );
+                    }
+                    return (
+                      <View key={card.id} style={{ width: MINI_W, height: MINI_H, borderRadius: MINI_R, backgroundColor: '#F59E0B', borderWidth: 2, borderColor: '#FDE68A', alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ color: '#FFFBEB', fontSize: 13, fontWeight: '900' }}>J</Text>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         <View style={{backgroundColor:'rgba(55,65,81,0.5)',borderRadius:12,padding:16,width:'100%'}}>
           <Text style={{color:'#9CA3AF',fontSize:11,fontWeight:'700',letterSpacing:1,marginBottom:10,textAlign:'center'}}>תוצאות סופיות</Text>
           {sorted.map((p,i)=><View key={p.id} style={{flexDirection:'row',justifyContent:'space-between',paddingVertical:3}}><Text style={{color:'#D1D5DB',fontSize:14}} numberOfLines={1}>{i+1}. {p.name}{p.hand.length===2?' ★':''}</Text><Text style={{color:'#9CA3AF',fontSize:14}}>{p.hand.length} קלפים נותרו</Text></View>)}
@@ -14285,6 +14875,7 @@ function PlayerWaitingScreen({
   currentTurnName,
   waitingStatusText,
   onBack,
+  onOpenShop,
   lastMoveMessage,
   pendingFractionTarget,
   lastMoveBubbleBg,
@@ -14294,15 +14885,18 @@ function PlayerWaitingScreen({
   currentTurnName: string;
   waitingStatusText: string;
   onBack: () => void;
+  onOpenShop?: () => void;
   lastMoveMessage: string | null;
   pendingFractionTarget: number | null;
   lastMoveBubbleBg: string;
   lastMoveBubbleBorder: string;
 }) {
+  const { profile } = useAuth();
   const safe = useGameSafeArea();
   const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
   const sorted = useMemo(() => sortHandCards(myHand), [myHand]);
   const emptySet = useMemo(() => new Set<string>(), []);
+  const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
   return (
     <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'hidden' }}>
       <LinearGradient colors={[...playerScreensGradientColors]} start={{ x: 0, y: 0 }} end={{ x: 0.85, y: 1 }} style={StyleSheet.absoluteFill} />
@@ -14315,7 +14909,46 @@ function PlayerWaitingScreen({
               <Text style={{ color: '#BFDBFE', fontSize: 11, fontWeight: '700' }}>{myHand.length} קלפים</Text>
             </View>
           </View>
-          <LulosButton text="חזרה לצפייה" color="blue" width={120} height={32} fontSize={11} onPress={onBack} />
+          <View style={{ alignItems: 'flex-start', gap: 6 }}>
+            <LulosButton text="חזרה לצפייה" color="blue" width={120} height={32} fontSize={11} onPress={onBack} />
+            {onOpenShop ? (
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={onOpenShop}
+                style={{
+                  width: 88,
+                  height: 42,
+                  borderRadius: 21,
+                  borderWidth: 2,
+                  borderColor: '#FDE68A',
+                  overflow: 'hidden',
+                  shadowColor: '#F59E0B',
+                  shadowOpacity: 0.34,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 6 },
+                  elevation: 7,
+                  alignSelf: 'flex-start',
+                }}
+              >
+                <LinearGradient
+                  colors={['#FFF4B8', '#FBBF24', '#D97706']}
+                  start={{ x: 0.1, y: 0 }}
+                  end={{ x: 0.92, y: 1 }}
+                  style={{
+                    flex: 1,
+                    borderRadius: 19,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <SlindaCoin size={18} />
+                  <Text style={{ color: '#5B2D00', fontSize: 16, fontWeight: '900' }}>{totalCoins}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
         {!!lastMoveMessage && pendingFractionTarget === null && (
           <View style={{ paddingHorizontal: 16, marginBottom: 8, alignItems: 'center' }}>
@@ -14353,7 +14986,7 @@ function PlayerWaitingScreen({
 }
 
 /** עטיפה למשחק ברשת: מצב צפייה אחרי סיום תור, מעבר ל"מסך שלי", ופתיחה אוטומטית כשמגיע תורי */
-function OnlineGameWrapper() {
+function OnlineGameWrapper({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { state } = useGame();
   const mp = useMultiplayerOptional();
   const { t } = useLocale();
@@ -14523,13 +15156,14 @@ function OnlineGameWrapper() {
           currentTurnName={currentTurnName}
           waitingStatusText={waitingStatusText}
           onBack={() => setViewMode('game')}
+          onOpenShop={onOpenShop}
           lastMoveMessage={lastMoveForWaiting}
           pendingFractionTarget={state.pendingFractionTarget}
           lastMoveBubbleBg={lastMoveBubbleBg}
           lastMoveBubbleBorder={lastMoveBubbleBorder}
         />
       ) : (
-        <GameScreen />
+        <GameScreen onOpenShop={onOpenShop} />
       )}
       {reconnectOverlay}
       {toastOverlay}
@@ -14580,6 +15214,30 @@ function PlayModeChoiceScreen({
   const { t, locale, setLocale } = useLocale();
   const { profile, user } = useAuth();
   const shortUserId = user?.id ? user.id.slice(0, 3).toUpperCase() : null;
+  const [storedProfiles, setStoredProfiles] = useState<StoredPlayerProfile[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadStoredPlayerProfiles()
+      .then((store) => {
+        if (cancelled) return;
+        const profiles = Object.values(store.profiles)
+          .sort((a, b) => {
+            if (store.activePlayerName && a.name === store.activePlayerName) return -1;
+            if (store.activePlayerName && b.name === store.activePlayerName) return 1;
+            return b.updatedAt.localeCompare(a.updatedAt);
+          });
+        setStoredProfiles(profiles);
+        if (!preferredName.trim() && store.activePlayerName) {
+          onPreferredNameChange(store.activePlayerName);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [onPreferredNameChange, preferredName]);
+
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
       <View style={{ alignItems: 'center', marginBottom: 20 }}>
@@ -14625,6 +15283,40 @@ function PlayModeChoiceScreen({
         placeholderTextColor="#6B7280"
         maxLength={7}
       />
+      {storedProfiles.length > 0 && (
+        <View style={{ width: 280, marginBottom: 16, gap: 8 }}>
+          <Text style={{ color: '#94A3B8', fontSize: 12, textAlign: 'center' }}>
+            {locale === 'he' ? 'שחקנים שמורים' : 'Saved players'}
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+            {storedProfiles.slice(0, 6).map((player) => {
+              const selected = preferredName.trim() === player.name;
+              return (
+                <TouchableOpacity
+                  key={player.name}
+                  onPress={() => onPreferredNameChange(player.name)}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: selected ? '#FACC15' : 'rgba(148,163,184,0.45)',
+                    backgroundColor: selected ? 'rgba(250,204,21,0.16)' : 'rgba(15,23,42,0.72)',
+                    minWidth: 82,
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                >
+                  <Text style={{ color: selected ? '#FDE68A' : '#E5E7EB', fontSize: 12, fontWeight: '800' }}>{player.name}</Text>
+                  <Text style={{ color: '#93C5FD', fontSize: 10 }}>
+                    {`${player.courageMeterPercent}% • ${player.courageCoins}`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
       <LulosButton text={t('mode.local')} color="green" width={280} height={52} fontSize={15} onPress={onLocal} style={{ marginBottom: 16 }} />
       <LulosButton text={t('mode.online')} color="blue" width={280} height={52} fontSize={15} onPress={onOnline} style={{ marginBottom: 16 }} />
       <LulosButton
@@ -14661,8 +15353,10 @@ function PlayModeChoiceScreen({
 function GameRouter() {
   const mp = useMultiplayerOptional();
   const { state, dispatch } = useGame();
+  const { t } = useLocale();
   const insets = useSafeAreaInsets();
-  const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'tutorial'>('choose');
+  const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'tutorial' | 'mockup-room'>('choose');
+  const [mockupReturnMode, setMockupReturnMode] = useState<'choose' | 'online'>('choose');
   const [showShop, setShowShop] = useState(false);
   const [showMyThemes, setShowMyThemes] = useState(false);
   // showTutorial removed — replaced by playMode === 'tutorial'
@@ -14670,8 +15364,10 @@ function GameRouter() {
   const soundOn = state.soundsEnabled !== false;
   const [salindaVolume, setSalindaVolume] = useState(0.14);
   const salindaVolumeRef = useRef(0.14);
+  const salindaPrevVolumeRef = useRef(0.14);
   const [showSalindaPanel, setShowSalindaPanel] = useState(false);
   const [preferredName, setPreferredName] = useState('');
+  const [tutorialMeter, setTutorialMeter] = useState({ percent: 0, pulseKey: 0, isCelebrating: false });
   const salindaTrackRef = useRef<View | null>(null);
   const trackWindowRef = useRef<{ y: number; h: number }>({ y: 0, h: 140 });
   const SALINDA_PANEL_H = 160;
@@ -14704,6 +15400,15 @@ function GameRouter() {
     });
   }, [state.phase, playMode, mp, state.soundsEnabled]);
 
+  const openCelebrationMockupRoom = useCallback(() => {
+    setMockupReturnMode(playMode === 'online' ? 'online' : 'choose');
+    setPlayMode('mockup-room');
+  }, [playMode]);
+
+  const closeCelebrationMockupRoom = useCallback(() => {
+    setPlayMode(mockupReturnMode);
+  }, [mockupReturnMode]);
+
   useEffect(() => {
     if (Platform.OS !== 'web' || playMode !== 'choose') return;
     const { roomCode } = parseJoinParamsFromUrl();
@@ -14721,6 +15426,7 @@ function GameRouter() {
           if (Number.isFinite(parsed)) {
             const normalized = Math.max(0, Math.min(0.4, parsed));
             salindaVolumeRef.current = normalized;
+            if (normalized > 0) salindaPrevVolumeRef.current = normalized;
             setSalindaVolume(normalized);
           }
         }
@@ -14776,6 +15482,7 @@ function GameRouter() {
     // the lessons own the soundscape and the song distracts from guidance.
     const shouldPlayWelcomeMusic =
       state.soundsEnabled !== false &&
+      salindaVolume > 0 &&
       !isGameScreenPhase &&
       !state.isTutorial &&
       playMode !== 'tutorial';
@@ -14848,7 +15555,7 @@ function GameRouter() {
     return () => {
       disposed = true;
     };
-  }, [playMode, state.phase, state.soundsEnabled, state.isTutorial]);
+  }, [playMode, salindaVolume, state.phase, state.soundsEnabled, state.isTutorial]);
 
   const welcomeVolRafRef = useRef<number | null>(null);
   useEffect(() => {
@@ -14891,15 +15598,109 @@ function GameRouter() {
     const normalized = Math.max(0, Math.min(1, ratio));
     const next = Math.round((0.4 * normalized) * 100) / 100;
     salindaVolumeRef.current = next;
+    if (next > 0) {
+      salindaPrevVolumeRef.current = next;
+    }
     setSalindaVolume(next);
+  }, []);
+
+  const toggleSalindaMusic = useCallback(() => {
+    const current = salindaVolumeRef.current;
+    if (current > 0) {
+      salindaPrevVolumeRef.current = current;
+      salindaVolumeRef.current = 0;
+      setSalindaVolume(0);
+      setShowSalindaPanel(false);
+      void AsyncStorage.setItem(SALINDA_VOLUME_KEY, '0');
+      return;
+    }
+    const restored = Math.max(0.08, Math.min(0.4, salindaPrevVolumeRef.current || 0.14));
+    salindaVolumeRef.current = restored;
+    salindaPrevVolumeRef.current = restored;
+    setSalindaVolume(restored);
+    void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(restored));
   }, []);
 
   const persistSalindaVolume = useCallback(() => {
     void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(salindaVolumeRef.current));
   }, []);
+  const handleTutorialProgressChange = useCallback((progress: { percent: number; celebrate: boolean }) => {
+    const nextPercent = Math.max(0, Math.min(100, progress.percent));
+    setTutorialMeter((prev) => {
+      const shouldPulse = prev.percent !== nextPercent || prev.isCelebrating !== progress.celebrate;
+      if (!shouldPulse) {
+        return prev;
+      }
+      return {
+        percent: nextPercent,
+        pulseKey: prev.pulseKey + 1,
+        isCelebrating: progress.celebrate && nextPercent >= 100,
+      };
+    });
+  }, []);
+  const tutorialExit = useCallback(() => {
+    dispatch({ type: 'RESET_GAME' });
+    setPlayMode('choose');
+  }, [dispatch]);
+  useEffect(() => {
+    if (playMode !== 'tutorial') {
+      setTutorialMeter({ percent: 0, pulseKey: 0, isCelebrating: false });
+    }
+  }, [playMode]);
+  const tutorialHudOverlay = playMode === 'tutorial' ? (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 12050,
+        ...(Platform.OS === 'android' ? { elevation: 12050 } : {}),
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          top: 12,
+          left: 12,
+          alignItems: 'center',
+          overflow: 'visible',
+        }}
+      >
+        <LulosButton
+          text={t('tutorial.exit')}
+          color="red"
+          width={72}
+          height={32}
+          fontSize={11}
+          onPress={tutorialExit}
+          style={{ marginBottom: -8 }}
+        />
+        <LulosButton
+          text={soundOn ? '🔊' : '🔇'}
+          color="blue"
+          width={56}
+          height={32}
+          fontSize={14}
+          onPress={toggleSounds}
+        />
+        <View style={{ marginTop: -4, marginLeft: -11, alignItems: 'center', overflow: 'visible' }}>
+          <TutorialProgressMeter
+            value={tutorialMeter.percent}
+            pulseKey={tutorialMeter.pulseKey}
+            isCelebrating={tutorialMeter.isCelebrating}
+          />
+        </View>
+      </View>
+    </View>
+  ) : null;
 
   let screen: React.ReactNode;
-  if (playMode === 'choose') {
+  if (playMode === 'mockup-room') {
+    screen = <CelebrationMockupRoom onBack={closeCelebrationMockupRoom} />;
+  } else if (playMode === 'choose') {
     screen = (
       <PlayModeChoiceScreen
         onLocal={() => setPlayMode('local')}
@@ -14915,12 +15716,12 @@ function GameRouter() {
     if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} onMyThemes={() => setShowMyThemes(true)} preferredName={preferredName} />;
     else {
       switch (state.phase) {
-        case 'turn-transition': screen = <TurnTransition />; break;
+        case 'turn-transition': screen = <TurnTransition onOpenShop={() => setShowShop(true)} />; break;
         case 'pre-roll':
         case 'roll-dice':
         case 'building':
         case 'solved':
-          screen = <GameScreen />;
+          screen = <GameScreen onOpenShop={() => setShowShop(true)} />;
           break;
         case 'game-over':
           screen = <GameOver />;
@@ -14932,12 +15733,12 @@ function GameRouter() {
   } else if (playMode === 'tutorial') {
     // Tutorial mode: render the same game screens as local mode but with tutorial overlay.
     // On exit, return to the mode picker (home) — never auto-continue into a game.
-    const tutorialExit = () => { dispatch({ type: 'RESET_GAME' }); setPlayMode('choose'); };
     if (state.phase === 'setup') {
       // Auto-start a vs-bot game for the tutorial
       screen = (
         <InteractiveTutorialScreen
           onExit={tutorialExit}
+          onProgressChange={handleTutorialProgressChange}
           gameDispatch={dispatch}
           gameState={state}
         />
@@ -14949,12 +15750,12 @@ function GameRouter() {
         // Tutorial: TurnTransition hides "I'm ready" for isTutorial, so learners
         // could never reach pre-roll / GameScreen. Use the real game screen and
         // let InteractiveTutorialScreen auto-dispatch BEGIN_TURN (see there).
-        case 'turn-transition': gameScreen = state.isTutorial ? <GameScreen /> : <TurnTransition />; break;
+        case 'turn-transition': gameScreen = state.isTutorial ? <GameScreen onOpenShop={() => setShowShop(true)} /> : <TurnTransition onOpenShop={() => setShowShop(true)} />; break;
         case 'pre-roll':
         case 'roll-dice':
         case 'building':
         case 'solved':
-          gameScreen = <GameScreen />;
+          gameScreen = <GameScreen onOpenShop={() => setShowShop(true)} />;
           break;
         case 'game-over': gameScreen = <GameOver />; break;
         default: gameScreen = null;
@@ -14964,6 +15765,7 @@ function GameRouter() {
           {gameScreen}
           <InteractiveTutorialScreen
             onExit={tutorialExit}
+            onProgressChange={handleTutorialProgressChange}
             gameDispatch={dispatch}
             gameState={state}
           />
@@ -14972,28 +15774,30 @@ function GameRouter() {
     }
   } else {
     // playMode === 'online' — משחק ברשת (צפייה + מסך שחקן, מעבר אוטומטי בתורי)
-    if (!mp?.inRoom) screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />;
-    else if (!mp.serverState) screen = <LobbyScreen />;
+    if (!mp?.inRoom) screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />;
+    else if (!mp.serverState) screen = <LobbyScreen onOpenCelebrationMockup={openCelebrationMockupRoom} />;
     else {
       switch (state.phase) {
-        case 'setup': screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />; break;
-        case 'turn-transition': screen = <TurnTransition />; break;
+        case 'setup': screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />; break;
+        case 'turn-transition': screen = <TurnTransition onOpenShop={() => setShowShop(true)} />; break;
         case 'pre-roll':
         case 'roll-dice':
         case 'building':
         case 'solved':
-          screen = state.players.some((p) => !!p.isBot) ? <GameScreen /> : <OnlineGameWrapper />;
+          screen = state.players.some((p) => !!p.isBot) ? <GameScreen onOpenShop={() => setShowShop(true)} /> : <OnlineGameWrapper onOpenShop={() => setShowShop(true)} />;
           break;
         case 'game-over':
           screen = <GameOver />;
           break;
         default:
-          screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />;
+          screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />;
       }
     }
   }
 
-  const showGlobalMute = !(playMode === 'local' && (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building' || state.phase === 'solved'));
+  const showGlobalMute =
+    playMode !== 'tutorial' &&
+    !(playMode === 'local' && (state.phase === 'pre-roll' || state.phase === 'roll-dice' || state.phase === 'building' || state.phase === 'solved'));
   const salindaRatio = Math.max(0, Math.min(1, salindaVolume / 0.4));
   const salindaFillPx = Math.round(SALINDA_TRACK_H * salindaRatio);
   const salindaThumbBottom = Math.round(Math.max(0, Math.min(SALINDA_TRACK_H - 9, SALINDA_TRACK_H * salindaRatio - 9)));
@@ -15007,6 +15811,7 @@ function GameRouter() {
   return (
     <View style={{ flex: 1, backgroundColor: playMode === 'tutorial' ? '#0a1628' : undefined }}>
       {screen}
+      {tutorialHudOverlay}
       <ShopScreen visible={showShop} onClose={() => setShowShop(false)} />
       <MyThemesScreen visible={showMyThemes} onClose={() => setShowMyThemes(false)} />
       {showGlobalMute && (
@@ -15111,7 +15916,8 @@ function GameRouter() {
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.88}
-            onPress={() => setShowSalindaPanel((v) => !v)}
+            onPress={toggleSalindaMusic}
+            onLongPress={() => setShowSalindaPanel((v) => !v)}
             style={{
               position: 'absolute',
               bottom: salindaMusicBottom,

@@ -12,7 +12,6 @@ import { lesson05OpCycle } from './lesson-05-op-cycle';
 import { lesson06PossibleResults } from './lesson-06-possible-results';
 import { lesson06FractionsAdvanced } from './lesson-06-fractions-advanced';
 import { lesson07Parens } from './lesson-07-parens';
-import { lesson08Identical } from './lesson-08-identical';
 import { lesson09Identical } from './lesson-09-identical';
 import { lesson10MultiPlay } from './lesson-10-multi-play';
 import type { Lesson } from './types';
@@ -28,9 +27,9 @@ export const LESSONS: Lesson[] = [
   lesson06FractionsAdvanced,
   // Index 7 — advanced parens-move lesson (follows fractions).
   lesson07Parens,
-  // Index 8 — single identical-card play (follows parens).
+  // Index 8 — single identical-card lesson.
   lesson09Identical,
-  // Index 9 — multi-play tip (final advanced lesson).
+  // Index 9 — multi-play tip + two final exercises.
   lesson10MultiPlay,
 ];
 

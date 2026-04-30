@@ -8,7 +8,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Text, View } from 'react-native';
 
-export type HappyBubbleTone = 'demo' | 'turn' | 'celebrate' | 'welcome';
+export type HappyBubbleTone = 'demo' | 'turn' | 'celebrate' | 'welcome' | 'buttonRed' | 'buttonOrange';
 
 const TONE_STYLES: Record<HappyBubbleTone, { bg: string; border: string; text: string }> = {
   // No brown anywhere. Demo uses a fresh sky/teal palette so the bubble
@@ -17,6 +17,8 @@ const TONE_STYLES: Record<HappyBubbleTone, { bg: string; border: string; text: s
   turn:      { bg: '#DBEAFE', border: '#2563EB', text: '#1E3A8A' },
   celebrate: { bg: '#FCE7F3', border: '#DB2777', text: '#831843' },
   welcome:   { bg: '#DCFCE7', border: '#16A34A', text: '#14532D' },
+  buttonRed: { bg: '#FEE2E2', border: '#DC2626', text: '#7F1D1D' },
+  buttonOrange: { bg: '#FFEDD5', border: '#EA580C', text: '#9A3412' },
 };
 
 type Props = {
@@ -24,13 +26,17 @@ type Props = {
   tone?: HappyBubbleTone;
   /** Optional title rendered above `text` in a larger, bolder style */
   title?: string;
-  /** Show the downward-pointing tail under the bubble */
+  /** Show the tail */
   withTail?: boolean;
   /** Tail size — 'small' is the default speech-tail; 'big' is a chunky
    *  attention-grabbing arrow useful for drawing the eye to a UI region. */
   arrowSize?: 'small' | 'big';
+  /** When true the tail points UP and appears above the bubble body. */
+  tailTop?: boolean;
   /** Override max width — defaults to 88% of parent */
   maxWidth?: number | string;
+  /** `compact` shrinks padding, font, and border for a less intrusive bubble. */
+  size?: 'normal' | 'compact';
 };
 
 export function HappyBubble({
@@ -39,11 +45,13 @@ export function HappyBubble({
   title,
   withTail = true,
   arrowSize = 'small',
+  tailTop = false,
   maxWidth = '88%',
+  size = 'normal',
 }: Props): React.ReactElement {
+  const compact = size === 'compact';
   const scale = useRef(new Animated.Value(0)).current;
-  // Pop in once, then stay still. (No looping bob — it reads as a glitch
-  // because the bubble looks like it never finishes opening.)
+  // Pop in once, then stay still.
   useEffect(() => {
     scale.setValue(0);
     Animated.spring(scale, { toValue: 1, friction: 5, tension: 110, useNativeDriver: true }).start();
@@ -53,14 +61,17 @@ export function HappyBubble({
 
   return (
     <View pointerEvents="box-none" style={{ alignItems: 'center' }}>
+      {withTail && tailTop ? (
+        <View style={{ marginBottom: -2, width: 0, height: 0, borderLeftWidth: 12, borderRightWidth: 12, borderBottomWidth: 14, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: palette.border }} />
+      ) : null}
       <Animated.View
         style={{
           backgroundColor: palette.bg,
           borderColor: palette.border,
-          borderWidth: 3,
-          paddingHorizontal: 22,
-          paddingVertical: 14,
-          borderRadius: 28,
+          borderWidth: compact ? 2 : 3,
+          paddingHorizontal: compact ? 14 : 22,
+          paddingVertical: compact ? 8 : 14,
+          borderRadius: compact ? 18 : 28,
           maxWidth: maxWidth as number,
           transform: [{ scale }],
           shadowColor: '#000',
@@ -71,13 +82,13 @@ export function HappyBubble({
         }}
       >
         {title ? (
-          <Text style={{ color: palette.text, fontSize: 22, fontWeight: '900', textAlign: 'center', marginBottom: 4 }}>
+          <Text style={{ color: palette.text, fontSize: compact ? 16 : 22, fontWeight: '900', textAlign: 'center', marginBottom: 4 }}>
             {title}
           </Text>
         ) : null}
-        <Text style={{ color: palette.text, fontSize: 18, fontWeight: '800', textAlign: 'center' }}>{text}</Text>
+        <Text style={{ color: palette.text, fontSize: compact ? 14 : 18, lineHeight: compact ? 18 : undefined, fontWeight: '800', textAlign: 'center' }}>{text}</Text>
       </Animated.View>
-      {withTail ? (
+      {withTail && !tailTop ? (
         arrowSize === 'big' ? (
           <Animated.View style={{ marginTop: -2, alignItems: 'center', transform: [{ scale }] }}>
             {/* Outer (border) triangle */}

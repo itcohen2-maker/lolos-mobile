@@ -140,7 +140,7 @@ export function onboardingReducer(state: OnboardingState, action: OnboardingActi
       const equations = [...state.equations] as [EquationDraft, EquationDraft];
       const eq = equations[action.index];
       const operator = eq.operator === '+' ? '-' : '+';
-      const nextEq = { ...eq, operator };
+      const nextEq: EquationDraft = { ...eq, operator };
       nextEq.result = evalEquation(nextEq);
       equations[action.index] = nextEq;
       return { ...state, equations };

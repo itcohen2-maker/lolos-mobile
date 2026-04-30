@@ -16,7 +16,9 @@
     "production": {
       "env": {
         "EXPO_PUBLIC_SERVER_URL": "https://lolos-mobile.onrender.com",
-        "EXPO_PUBLIC_WEB_APP_URL": "https://salinda-web.onrender.com"
+        "EXPO_PUBLIC_WEB_APP_URL": "https://salinda-web.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://isqxuchcmmabjosxjawt.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzcXh1Y2hjbW1hYmpvc3hqYXd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NjA2MTIsImV4cCI6MjA5MjQzNjYxMn0.qVVgJWxkXfD6AYUghJWOaAf66_DwsI8CxibDnv1MZXY"
       }
     }
   },

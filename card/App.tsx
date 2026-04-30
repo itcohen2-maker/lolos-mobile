@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Index.tsx — Lolos Card Game — Strict 4-Phase Flow + Joker
 // ============================================================
 // Phase 1 (pre-roll):  Hand visible, match identical cards, roll
@@ -606,7 +606,7 @@ function gameReducer(st: GameState, action: GameAction): GameState {
         return {
           ...st, jokerEquationOp: action.chosenOperation,
           jokerModalOpen: false, jokerCelebration: false,
-          message: `פעולת הג'וקר שונתה ל-${action.chosenOperation}!`,
+          message: `פעולת ג'וקר שונתה ל-${action.chosenOperation}!`,
         };
       }
       const cp = st.players[st.currentPlayerIndex];

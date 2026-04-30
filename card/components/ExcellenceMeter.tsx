@@ -3,20 +3,22 @@ import { View, StyleSheet, Animated, Easing, TouchableOpacity } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { playSfx } from '../src/audio/sfx';
 
-// Drop positions matching the HTML (dx/dy in px, from bottom-center of fill)
-const DROP_CONFIGS = [
-  { dx: -22, dy: -50 },
-  { dx: -8,  dy: -65 },
-  { dx: 14,  dy: -55 },
-  { dx: 25,  dy: -44 },
-  { dx: 0,   dy: -72 },
+const COIN_IMG = require('../assets/slinda_coin_nobg.png');
+
+const COIN_BURST_CONFIGS = [
+  { dx: -34, dy: -40, size: 12, spin: -18 },
+  { dx: -18, dy: -58, size: 10, spin: 12 },
+  { dx: 0, dy: -70, size: 14, spin: -10 },
+  { dx: 20, dy: -54, size: 10, spin: 16 },
+  { dx: 36, dy: -34, size: 12, spin: -14 },
+  { dx: -8, dy: -84, size: 9, spin: 9 },
 ] as const;
 
 type Props = {
-  value: number;       // 0 | 33 | 66 — percent (100 resets to 0 in reducer)
+  value: number;
   compact?: boolean;
-  pulseKey?: number;   // increments every time the meter advances one step
-  isCelebrating?: boolean; // true on the turn the meter filled and gave coins
+  pulseKey?: number;
+  isCelebrating?: boolean;
   onPress?: () => void;
   title?: string;
   height?: number;
@@ -32,35 +34,36 @@ export default function ExcellenceMeter({
   const W = compact ? 45 : 55;
   const H = compact ? 80 : 110;
 
-  // ── fill (non-native, height in px) ──────────────────────────────
-  const fillPx  = useRef(new Animated.Value((value / 100) * H)).current;
+  const fillPx = useRef(new Animated.Value((value / 100) * H)).current;
+  const scaleX = useRef(new Animated.Value(1)).current;
+  const scaleY = useRef(new Animated.Value(1)).current;
+  const transY = useRef(new Animated.Value(0)).current;
+  const rot = useRef(new Animated.Value(0)).current;
+  const glow = useRef(new Animated.Value(0)).current;
+  const party = useRef(new Animated.Value(0)).current;
 
-  // ── squash / stretch / jump ───────────────────────────────────────
-  const scaleX   = useRef(new Animated.Value(1)).current;
-  const scaleY   = useRef(new Animated.Value(1)).current;
-  const transY   = useRef(new Animated.Value(0)).current;
-  const rot      = useRef(new Animated.Value(0)).current;   // degrees × 10 (mapped below)
-  const glow     = useRef(new Animated.Value(0)).current;
-
-  // ── party overlay (celebration color flash) ───────────────────────
-  const party    = useRef(new Animated.Value(0)).current;
-
-  // ── splash drops ─────────────────────────────────────────────────
-  const drops = useRef(
-    DROP_CONFIGS.map(() => ({
-      x:   new Animated.Value(0),
-      y:   new Animated.Value(0),
-      op:  new Animated.Value(0),
+  const burstCoins = useRef(
+    COIN_BURST_CONFIGS.map(() => ({
+      x: new Animated.Value(0),
+      y: new Animated.Value(0),
+      op: new Animated.Value(0),
+      s: new Animated.Value(0.45),
+      r: new Animated.Value(0),
     }))
   ).current;
 
   const prevPulse = useRef<number | undefined>(undefined);
   const prevValue = useRef(value);
+  const tapScale = useRef(new Animated.Value(1)).current;
 
-  // ── helpers ───────────────────────────────────────────────────────
   const t = (toValue: number, duration: number) =>
     (anim: Animated.Value) =>
-      Animated.timing(anim, { toValue, duration, useNativeDriver: true, easing: Easing.linear });
+      Animated.timing(anim, {
+        toValue,
+        duration,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      });
 
   const animFill = useCallback((toPct: number, dur = 420) => {
     Animated.timing(fillPx, {
@@ -71,78 +74,131 @@ export default function ExcellenceMeter({
     }).start();
   }, [fillPx, H]);
 
-  const fireSplash = useCallback((extraDelay: number) => {
-    drops.forEach((d, i) => {
-      const { dx, dy } = DROP_CONFIGS[i];
-      d.op.setValue(0); d.x.setValue(0); d.y.setValue(0);
-      const delay = extraDelay + 200 + i * 30;
+  const fireCoinBurst = useCallback((extraDelay: number) => {
+    burstCoins.forEach((coin, i) => {
+      const { dx, dy, spin } = COIN_BURST_CONFIGS[i];
+      coin.op.setValue(0);
+      coin.x.setValue(0);
+      coin.y.setValue(8);
+      coin.s.setValue(0.45);
+      coin.r.setValue(0);
+
       Animated.sequence([
-        Animated.delay(delay),
+        Animated.delay(extraDelay + 60 + i * 35),
         Animated.parallel([
-          Animated.timing(d.op, { toValue: 1,        duration: 225, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-          Animated.timing(d.x,  { toValue: dx * 0.4, duration: 225, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-          Animated.timing(d.y,  { toValue: dy * 0.4, duration: 225, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+          Animated.timing(coin.op, {
+            toValue: 1,
+            duration: 120,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.quad),
+          }),
+          Animated.timing(coin.x, {
+            toValue: dx * 0.38,
+            duration: 220,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
+          Animated.timing(coin.y, {
+            toValue: dy * 0.52,
+            duration: 220,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
+          Animated.timing(coin.s, {
+            toValue: 1,
+            duration: 180,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.back(1.6)),
+          }),
+          Animated.timing(coin.r, {
+            toValue: spin * 0.5,
+            duration: 220,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
         ]),
         Animated.parallel([
-          Animated.timing(d.op, { toValue: 0,        duration: 675, useNativeDriver: true, easing: Easing.in(Easing.quad) }),
-          Animated.timing(d.x,  { toValue: dx,       duration: 675, useNativeDriver: true, easing: Easing.in(Easing.quad) }),
-          Animated.timing(d.y,  { toValue: dy * 0.1, duration: 675, useNativeDriver: true, easing: Easing.in(Easing.quad) }),
+          Animated.timing(coin.op, {
+            toValue: 0,
+            duration: 460,
+            useNativeDriver: true,
+            easing: Easing.in(Easing.quad),
+          }),
+          Animated.timing(coin.x, {
+            toValue: dx,
+            duration: 460,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.quad),
+          }),
+          Animated.timing(coin.y, {
+            toValue: dy * 0.1,
+            duration: 460,
+            useNativeDriver: true,
+            easing: Easing.in(Easing.quad),
+          }),
+          Animated.timing(coin.s, {
+            toValue: 0.74,
+            duration: 460,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.quad),
+          }),
+          Animated.timing(coin.r, {
+            toValue: spin,
+            duration: 460,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.quad),
+          }),
         ]),
       ]).start();
     });
-  }, [drops]);
+  }, [burstCoins]);
 
-  // ── Regular bounce (one step up) ─────────────────────────────────
   const playBounce = useCallback(() => {
-    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.5 });
-    [scaleX, scaleY, transY, glow].forEach(a => a.stopAnimation());
-    scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); glow.setValue(0);
+    void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.5 });
+    [scaleX, scaleY, transY, glow].forEach((a) => a.stopAnimation());
+    scaleX.setValue(1);
+    scaleY.setValue(1);
+    transY.setValue(0);
+    glow.setValue(0);
 
-    fireSplash(0);
     Animated.sequence([
-      Animated.parallel([t(1.12, 170)(scaleX), t(0.78, 170)(scaleY)]),                              // squash
-      Animated.parallel([t(0.92, 250)(scaleX), t(1.18, 250)(scaleY), t(-18, 250)(transY), t(1, 250)(glow)]), // jump
-      Animated.parallel([t(1.06, 280)(scaleX), t(0.94, 280)(scaleY), t(0,   280)(transY), t(0, 280)(glow)]), // land
-      Animated.parallel([t(1,    250)(scaleX), t(1,    250)(scaleY)]),                               // settle
+      Animated.parallel([t(1.08, 150)(scaleX), t(0.84, 150)(scaleY)]),
+      Animated.parallel([t(0.96, 220)(scaleX), t(1.1, 220)(scaleY), t(-14, 220)(transY), t(1, 220)(glow)]),
+      Animated.parallel([t(1.03, 220)(scaleX), t(0.97, 220)(scaleY), t(0, 220)(transY), t(0, 220)(glow)]),
+      Animated.parallel([t(1, 180)(scaleX), t(1, 180)(scaleY)]),
     ]).start();
-  }, [scaleX, scaleY, transY, glow, fireSplash]);
+  }, [glow, scaleX, scaleY, transY]);
 
-  // ── Celebration (meter filled → double-jump + party) ─────────────
   const playCelebrate = useCallback(() => {
     void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 1.0 });
-    [scaleX, scaleY, transY, rot, glow, party].forEach(a => a.stopAnimation());
-    scaleX.setValue(1); scaleY.setValue(1); transY.setValue(0); rot.setValue(0); glow.setValue(0); party.setValue(0);
-
-    fireSplash(220);
-    fireSplash(900);
+    [scaleX, scaleY, transY, rot, glow, party].forEach((a) => a.stopAnimation());
+    scaleX.setValue(1);
+    scaleY.setValue(1);
+    transY.setValue(0);
+    rot.setValue(0);
+    glow.setValue(0);
+    party.setValue(0);
 
     Animated.parallel([
-      // squash/stretch sequence
       Animated.sequence([
-        Animated.parallel([t(1.22, 136)(scaleX), t(0.62, 136)(scaleY)]),                                          // deep squash
-        Animated.parallel([t(0.86, 238)(scaleX), t(1.28, 238)(scaleY), t(-28, 238)(transY), t(-3, 238)(rot)]),    // jump 1
-        Animated.parallel([t(1.14, 204)(scaleX), t(0.78, 204)(scaleY), t(0,   204)(transY), t(2,  204)(rot)]),    // land
-        Animated.parallel([t(1.18, 170)(scaleX), t(0.70, 170)(scaleY), t(0,   170)(transY), t(-2, 170)(rot)]),    // re-squash
-        Animated.parallel([t(0.90, 238)(scaleX), t(1.22, 238)(scaleY), t(-22, 238)(transY), t(3,  238)(rot)]),    // jump 2
-        Animated.parallel([t(1.08, 238)(scaleX), t(0.92, 238)(scaleY), t(0,   238)(transY), t(-1, 238)(rot)]),    // land
-        Animated.parallel([t(1.04, 170)(scaleX), t(0.96, 170)(scaleY), t(0,   170)(transY), t(1,  170)(rot)]),    // tiny shake
-        Animated.parallel([t(1,    136)(scaleX), t(1,    136)(scaleY), t(0,   136)(transY), t(0,  136)(rot)]),    // settle
+        Animated.parallel([t(1.24, 140)(scaleX), t(0.58, 140)(scaleY)]),
+        Animated.parallel([t(0.9, 240)(scaleX), t(1.22, 240)(scaleY), t(-16, 240)(transY), t(-2, 240)(rot), t(1, 240)(glow)]),
+        Animated.parallel([t(1.02, 180)(scaleX), t(0.98, 180)(scaleY), t(0, 180)(transY), t(0, 180)(rot), t(0.45, 180)(glow)]),
+        Animated.parallel([t(0.96, 150)(scaleX), t(1.06, 150)(scaleY), t(-8, 150)(transY), t(1, 150)(rot)]),
+        Animated.parallel([t(1, 210)(scaleX), t(1, 210)(scaleY), t(0, 210)(transY), t(0, 210)(rot), t(0, 210)(glow)]),
       ]),
-      // party color overlay: fade in → out
       Animated.sequence([
-        Animated.timing(party, { toValue: 1, duration: 850, useNativeDriver: true, easing: Easing.linear }),
-        Animated.timing(party, { toValue: 0, duration: 850, useNativeDriver: true, easing: Easing.linear }),
+        Animated.timing(party, { toValue: 1, duration: 520, useNativeDriver: true, easing: Easing.linear }),
+        Animated.timing(party, { toValue: 0, duration: 420, useNativeDriver: true, easing: Easing.linear }),
       ]),
     ]).start(() => {
-      // After celebration settle fill back to 0
       animFill(0, 600);
     });
 
-    // Fill to 100% on first apex
-    setTimeout(() => animFill(100, 300), 280);
-  }, [scaleX, scaleY, transY, rot, glow, party, fireSplash, animFill]);
+    setTimeout(() => animFill(100, 360), 140);
+    setTimeout(() => fireCoinBurst(0), 760);
+  }, [animFill, fireCoinBurst, glow, party, rot, scaleX, scaleY, transY]);
 
-  // ── Animation on pulseKey change ─────────────────────────────────
   useEffect(() => {
     if (pulseKey === undefined || pulseKey === prevPulse.current) {
       prevValue.current = value;
@@ -159,7 +215,6 @@ export default function ExcellenceMeter({
     }
   }, [pulseKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Sync fill on plain value change (no bounce) ───────────────────
   useEffect(() => {
     if (pulseKey === prevPulse.current) {
       animFill(value, 520);
@@ -169,10 +224,8 @@ export default function ExcellenceMeter({
   const rotDeg = rot.interpolate({ inputRange: [-5, 5], outputRange: ['-5deg', '5deg'] });
   const glowOp = glow.interpolate({ inputRange: [0, 1], outputRange: [0, 0.55] });
 
-  const tapScale = useRef(new Animated.Value(1)).current;
-
   const handlePress = useCallback(() => {
-    void playSfx('meterCelebrate', { cooldownMs: 0, volumeOverride: 0.85 });
+    void playSfx('meterBounce', { cooldownMs: 0, volumeOverride: 0.85 });
     Animated.sequence([
       Animated.timing(tapScale, { toValue: 0.82, duration: 90, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
       Animated.timing(tapScale, { toValue: 1.08, duration: 120, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
@@ -183,63 +236,71 @@ export default function ExcellenceMeter({
 
   return (
     <TouchableOpacity activeOpacity={1} onPress={handlePress} style={{ alignItems: 'center' }}>
-    <Animated.View style={{ transform: [{ scale: tapScale }], alignItems: 'center' }}>
-      <Animated.View
-        style={{
-          width: W,
-          height: H,
-          // transform-origin: 50% 100% (bottom-center) emulation:
-          // shift up by H/2 so transforms apply from bottom, then shift back
-          transform: [
-            { translateY: H / 2 },
-            { scaleX },
-            { scaleY },
-            { translateY: Animated.add(new Animated.Value(-H / 2), transY) as any },
-            { rotate: rotDeg },
-          ],
-        }}
-      >
-        {/* Glass */}
-        <View style={[styles.glass, { width: W, height: H }]}>
-          {/* Pulse glow */}
-          <Animated.View style={[styles.pulseGlow, { opacity: glowOp }]} />
+      <Animated.View style={{ transform: [{ scale: tapScale }], alignItems: 'center' }}>
+        <Animated.View
+          style={{
+            width: W,
+            height: H,
+            transform: [
+              { translateY: H / 2 },
+              { scaleX },
+              { scaleY },
+              { translateY: Animated.add(new Animated.Value(-H / 2), transY) as any },
+              { rotate: rotDeg },
+            ],
+          }}
+        >
+          <View style={[styles.glass, { width: W, height: H }]}>
+            <Animated.View style={[styles.pulseGlow, { opacity: glowOp }]} />
 
-          {/* Fill */}
-          <Animated.View style={[styles.fillWrap, { height: fillPx }]}>
-            <LinearGradient
-              colors={['#16A34A', '#22C55E', '#7CFC00']}
-              start={{ x: 0, y: 1 }}
-              end={{ x: 0.65, y: 0 }}
-              style={StyleSheet.absoluteFillObject}
-            />
-            <View style={styles.wave} />
-            <View style={styles.fillShine} />
-            {/* Party flash overlay */}
-            <Animated.View
-              style={[StyleSheet.absoluteFillObject, { opacity: party, backgroundColor: 'rgba(255,190,80,0.45)' }]}
-            />
-          </Animated.View>
+            <Animated.View style={[styles.fillWrap, { height: fillPx }]}>
+              <LinearGradient
+                colors={['#16A34A', '#22C55E', '#7CFC00']}
+                start={{ x: 0, y: 1 }}
+                end={{ x: 0.65, y: 0 }}
+                style={StyleSheet.absoluteFillObject}
+              />
+              <View style={styles.wave} />
+              <View style={styles.fillShine} />
+              <Animated.View
+                style={[StyleSheet.absoluteFillObject, { opacity: party, backgroundColor: 'rgba(255,190,80,0.45)' }]}
+              />
+            </Animated.View>
 
-          <View style={styles.gloss} />
-        </View>
+            <View style={styles.gloss} />
+          </View>
 
-        {/* Splash drops — absolutely outside glass, inside Animated.View */}
-        {drops.map((d, i) => (
-          <Animated.View
-            key={i}
-            style={[
-              styles.drop,
-              {
-                bottom: H * 0.35,
-                left: W / 2 - 3,
-                opacity: d.op,
-                transform: [{ translateX: d.x }, { translateY: d.y }],
-              },
-            ]}
-          />
-        ))}
+          {burstCoins.map((coin, i) => {
+            const size = COIN_BURST_CONFIGS[i].size;
+            const rotation = coin.r.interpolate({
+              inputRange: [-30, 30],
+              outputRange: ['-30deg', '30deg'],
+            });
+            return (
+              <Animated.Image
+                key={i}
+                source={COIN_IMG}
+                style={[
+                  styles.burstCoin,
+                  {
+                    width: size,
+                    height: size,
+                    bottom: H - 12,
+                    left: W / 2 - size / 2,
+                    opacity: coin.op,
+                    transform: [
+                      { translateX: coin.x },
+                      { translateY: coin.y },
+                      { scale: coin.s },
+                      { rotate: rotation },
+                    ],
+                  },
+                ]}
+              />
+            );
+          })}
+        </Animated.View>
       </Animated.View>
-    </Animated.View>
     </TouchableOpacity>
   );
 }
@@ -297,11 +358,8 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: 'rgba(255,255,255,0.32)',
   },
-  drop: {
+  burstCoin: {
     position: 'absolute',
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#BBF7D0',
+    resizeMode: 'contain',
   },
 });

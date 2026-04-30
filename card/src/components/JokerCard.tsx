@@ -22,7 +22,7 @@ export default function JokerCard({ isSelected, onClick }: JokerCardProps) {
       style={{ fontFamily: "'Fredoka', sans-serif" }}
     >
       <span className="text-3xl">★</span>
-      <span className="text-sm font-bold text-yellow-600 mt-1">ג׳וקר</span>
+      <span className="text-sm font-bold text-yellow-600 mt-1">ג'וקר</span>
     </div>
   );
 }

@@ -14,7 +14,7 @@ const SHAPES_CORE = [
   { id: 'op-cycle-basics', stepCount: 2 },
   { id: 'possible-results-basics', stepCount: 3 },
 ];
-const SHAPES_WITH_FRAC = [...SHAPES_CORE, { id: 'fractions-advanced', stepCount: 6 }];
+const SHAPES_WITH_FRAC = [...SHAPES_CORE, { id: 'fractions-advanced', stepCount: 3 }];
 
 describe('mimicReducer fractions branch', () => {
   it('after last core lesson goes to core-complete, then DISMISS_CORE_COMPLETE → post-signs-choice', () => {
@@ -83,7 +83,7 @@ describe('mimicReducer fractions branch', () => {
     let s: typeof INITIAL_MIMIC_STATE = {
       ...INITIAL_MIMIC_STATE,
       lessonIndex: MIMIC_FIRST_FRACTION_LESSON_INDEX,
-      stepIndex: 5,
+      stepIndex: 2,
       phase: 'lesson-done',
     };
     s = mimicReducer(s, { type: 'DISMISS_LESSON_DONE' }, SHAPES_WITH_FRAC);
@@ -91,7 +91,7 @@ describe('mimicReducer fractions branch', () => {
   });
 
   it('attack-half step rejects wrong fraction event (stay on step until correct)', () => {
-    const step = LESSONS[MIMIC_FIRST_FRACTION_LESSON_INDEX].steps[2];
+    const step = LESSONS[MIMIC_FIRST_FRACTION_LESSON_INDEX].steps[1]; // index 1 = frac-attack-half
     expect(step.outcome({ kind: 'fracAttackPlayed', fraction: '1/3' })).toBe(false);
     expect(step.outcome({ kind: 'fracAttackPlayed', fraction: '1/2' })).toBe(true);
   });

@@ -1,7 +1,8 @@
 // ============================================================
-// AuthScreen.tsx — Email + password sign-up / sign-in screen.
-// Gates online play: the player must be authenticated before
-// they can browse tables or create rooms.
+// AuthScreen.tsx — Optional "save progress" screen.
+// Anonymous users can link an email + password to keep their
+// coins and rating accessible across devices.
+// Existing email users can sign in to restore their account.
 // ============================================================
 
 import React, { useState } from 'react';
@@ -25,10 +26,12 @@ interface Props {
 }
 
 export function AuthScreen({ onSuccess, onBack }: Props) {
-  const { t } = useLocale();
-  const { signUp, signIn } = useAuth();
+  const { t, locale } = useLocale();
+  const { signUp, signIn, isAnonymous, user, profile } = useAuth();
+  const shortUserId = user?.id ? user.id.slice(0, 3).toUpperCase() : null;
 
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  // Anon users start on 'link' (upgrade); returning users can switch to 'signin'
+  const [mode, setMode] = useState<'link' | 'signin'>(isAnonymous ? 'link' : 'signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
@@ -39,7 +42,7 @@ export function AuthScreen({ onSuccess, onBack }: Props) {
     setError(null);
     setLoading(true);
     try {
-      if (mode === 'signup') {
+      if (mode === 'link') {
         if (!username.trim() || username.trim().length < 2) {
           setError(t('auth.usernameMinLength'));
           setLoading(false);
@@ -74,13 +77,19 @@ export function AuthScreen({ onSuccess, onBack }: Props) {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>
-          {mode === 'signup' ? t('auth.signUpTitle') : t('auth.signInTitle')}
+          {mode === 'link' ? t('auth.linkTitle') : t('auth.signInTitle')}
         </Text>
         <Text style={styles.subtitle}>
-          {t('auth.subtitle')}
+          {mode === 'link' ? t('auth.linkSubtitle') : t('auth.signInSubtitle')}
+        </Text>
+        <Text style={styles.accountMeta}>
+          {locale === 'he'
+            ? `מזהה משתמש: ${shortUserId ?? 'לא זמין עדיין'}`
+            : `User ID: ${shortUserId ?? 'Not available yet'}`}
+          {profile?.username ? ` • ${profile.username}` : ''}
         </Text>
 
-        {mode === 'signup' && (
+        {mode === 'link' && (
           <TextInput
             style={styles.input}
             placeholder={t('auth.usernamePlaceholder')}
@@ -129,20 +138,20 @@ export function AuthScreen({ onSuccess, onBack }: Props) {
             <ActivityIndicator color="#FFF" />
           ) : (
             <Text style={styles.btnText}>
-              {mode === 'signup' ? t('auth.signUpBtn') : t('auth.signInBtn')}
+              {mode === 'link' ? t('auth.linkBtn') : t('auth.signInBtn')}
             </Text>
           )}
         </TouchableOpacity>
 
         <TouchableOpacity
           onPress={() => {
-            setMode(mode === 'signin' ? 'signup' : 'signin');
+            setMode(mode === 'link' ? 'signin' : 'link');
             setError(null);
           }}
           style={styles.toggle}
         >
           <Text style={styles.toggleText}>
-            {mode === 'signin' ? t('auth.noAccount') : t('auth.haveAccount')}
+            {mode === 'link' ? t('auth.haveAccount') : t('auth.noAccount')}
           </Text>
         </TouchableOpacity>
 
@@ -176,7 +185,13 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.65)',
     fontSize: 14,
     textAlign: 'center',
-    marginBottom: 28,
+    marginBottom: 10,
+  },
+  accountMeta: {
+    color: 'rgba(147,197,253,0.9)',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 18,
   },
   input: {
     backgroundColor: 'rgba(255,255,255,0.08)',

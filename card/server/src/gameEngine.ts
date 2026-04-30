@@ -61,8 +61,8 @@ export const ONLINE_TURN_ACTION_MS = 15_000;
 
 function resolveConfiguredTurnTimerSeconds(st: ServerGameState): number | null {
   const cfg = st.hostGameSettings?.timerSetting ?? 'off';
-  if (cfg === '30') return 30;
   if (cfg === '60') return 60;
+  if (cfg === '90') return 90;
   if (cfg === 'custom') {
     const custom = Math.max(1, Number(st.hostGameSettings?.timerCustomSeconds ?? 60));
     return custom;
@@ -140,14 +140,9 @@ function applyCourageStepReward(st: ServerGameState): ServerGameState {
     ...st,
     courageMeterStep: isFull ? 0 : nextStep,
     courageMeterPercent: isFull ? 0 : nextPercent,
-    courageDiscardSuccessStreak: 0,
     courageRewardPulseId: (st.courageRewardPulseId ?? 0) + 1,
     courageCoins: (st.courageCoins ?? 0) + (isFull ? 5 : 0),
   };
-}
-
-function applyCourageEquationReward(st: ServerGameState): ServerGameState {
-  return applyCourageStepReward(st);
 }
 
 // ── Helper: draw N cards from draw pile for a player ──
@@ -229,6 +224,19 @@ function endTurnLogic(st: ServerGameState): ServerGameState {
   let s = { ...st };
   const next = getNextActivePlayerIndex(s.players, s.currentPlayerIndex);
   const prevRounds = s.roundsPlayed ?? 0;
+
+  // Condition 2: reward when human player succeeds 2 turns in a row
+  const justPlayedIsBot = s.players[s.currentPlayerIndex]?.isBot === true;
+  const curStreak = s.courageDiscardSuccessStreak ?? 0;
+  if (!justPlayedIsBot) {
+    if (!s.hasPlayedCards) {
+      s = { ...s, courageDiscardSuccessStreak: 0 };
+    } else if (curStreak >= 2) {
+      s = applyCourageStepReward(s);
+      s = { ...s, courageDiscardSuccessStreak: 0 };
+    }
+  }
+
   return {
     ...s,
     players: s.players.map(p => ({ ...p, calledLolos: false })),
@@ -373,7 +381,7 @@ export function beginTurn(st: ServerGameState): ServerGameState {
   return {
     ...st,
     phase: 'pre-roll',
-    fractionAttackResolved: false,
+    fractionAttackResolved: st.fractionAttackResolved,
     pendingFractionTarget: null,
     fractionPenalty: 0,
     lastDiscardCount: 0,
@@ -392,6 +400,7 @@ export function doRollDice(st: ServerGameState): ServerGameState | { error: Loca
     for (let i = 0; i < s.players.length; i++)
       if (i !== st.currentPlayerIndex) s = drawFromPile(s, dice.die1, i);
     statusMsg = locMsg('toast.tripleDice', { n: dice.die1 });
+    s = applyCourageStepReward(s);
     ns = s;
   }
 
@@ -628,7 +637,17 @@ export function confirmStaged(st: ServerGameState): ServerGameState | { error: L
     equationCommits: [],
     message: '',
   };
-  stNs = applyCourageEquationReward(stNs);
+  // Condition 1: full equation — both operator positions committed (all 3 dice used)
+  const hasPos0 = st.equationCommits.some(ec => ec.position === 0);
+  const hasPos1 = st.equationCommits.some(ec => ec.position === 1);
+  if (hasPos0 && hasPos1) {
+    stNs = applyCourageStepReward(stNs);
+  }
+  // Track consecutive success streak for human (non-bot) players
+  const currentIsBot = st.players[st.currentPlayerIndex]?.isBot === true;
+  if (!currentIsBot) {
+    stNs = { ...stNs, courageDiscardSuccessStreak: (st.courageDiscardSuccessStreak ?? 0) + 1 };
+  }
   stNs = checkWin(stNs);
   if (stNs.phase === 'game-over') return stNs;
   return endTurnLogic(stNs);
@@ -768,13 +787,13 @@ export function defendFractionSolve(st: ServerGameState, cardId: string, wildRes
 export function defendFractionPenalty(st: ServerGameState): ServerGameState | { error: LocalizedMessage } {
   if (st.pendingFractionTarget === null) return locErr('defend.noActiveAttack');
   const cp = st.players[st.currentPlayerIndex];
-  let s = drawFromPile(st, st.fractionPenalty, st.currentPlayerIndex);
+  let s = drawFromPile(st, 1, st.currentPlayerIndex);
   s = {
     ...s,
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true,
-    lastMoveMessage: locMsg('toast.penaltyDraw', { name: cp.name, count: st.fractionPenalty }),
-    message: locMsg('msg.penaltyDraw', { name: cp.name, count: st.fractionPenalty }),
+    lastMoveMessage: locMsg('toast.penaltyDraw', { name: cp.name, count: 1 }),
+    message: locMsg('msg.penaltyDraw', { name: cp.name, count: 1 }),
   };
   return endTurnLogic(s);
 }

@@ -92,6 +92,7 @@ export const en: Record<string, string> = {
   'courage.reason.tripleDice': 'You rolled a triple {{n}}! ⭐',
   'courage.reason.equation': 'You earned excellence-meter progress — you built an equation and played {{count}} cards!',
   'courage.reason.fullEquation': 'You earned excellence-meter progress — you used all dice results in your equation! 🎯',
+  'courage.reason.identicalPlay': 'You earned excellence-meter progress — you played a matching top card and skipped the dice! 🔄',
   'courage.reason.consecutiveSuccess': 'You earned excellence-meter progress — you played cards two turns in a row! 🔥',
   'courage.reason.title': '⭐ Excellence-meter bonus',
   'toast.turnTimeoutEnded': '⏱️ {{name}} ran out of time — turn ended and passed to the next player',
@@ -113,8 +114,8 @@ export const en: Record<string, string> = {
   'toast.msg.fractionPlayed': '{{name}} played fraction {{fraction}}!',
   'toast.defenseOk': '🛡️ Successful defense — next player\'s turn',
   'msg.defenseOk': 'Defense successful!',
-  'toast.penaltyDraw': '{{name}} drew {{count}} penalty cards 📥',
-  'msg.penaltyDraw': '{{name}} drew {{count}} penalty cards.',
+  'toast.penaltyDraw': '{{name}} drew 1 penalty card 📥',
+  'msg.penaltyDraw': '{{name}} drew 1 penalty card.',
   'toast.drawOne': '{{name}} drew a card 📥',
   'toast.endTurnNoMove': '⏱️ {{name}} made no move — drew a card and turn passed',
 
@@ -176,6 +177,7 @@ export const en: Record<string, string> = {
   'lobby.timerOff': 'Off',
   'lobby.timerSec': '{{n}} sec',
   'lobby.timerMin': '1 min',
+  'lobby.timerMinHalf': '1½ min',
   'lobby.timerCustom': 'Custom',
   'lobby.botDifficultyLabel': 'Bot level (vs bot)',
   'lobby.timerCustomHint': 'Turn duration',
@@ -225,7 +227,7 @@ export const en: Record<string, string> = {
   'start.rules.t2': '4. Combine number/operation cards to match the result and discard.',
   'start.rules.t3': '5. A matching top card (including wild in context) skips rolling.',
   'start.challengesTitle': 'Key challenges',
-  'start.rules.c1': '6. Fraction attack with ½ ⅓ ¼ ⅕ — next player defends, blocks with a fraction, or draws.',
+  'start.rules.c1': '6. Fraction attack with ½ ⅓ ¼ ⅕ — next player defends, blocks with a fraction, or draws 1 card. After that penalty draw, the challenge ends.',
   'start.rules.c2': '7. Operation cards: place the sign in the equation to discard them.',
   'start.rules.c3': 'Triple dice: this is the only thing that happens — the roller gets an excellence-meter bonus.',
   'start.cardTypesTitle': 'Card types',
@@ -236,7 +238,7 @@ export const en: Record<string, string> = {
   'welcome.bodyNoPossibleResults':
     'Welcome! The goal is to get rid of your cards; whoever is first to have only 2 cards left wins.\nIn this game “Possible results” is off — that button will not show result hints.',
   'welcome.fractionsLine':
-    'A fraction card (½ ⅓ ¼ ⅕) divides this turn’s target by its denominator, and can attack: the next player must respond with a number divisible by the challenge, or block with any other fraction that passes the challenge on.',
+    'A fraction card (½ ⅓ ¼ ⅕) divides this turn’s target by its denominator, and can attack: the next player must respond with a number divisible by the challenge, block with any other fraction that passes the challenge on, or draw 1 card.',
   'welcome.goodLuck': 'Good luck!',
 
   'mode.howToPlay': 'Tutorial / Bonus',
@@ -259,7 +261,7 @@ export const en: Record<string, string> = {
   'rules.sessionWithFractions': 'with fraction cards',
   'rules.sessionNoFractions': 'no fraction cards',
   'rules.excellenceHeading': '⭐ Excellence Meter',
-  'rules.excellenceBody': 'The meter fills in 2 ways:\n• You used the full equation — you built an equation using all 3 dice results (2 operator cards from hand)\n• You played cards successfully 2 turns in a row\n\nWhen the meter fills — you earn 5 coins ⭐',
+  'rules.excellenceBody': 'The meter fills in 3 ways:\n• You used the full equation — you built an equation using all 3 dice results (2 operator cards from hand)\n• You played a matching top card and skipped the dice\n• You played cards successfully 2 turns in a row\n\nWhen the meter fills — you earn 1 coin ⭐',
 
   'gameTip.start': 'Start a game to see turn tips.',
   'gameTip.fractionDefend': 'Tip: Play a card divisible by {{d}} (or a wild with that value), a matching fraction, or draw 1 card.',
@@ -270,21 +272,21 @@ export const en: Record<string, string> = {
   'gameTip.pickSum': 'Tip: Pick cards that sum to {{n}} and tap "Done".',
   'gameTip.defaultGuide': 'The game will guide you each turn.',
 
-  'catalog.numberTitle': '🃏 Number cards ({{range}})',
+  'catalog.numberTitle': 'Number cards ({{range}})',
   'catalog.numberBody': 'Each card shows a value in {{range}}. Used in equations or to defend a fraction attack.',
   'catalog.opTitle': '➕ Operation card (+, −, ×, ÷)',
   'catalog.opBody': 'Place the sign in the equation to discard the card.',
-  'catalog.jokerTitle': '🃏 Slinda',
+  'catalog.jokerTitle': 'Slinda',
   'catalog.jokerBody': 'Choose which operation Slinda represents. Use her in the equation to discard the card. Cannot defend a fraction attack.',
   'catalog.wildTitle': '★ Wild',
   'catalog.wildBody': 'Counts as any value in the active range (beginner tracks: 0–12 or 0–25). Choose its value in the equation; it can also be played as a matching card.',
   'catalog.fracTitle': '½ ⅓ ¼ ⅕ Fraction',
-  'catalog.fracBody': 'Divides the target by the denominator. Can attack — next player must defend, block with another fraction, or draw.\nDeck: ½ ×6, ⅓ ×4, ¼ ×3, ⅕ ×2 (15 total).',
+  'catalog.fracBody': 'Divides the target by the denominator. Can attack — next player must defend, block with another fraction, or draw 1 card.\nDeck: ½ ×6, ⅓ ×4, ¼ ×3, ⅕ ×2 (15 total).',
 
-  'rulesLine.numCard': '🃏 Number — for equations or fraction defense.',
-  'rulesLine.fracCard': '½ ⅓ ¼ ⅕ Fraction — attack: next player needs a divisible card, another fraction, or penalty draw.',
+  'rulesLine.numCard': 'Number — for equations or fraction defense.',
+  'rulesLine.fracCard': '½ ⅓ ¼ ⅕ Fraction — attack: next player needs a divisible card, another fraction, or draws 1 card.',
   'rulesLine.opCard': '➕ Operation — place the sign in the equation to discard.',
-  'rulesLine.jokerCard': '🃏 Slinda — pick her operation; use in the equation to discard. No fraction defense.',
+  'rulesLine.jokerCard': 'Slinda — pick her operation; use in the equation to discard. No fraction defense.',
   'rulesLine.wildCard': '★ Wild — any value in the active range (0–12/0–25 for beginners); can match when top is a number.',
 
   'ui.gotIt': 'Got it',
@@ -383,6 +385,17 @@ export const en: Record<string, string> = {
   'guidance.welcomeBody': 'Do you want guided hints and explanations during the game, or continue without guidance?',
   'guidance.hint.matchTopCard': 'You have a card matching the top discard. Play it now.',
   'guidance.hint.drawFromDeck': 'No match yet? Draw a card from this deck.',
+
+  'tutorial.multiPlayExercise.celebrate': 'Excellent! You played multiple cards in one turn!',
+  'tutorial.multiPlayExercise.hint': 'Choose two cards whose sum equals the exercise result',
+  'tutorial.identicalCard.title': 'Did You Know?',
+  'tutorial.identicalCard.subtitle': 'Identical card rule',
+  'tutorial.identicalCard.desc': 'Before starting a turn — if you have a card with the same number as the top card of the pile, you can place it immediately before rolling!',
+  'tutorial.identicalCard.cta': 'Got it, let\'s try',
+  'tutorial.identicalCard.playHint': 'Tap the orange button next to the matching card to place it',
+  'tutorial.identicalCard.findInFan': 'Find in your hand:',
+  'tutorial.identicalCard.retryTitle': 'Let\'s try again!',
+  'tutorial.identicalCard.retryDesc': 'Find a matching card in the pile before rolling the dice.',
   'tutorial.identicalPracticeTitle': 'Matching-card rule',
   'tutorial.identicalPracticeStageChip': 'Stage 3 • Mockup',
   'tutorial.identicalPracticeBody':
@@ -558,25 +571,25 @@ export const en: Record<string, string> = {
   'fraction.firstTapHintBody':
     'A fraction divides the turn target by its denominator (for example, 10 becomes 5 with ½). You can attack with it now, or continue with regular dice play.',
   'fraction.defenseGuideTitle': '🛡️ How to defend',
-  'fraction.defenseGuideBody': 'Defense: a number divisible by {{penalty}}, or a fraction card.',
+  'fraction.defenseGuideBody': 'Defense: a number divisible by {{penalty}}, or a fraction card. If not, draw 1 card.',
   'fraction.defenseLookingForSolution': "🔎 Let's look for a solution",
   'fraction.defenseNoSolution': "🤷 We don't have a solution this time",
   'fraction.counterHint': 'A counter fraction is a valid defense — the challenge passes to the next player.',
   'fraction.counterHintDetail':
-    'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or take the penalty draw. Slinda does not defend a fraction attack.',
+    'In a fraction challenge you can also play a number divisible by the penalty (or a wild set to one), or draw 1 penalty card. Slinda does not defend a fraction attack.',
   'notification.fractionAttack.titleSelf': 'You were challenged with a fraction card',
   'notification.fractionAttack.bodySelf':
-    'Defense:\n• Play a fraction card to pass the turn\n• Or play a number divisible by {{penalty}} that matches the fraction rule\n\nActive challenge number: {{target}}',
+    'Defense:\n• Play a fraction card to pass the turn\n• Or play a number divisible by {{penalty}} that matches the fraction rule\n• Or draw 1 card and end the challenge\n\nActive challenge number: {{target}}',
   'notification.fractionAttack.titleWatch': '⚔️ Fraction challenge in progress',
   'notification.fractionAttack.bodyWatch':
-    "{{name}} was challenged by a fraction card.\nDefense: a fraction to pass, or a number divisible by {{penalty}}.\nActive number: {{target}}",
+    "{{name}} was challenged by a fraction card.\nDefense: a fraction to pass, a number divisible by {{penalty}}, or drawing 1 card.\nActive number: {{target}}",
   'equation.twoDiceOnly': 'You can finish using only 2 dice',
   'game.almostDone': '🏁 Almost done!',
   'wildModal.mustDivide': 'The value must be divisible by {{pen}} (in range 1–{{max}}).',
 
   'start.timerA11y.off': 'Timer off — no per-turn time limit',
-  'start.timerA11y.sec30': '30-second timer per turn',
   'start.timerA11y.min1': 'One-minute timer per turn',
+  'start.timerA11y.minHalf': 'One-and-a-half minute timer per turn',
   'start.timerA11y.custom': 'Custom timer length',
 
   'brand.salindaHebrew': 'סלינדה',
@@ -842,7 +855,7 @@ export const en: Record<string, string> = {
   'lab.challenge4.d1': 'No change to core game until approved; for older grades or groups wanting extra challenge.',
   'lab.challenge4.d2': 'Three operations (e.g. +, −, ×) expands the possibility space and difficulty.',
 
-  'lab.ideas.title': '🃏 More card ideas',
+  'lab.ideas.title': 'More card ideas',
   'lab.ideas.desc':
     'Additional experimental cards; wild is already in the game. Four detailed ideas below — each its own module before core merge. See shield card above.',
 
@@ -943,7 +956,7 @@ export const en: Record<string, string> = {
   'tutorial.cardsTitle': 'Choose the right cards',
   'tutorial.cardsSubtitle': "Great job The cards match the equation",
   'tutorial.fractionTitle': 'Fraction cards',
-  'tutorial.fractionSubtitle': 'Play a fraction card on an opponent — they must solve a division problem or take a penalty',
+  'tutorial.fractionSubtitle': 'Play a fraction card on an opponent — they must defend or draw 1 penalty card',
   'tutorial.wildTitle': 'Wild card',
   'tutorial.wildSubtitle': 'A wild card can be any number from 0 to 25. Use it to complete any equation',
   'tutorial.attackTitle': 'Attack cards',
@@ -1037,9 +1050,9 @@ export const en: Record<string, string> = {
 
   // Lesson 3 — Dice
   'tutorial.l3.title': 'The Dice',
-  'tutorial.l3.desc': 'Roll three dice and build an exercise from them.',
-  'tutorial.l3.botRoll': "Here's how to roll the dice",
-  'tutorial.l3.hintRoll': 'Try rolling the dice',
+  'tutorial.l3.desc': 'These are the three dice we will use for the next exercise.',
+  'tutorial.l3.botRoll': "These are the dice we'll use next",
+  'tutorial.l3.hintRoll': 'We are about to move into the exercise with these numbers',
   'tutorial.l3.celebrate': "With these numbers we'll try to create an exercise that matches our cards",
 
   // Lesson 4 — Build an exercise
@@ -1153,7 +1166,7 @@ export const en: Record<string, string> = {
   'tutorial.l7.intro.hint': 'Tap a matching fraction card in your hand',
   'tutorial.l7.intro.celebrate': 'Let\'s try it',
   'tutorial.l7.theory.bot':
-    'Play a fraction card on a pile number it divides — you get rid of the card, and the next player must defend or take a penalty',
+    'Play a fraction card on a pile number it divides — you get rid of the card, and the next player must defend or draw 1 penalty card',
   'tutorial.l7.theory.hint': 'Tap Continue when you get it',
   'tutorial.l7.theory.celebrate': 'Let us try it',
   'tutorial.l7.attackHalf.bot': '',
@@ -1183,6 +1196,7 @@ export const en: Record<string, string> = {
   'tutorial.l8.secondExerciseHint': 'Pick a mini card and copy the equation.',
   'tutorial.l8.celebrate': 'Excellent — you moved the parentheses!',
   'tutorial.l8.mismatch': 'Not quite — check the parentheses position and try again',
+  'tutorial.l8.step2.selectMini': 'Pick a mini card and copy the full exercise',
   'tutorial.l8.step2.hint': 'Pick a mini card, build the equation with parentheses and confirm',
   'tutorial.l8.step2.celebrate': 'Excellent! You built a full equation with parentheses!',
 
@@ -1289,7 +1303,7 @@ export const en: Record<string, string> = {
   'themes.openMyThemes': 'My Themes',
   // In-game Slinda bank
   'slindaBank.addToHand': '+ Slinda',
-  // Coin award notification (5 coins)
-  'courage.coinAward.title': '⭐ +5 Coins!',
-  'courage.coinAward.body': 'Excellence meter full — you earned 5 coins!',
+  // Coin award notification (1 coin)
+  'courage.coinAward.title': '⭐ +1 Coin!',
+  'courage.coinAward.body': 'Excellence meter full — you earned 1 coin!',
 };

@@ -26,6 +26,10 @@ function makeRecordingApi(fanLength: number): {
       waitCalls.push(ms);
     },
     fanLength: () => fanLength,
+    async openResultsChip() {},
+    async tapMiniResult() {},
+    l6CopyConfig: () => null,
+    l11Config: () => null,
   };
   return { api, scrollCalls, waitCalls };
 }

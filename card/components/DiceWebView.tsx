@@ -96,7 +96,6 @@ const DiceWebViewComponent = forwardRef<DiceWebViewRef, DiceWebViewProps>(
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
           originWhitelist={['*']}
-          transparent={true}
           androidLayerType="hardware"
         />
       </View>

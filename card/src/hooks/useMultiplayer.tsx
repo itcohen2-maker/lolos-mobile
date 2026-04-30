@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { io, type Socket } from 'socket.io-client';
+import { supabase } from '../lib/supabase';
 import type {
   BotDifficulty,
   ContinueVsBotAck,
@@ -440,6 +441,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [reconnectNotice, setReconnectNotice] = useState<string | null>(null);
   const [disconnectChoice, setDisconnectChoice] = useState<DisconnectChoiceState | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const sessionTokenRef = useRef<string | null>(null);
   /** כתובת ה-io האחרונה — לזיהוי החלפת שרת מול socket ישן */
   const lastSocketUrlRef = useRef<string | null>(null);
   const playerIdRef = useRef<string | null>(null);
@@ -449,6 +451,17 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const startBotGameReqRef = useRef(0);
   /** עוקב אחרי מספר השחקנים הקודם כדי לזהות הצטרפות חדשה ולהשמיע צליל + התראה */
   const prevPlayerCountRef = useRef(0);
+
+  useEffect(() => {
+    // Keep sessionTokenRef up-to-date so connect() can pass it to the socket
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      sessionTokenRef.current = session?.access_token ?? null;
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      sessionTokenRef.current = session?.access_token ?? null;
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     serverStateRef.current = serverState;
@@ -506,6 +519,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
+      auth: { token: sessionTokenRef.current },
     });
     socketRef.current = socket;
     socket.on('connect', () => {
@@ -557,8 +571,8 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       // הצטרפות שחקן חדש (לא הבוט, לא אנחנו): מנגן צליל ומציג התראה למארח וליתר השחקנים הקיימים.
       if (curr > prev && prev >= 1) {
         const newcomer = pid
-          ? mapped.find((x) => x.id !== pid && !x.isBot)
-          : mapped.find((x) => !x.isBot);
+          ? mapped.find((x: typeof mapped[number]) => x.id !== pid && !x.isBot)
+          : mapped.find((x: typeof mapped[number]) => !x.isBot);
         const display = newcomer?.name ?? (localeRef.current === 'he' ? 'שחקן חדש' : 'A new player');
         setToast(
           localeRef.current === 'he'

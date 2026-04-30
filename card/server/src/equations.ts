@@ -204,6 +204,7 @@ export function validateStagedCards(
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
   if (wildCount > 1) return false;
+  if (numCards.length > 1) return false;
   if (wildCount === 1) {
     if (!opCard) {
       const sum = values.reduce((s, v) => s + v, 0);

@@ -104,6 +104,7 @@ export const he: Record<string, string> = {
   'courage.reason.tripleDice': 'גלגלת שלישייה של {{n}} בקוביות! ⭐',
   'courage.reason.equation': 'קיבלת תוספת למד ההצטיינות — בנית תרגיל והנחת {{count}} קלפים!',
   'courage.reason.fullEquation': 'קיבלת תוספת למד ההצטיינות — בנית תרגיל עם כל תוצאות הקוביות! 🎯',
+  'courage.reason.identicalPlay': 'קיבלת תוספת למד ההצטיינות — הנחת קלף זהה לערימה ודילגת על הקוביות! 🔄',
   'courage.reason.consecutiveSuccess': 'קיבלת תוספת למד ההצטיינות — הצלחת להיפטר מקלפים שני תורות ברצף! 🔥',
   'courage.reason.title': '⭐ תוספת למד ההצטיינות',
   'toast.turnTimeoutEnded': '⏱️ נגמר הזמן של {{name}} — התור הסתיים ועבר לשחקן הבא',
@@ -124,8 +125,8 @@ export const he: Record<string, string> = {
   'toast.msg.fractionPlayed': '{{name}} שיחק/ה שבר {{fraction}}!',
   'toast.defenseOk': '🛡️ הגנה מוצלחת — התור עובר לשחקן הבא',
   'msg.defenseOk': 'הגנה מוצלחת!',
-  'toast.penaltyDraw': '{{name}} שלף {{count}} קלפי עונשין 📥',
-  'msg.penaltyDraw': '{{name}} שלף/ה {{count}} קלפי עונשין.',
+  'toast.penaltyDraw': '{{name}} שלף קלף עונשין אחד 📥',
+  'msg.penaltyDraw': '{{name}} שלף/ה קלף עונשין אחד.',
   'toast.drawOne': '{{name}} שלף קלף מהחבילה 📥',
   'toast.endTurnNoMove': '⏱️ {{name}} לא ביצע/ה מהלך בתור — נשלף קלף והתור עבר לשחקן הבא',
 
@@ -186,6 +187,7 @@ export const he: Record<string, string> = {
   'lobby.timerOff': 'ללא',
   'lobby.timerSec': '{{n}} שנ׳',
   'lobby.timerMin': '1 דקה',
+  'lobby.timerMinHalf': 'דקה וחצי',
   'lobby.timerCustom': 'מותאם',
   'lobby.botDifficultyLabel': 'רמת בוט (מול בוט)',
   'lobby.timerCustomHint': 'זמן לתור',
@@ -230,7 +232,7 @@ export const he: Record<string, string> = {
   'start.rules.t2': '4. משלבים קלפי מספר/פעולה כדי להגיע לתוצאה ולהיפטר מקלפים.',
   'start.rules.t3': '5. קלף זהה (כולל פרא לפי ההקשר) מאפשר מהלך מיידי ללא הטלה.',
   'start.challengesTitle': 'אתגרים חשובים',
-  'start.rules.c1': '6. אתגר שבר: התקפה עם ½ ⅓ ¼ ⅕ — השחקן הבא חייב הגנה מתאימה, שבר נגדי או עונש.',
+  'start.rules.c1': '6. אתגר שבר: התקפה עם ½ ⅓ ¼ ⅕ — השחקן הבא חייב להגן, לחסום עם שבר, או לשלוף קלף אחד. אחרי שליפת העונש האתגר מסתיים.',
   'start.rules.c2': '7. סימן פעולה: משלבים סימן בתרגיל כדי להיפטר מקלף פעולה.',
   'start.rules.c3': 'שלישייה בקוביות: זה הדבר היחיד שקורה — השחקן שהטיל מקבל בונוס למד ההצטיינות.',
   'start.cardTypesTitle': 'סוגי קלפים',
@@ -241,7 +243,7 @@ export const he: Record<string, string> = {
   'welcome.bodyNoPossibleResults':
     'ברוכים הבאים! המטרה היא להיפטר מהקלפים, ומי שנשאר עם 2 קלפים מנצח.\nבמשחק הזה כפתור "תוצאות אפשריות" כבוי — לא יוצגו רמזי תוצאות מהכפתור הזה.',
   'welcome.fractionsLine':
-    'קלף שבר (½ ⅓ ¼ ⅕) מחלק את יעד התור במכנה, וגם יכול לתקוף: השחקן הבא חייב להגיב במספר שמתחלק באתגר או לחסום בכל שבר אחר שיעביר את האתגר הלאה.',
+    'קלף שבר (½ ⅓ ¼ ⅕) מחלק את יעד התור במכנה, וגם יכול לתקוף: השחקן הבא חייב להגיב במספר שמתחלק באתגר, לחסום בכל שבר אחר שיעביר את האתגר הלאה, או לשלוף קלף אחד.',
   'welcome.goodLuck': 'בהצלחה!',
 
   'mode.howToPlay': 'הדרכה / בונוס',
@@ -264,7 +266,7 @@ export const he: Record<string, string> = {
   'rules.sessionWithFractions': 'עם קלפי שבר',
   'rules.sessionNoFractions': 'בלי קלפי שבר',
   'rules.excellenceHeading': '⭐ מד ההצטיינות',
-  'rules.excellenceBody': 'המד מתמלא ב-2 דרכים:\n• השתמשתם בתרגיל בכל המספרים — בניתם תרגיל עם כל 3 תוצאות הקוביות (2 קלפי פעולה מהיד)\n• הצלחתם להיפטר מקלפים 2 תורות ברצף\n\nכשהמד מתמלא — מרוויחים 5 מטבעות ⭐',
+  'rules.excellenceBody': 'המד מתמלא ב-3 דרכים:\n• השתמשתם בתרגיל בכל המספרים — בניתם תרגיל עם כל 3 תוצאות הקוביות (2 קלפי פעולה מהיד)\n• הנחתם קלף זהה לערימה ודילגתם על הקוביות\n• הצלחתם להיפטר מקלפים 2 תורות ברצף\n\nכשהמד מתמלא — מרוויחים מטבע אחד ⭐',
 
   'gameTip.start': 'התחל משחק כדי לראות טיפים בהתאם לתור.',
   'gameTip.fractionDefend': 'טיפ: הנח קלף שמתחלק ב־{{d}} (או פרא עם ערך כזה), שבר מתאים, או שלוף קלף אחד.',
@@ -275,21 +277,21 @@ export const he: Record<string, string> = {
   'gameTip.pickSum': 'טיפ: בחר קלפים שסכומם {{n}} ולחץ "בחרתי".',
   'gameTip.defaultGuide': 'המשחק ינחה אותך בכל תור.',
 
-  'catalog.numberTitle': '🃏 קלפי מספר ({{range}})',
+  'catalog.numberTitle': 'קלפי מספר ({{range}})',
   'catalog.numberBody': 'כל קלף עם ערך מספרי מהטווח {{range}}. משמשים בתרגיל או להגנה מאתגר שבר.',
   'catalog.opTitle': '➕ קלף פעולה (+, −, ×, ÷)',
   'catalog.opBody': 'משלבים את הסימן בתרגיל וכך נפטרים מהקלף.',
-  'catalog.jokerTitle': '🃏 סלינדה',
+  'catalog.jokerTitle': 'סלינדה',
   'catalog.jokerBody': 'בוחרים איזו פעולה היא מייצגת (+, −, ×, ÷). משתמשים בה בבניית התרגיל כדי להיפטר מקלף. לא מגינה מפני אתגר שבר.',
   'catalog.wildTitle': '★ קלף פרא',
   'catalog.wildBody': 'נספר ככל מספר בטווח שנבחר (מתחילים: 0–12 או 0–25). בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה.',
   'catalog.fracTitle': '½ ⅓ ¼ ⅕ קלף שבר',
-  'catalog.fracBody': 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף.\nבחפיסה: ½ — 6 קלפים, ⅓ — 4, ¼ — 3, ⅕ — 2 (סה"כ 15).',
+  'catalog.fracBody': 'מחלק את היעד במכנה. גם קלף התקפה — הנח על הערימה כדי לאתגר את השחקן הבא. הגנה: קלף שמתחלק או שבר נוסף; בלי הגנה שולפים קלף אחד.\nבחפיסה: ½ — 6 קלפים, ⅓ — 4, ¼ — 3, ⅕ — 2 (סה"כ 15).',
 
-  'rulesLine.numCard': '🃏 קלף מספר — משמש בתרגיל או להגנה מאתגר שבר.',
-  'rulesLine.fracCard': '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף עונש.',
+  'rulesLine.numCard': 'קלף מספר — משמש בתרגיל או להגנה מאתגר שבר.',
+  'rulesLine.fracCard': '½ ⅓ ¼ ⅕ קלף שבר — גם להתקפה: השחקן הבא צריך קלף שמתחלק במכנה, או שבר נוסף, או לשלוף קלף אחד.',
   'rulesLine.opCard': '➕ קלף פעולה (+, −, ×, ÷) — שלב את הסימן בתרגיל והפטר מקלף.',
-  'rulesLine.jokerCard': '🃏 סלינדה — בוחרים איזו פעולה היא מייצגת. אפשר להשתמש בה בבניית התרגיל כדי להיפטר מקלף. לא מגינה מפני אתגר שבר.',
+  'rulesLine.jokerCard': 'סלינדה — בוחרים איזו פעולה היא מייצגת. אפשר להשתמש בה בבניית התרגיל כדי להיפטר מקלף. לא מגינה מפני אתגר שבר.',
   'rulesLine.wildCard': '★ קלף פרא — נספר ככל מספר בטווח הפעיל (0–12/0–25 למתחילים). בתרגיל בוחרים את הערך; אפשר גם להניח כקלף זהה לערימה.',
 
   'ui.gotIt': 'הבנתי',
@@ -387,6 +389,21 @@ export const he: Record<string, string> = {
   'guidance.need': 'צריך הדרכה',
   'guidance.hint.matchTopCard': 'יש לך קלף זהה לקלף העליון בערימה. הנח אותו עכשיו.',
   'guidance.hint.drawFromDeck': 'לא מצאת התאמה? שלוף קלף מהחבילה כאן.',
+
+  'tutorial.multiPlayExercise.celebrate': 'מצוין! שיחקת כמה קלפים בתור אחד!',
+  'tutorial.multiPlayExercise.hint': 'בחר 2 קלפים שסכומם {{n}}',
+  'tutorial.multiPlayExerciseMore.hint': 'בחר יותר משני קלפים הפעם שסכומם {{n}}',
+  'tutorial.multiPlayExerciseWild.hint': 'אפשר להוסיף גם את הפרא כדי להיפטר מעוד קלף',
+  'tutorial.multiPlayGiftZero.body': 'אתה יכול להוסיף 0 על הדרך. אני קלף מתנה',
+  'tutorial.multiPlayGiftZero.cta': 'הבנתי',
+  'tutorial.identicalCard.title': 'הידעת?',
+  'tutorial.identicalCard.subtitle': 'חוק קלף זהה',
+  'tutorial.identicalCard.desc': 'אם יש לך קלף זהה עם אותו מספר כמו הקלף שבערימה — אפשר להיפטר ממנו, ורק לפני גלגול הקוביות.',
+  'tutorial.identicalCard.cta': 'הבנתי, בוא ננסה',
+  'tutorial.identicalCard.playHint': 'לחץ על הכפתור הכתום ליד הקלף התואם כדי להניח אותו',
+  'tutorial.identicalCard.findInFan': 'מצא ביד שלך:',
+  'tutorial.identicalCard.retryTitle': 'בוא ננסה שוב!',
+  'tutorial.identicalCard.retryDesc': 'מצא קלף זהה לערימה לפני שמגלגלים קוביות.',
   'tutorial.identicalPracticeTitle': 'חוק קלף זהה',
   'tutorial.identicalPracticeStageChip': 'שלב 3 • מוקאפ',
   'tutorial.identicalPracticeBody':
@@ -562,25 +579,25 @@ export const he: Record<string, string> = {
   'fraction.firstTapHintBody':
     'שבר מחלק את יעד התור במכנה (למשל 10 הופך ל־5 ב־½). אפשר לתקוף עכשיו בשבר, או להמשיך לשחק רגיל עם הקוביות.',
   'fraction.defenseGuideTitle': '🛡️ איך להתגונן',
-  'fraction.defenseGuideBody': 'הגנה: קלף מספר שמתחלק ב־{{penalty}}, או קלף שבר.',
+  'fraction.defenseGuideBody': 'הגנה: קלף מספר שמתחלק ב־{{penalty}}, או קלף שבר. אם אין הגנה, שולפים קלף אחד.',
   'fraction.defenseLookingForSolution': '🔎 עכשיו נחפש פתרון',
   'fraction.defenseNoSolution': '🤷 אין לנו פתרון הפעם',
   'fraction.counterHint': 'שבר נגדי מותר כהגנה — האתגר עובר לשחקן הבא.',
   'fraction.counterHintDetail':
-    'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלפי עונש. סלינדה לא מגין מול שבר.',
+    'באתגר שבר: אפשר גם הנחת מספר שמתחלק במכנה (או פרא עם ערך כזה), או שליפת קלף עונשין אחד. סלינדה לא מגינה מול שבר.',
   'notification.fractionAttack.titleSelf': 'אותגרת בקלף שבר',
   'notification.fractionAttack.bodySelf':
-    'הגנה:\n• שים קלף שבר והתור יעבור לשחקן הבא\n• או שים מספר שמתחלק ב־{{penalty}} ומתאים לשבר\n\nהמספר הפעיל באתגר: {{target}}',
+    'הגנה:\n• שים קלף שבר והתור יעבור לשחקן הבא\n• או שים מספר שמתחלק ב־{{penalty}} ומתאים לשבר\n• או שלוף קלף אחד והאתגר יסתיים\n\nהמספר הפעיל באתגר: {{target}}',
   'notification.fractionAttack.titleWatch': '⚔️ אתגר שבר פעיל',
   'notification.fractionAttack.bodyWatch':
-    '{{name}} אותגר/ה בקלף שבר.\nהגנה: שבר שמעביר תור, או מספר שמתחלק ב־{{penalty}}.\nהמספר הפעיל: {{target}}',
+    '{{name}} אותגר/ה בקלף שבר.\nהגנה: שבר שמעביר תור, או מספר שמתחלק ב־{{penalty}}, או שליפת קלף אחד.\nהמספר הפעיל: {{target}}',
   'equation.twoDiceOnly': 'אפשר לסיים עם 2 קוביות בלבד',
   'game.almostDone': '🏁 כמעט סיימתי!',
   'wildModal.mustDivide': 'הערך חייב להתחלק ב־{{pen}} (בטווח 1–{{max}}).',
 
   'start.timerA11y.off': 'טיימר כבוי, ללא הגבלת זמן לתור',
-  'start.timerA11y.sec30': 'טיימר 30 שניות לכל תור',
   'start.timerA11y.min1': 'טיימר דקה אחת לכל תור',
+  'start.timerA11y.minHalf': 'טיימר דקה וחצי לכל תור',
   'start.timerA11y.custom': 'טיימר עם זמן מותאם אישית',
 
   'brand.salindaHebrew': 'סלינדה',
@@ -847,7 +864,7 @@ export const he: Record<string, string> = {
   'lab.challenge4.d2':
     'משוואה עם שלוש פעולות (למשל חיבור, חיסור, כפל) מגדילה את מרחב האפשרויות ואת רמת הקושי.',
 
-  'lab.ideas.title': '🃏 רעיונות קלפים — פירוט',
+  'lab.ideas.title': 'רעיונות קלפים — פירוט',
   'lab.ideas.desc':
     'קלפים נוספים לניסוי; קלף פרא כבר מיושם במשחק. להלן ארבעה רעיונות מפורטים; כל אחד במסך/מודול משלו, אינטגרציה לליבה רק אחרי אישור. ראה גם קלף שמירה (מגן) למעלה.',
 
@@ -956,7 +973,7 @@ export const he: Record<string, string> = {
   'tutorial.cardsTitle': 'בחרו את הקלפים הנכונים',
   'tutorial.cardsSubtitle': 'כל הכבוד הקלפים מתאימים למשוואה',
   'tutorial.fractionTitle': 'קלפי שבר',
-  'tutorial.fractionSubtitle': 'שחקו קלף שבר על יריב — הוא חייב לפתור תרגיל חילוק או לקבל עונש',
+  'tutorial.fractionSubtitle': 'שחקו קלף שבר על יריב — הוא חייב להגן או לשלוף קלף עונשין אחד',
   'tutorial.wildTitle': 'קלף פרא',
   'tutorial.wildSubtitle': 'קלף פרא יכול להיות כל מספר מ-0 עד 25. השתמשו בו כדי להשלים כל משוואה',
   'tutorial.attackTitle': 'קלפי תקיפה',
@@ -1046,17 +1063,22 @@ export const he: Record<string, string> = {
 
   // שיעור 3 — הקוביות
   'tutorial.l3.title': 'הקוביות',
-  'tutorial.l3.desc': '.מטילים שלוש קוביות ובונים מהן תרגיל',
-  'tutorial.l3.botRoll': 'ככה מטילים את הקוביות',
-  'tutorial.l3.hintRoll': 'נסו להטיל את הקוביות',
+  'tutorial.l3.desc': 'אלה שלוש הקוביות שמהן נבנה מיד את התרגיל הבא.',
+  'tutorial.l3.botRoll': 'אלה הקוביות שנשתמש בהן מיד',
+  'tutorial.l3.hintRoll': 'עוד רגע נעבור לתרגיל עם המספרים האלה',
   'tutorial.l3.celebrate': 'עם המספרים האלה ננסה ליצור תרגיל שיתאים לקלפים שלנו',
+  'tutorial.l3.tipTitle': 'טיפ חשוב',
+  'tutorial.l3.tipBody': 'לא חייבים תמיד לבנות תרגיל מאפס. לפעמים כבר מחכה לכם משוואה פתורה שאפשר ללמוד ממנה.',
+  'tutorial.l3.tipCta': 'בואו נראה',
+  'tutorial.l3.previewBot': 'הנה משוואה פתורה שנפתחת אוטומטית',
+  'tutorial.l3.previewCelebrate': 'מעולה! עכשיו רואים איך נראית משוואה מוכנה',
 
   // שיעור 4 — בניית תרגיל
   'tutorial.l4.title': 'בונים תרגיל',
   'tutorial.l4.desc': '.מצרפים שתי קוביות עם פלוס ובוחרים את הקלף שמתאים לתוצאה',
   'tutorial.l4.botBuild': '...תראו איך אני פותר',
   'tutorial.l4.hintTap': 'לחצו על הקלף שמתאים לתוצאה',
-  'tutorial.l4.celebrate': 'מצוין — סיימתם תרגיל ראשון',
+  'tutorial.l4.celebrate': 'כל הכבוד! סיימתם את התרגיל ונפטרנו מקלף.',
   'tutorial.l4.didYouKnow': 'הידעת?',
   'tutorial.l4.didYouKnowBestTip': 'זה הטיפ הכי טוב שאני יכול לתת לכם',
   'tutorial.l4.didYouKnowBody': 'אפשר להפטר מכמה קלפים בתור אחד',
@@ -1065,7 +1087,7 @@ export const he: Record<string, string> = {
   // שיעור 4ב — השלמת מספר חסר
   'tutorial.l4b.botFillDie': '...נמשיך — השלימו את התרגיל',
   'tutorial.l4b.hintFillDie': 'הוסיפו מספר לתרגיל ובחרו קלף תואם לתוצאה',
-  'tutorial.l4b.celebrate': 'יפה מאוד — השלמתם את התרגיל',
+  'tutorial.l4b.celebrate': 'יפה מאוד — השלמתם את התרגיל ונפטרנו מקלף',
 
   // שיעור 4ג — בניית תרגיל מלא
   'tutorial.l4c.botFull': 'עכשיו תורכם — בנו את כל התרגיל ובחרו את הקלף',
@@ -1161,14 +1183,14 @@ export const he: Record<string, string> = {
   'tutorial.l7.intro.hint': 'לחצו על קלף שבר מתאים מהיד',
   'tutorial.l7.intro.celebrate': 'בוא ננסה',
   'tutorial.l7.theory.bot':
-    'מניחים קלף שבר על מספר שמתחלק בו — נפטרים ממנו מהיד, והשחקן הבא חייב להגן או לספוג עונש',
+    'מניחים קלף שבר על מספר שמתחלק בו — נפטרים ממנו מהיד, והשחקן הבא חייב להגן או לשלוף קלף עונשין אחד',
   'tutorial.l7.theory.hint': 'לחצו "המשך" כשהבנתם',
   'tutorial.l7.theory.celebrate': 'בואו ננסה',
   'tutorial.l7.attackHalf.bot': '',
-  'tutorial.l7.attackHalf.hint': 'בחרו קלף מתאים',
+  'tutorial.l7.attackHalf.hint': 'בחרו קלף שבר מתאים',
   'tutorial.l7.attackHalf.celebrate': '🎉 כל הכבוד! הקלף עבר — עכשיו תרגיל שני',
   'tutorial.l7.attackThird.bot': '',
-  'tutorial.l7.attackThird.hint': 'בחרו קלף מתאים',
+  'tutorial.l7.attackThird.hint': 'בחרו קלף שבר מתאים',
   'tutorial.l7.attackThird.celebrate': 'מדהים! ממשיכים',
   'tutorial.l7.defendHalf.bot': 'התקפת חצי פעילה — הגנו עם מספר שמתחלק ב־2 (למשל 4, 6, 8).',
   'tutorial.l7.defendHalf.hint': 'לחצו על קלף מספר מתאים להגנה.',
@@ -1191,6 +1213,7 @@ export const he: Record<string, string> = {
   'tutorial.l8.secondExerciseHint': 'בחר מיני קלף והעתק את המשוואה.',
   'tutorial.l8.celebrate': 'מצוין — הזזתם את הסוגריים!',
   'tutorial.l8.mismatch': 'לא מדויק — בדקו את מיקום הסוגריים ונסו שוב',
+  'tutorial.l8.step2.selectMini': 'בחר מיני קלף והעתק את התרגיל במלואו',
   'tutorial.l8.step2.hint': 'בחר מיני קלף, מלא את המשוואה עם סוגריים ואשר',
   'tutorial.l8.step2.celebrate': 'מצוין! בנית משוואה שלמה עם סוגריים!',
 
@@ -1211,13 +1234,13 @@ export const he: Record<string, string> = {
   // ── Lesson 10 (L10): single identical card ──────────────────────────────
   'tutorial.l10.title': 'קלף זהה',
   'tutorial.l10.desc': 'לפני הטלת הקוביות — בדקו אם יש לכם קלף זהה לראש הערימה.',
-  'tutorial.l10.hint': 'לחצו במניפה על הקלף הזהה לערימה ותפטרו מהקלף',
+  'tutorial.l10.hint': 'חפשו את הקלף הזהה לערימה',
   'tutorial.l10.celebrate': 'מצוין! חסכתם הטלת קוביות שלמה!',
 
   // ── Lesson 11 (L11): multi-play tip ─────────────────────────────────────
   'tutorial.l11.title': 'טיפ: להיפטר מיותר מקלף אחד',
   'tutorial.l11.desc': 'אפשר לנצל תוצאה אחת כדי להניח כמה קלפים ביחד.',
-  'tutorial.l11.step1.hint': 'בחרו קלפים שסכומם שווה לתוצאה ולחצו "בחרתי".',
+  'tutorial.l11.step1.hint': 'בחר מיספר קלפים שסכומם {{n}}',
   'tutorial.l11.step1.celebrate': 'ממש נכון! עכשיו אפשר לנצל כל שילוב שמסתכם לתוצאה.',
 
   // מסך סיום הדרכה מתקדמת
@@ -1297,9 +1320,9 @@ export const he: Record<string, string> = {
   'themes.openMyThemes': 'הערכות שלי',
   // In-game Slinda bank
   'slindaBank.addToHand': '+ סלינדה',
-  // Coin award notification (5 coins)
-  'courage.coinAward.title': '⭐ +5 מטבעות!',
-  'courage.coinAward.body': 'מד ההצטיינות התמלא — הרווחת 5 מטבעות!',
+  // Coin award notification (1 coin)
+  'courage.coinAward.title': '⭐ +1 מטבע!',
+  'courage.coinAward.body': 'מד ההצטיינות התמלא — הרווחת מטבע אחד!',
 
   ...heLateOverrides,
 };

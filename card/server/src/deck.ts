@@ -19,7 +19,7 @@ export function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-/** Generate a full Lolos deck (מיושר ל־index.tsx: מספרים, שברים אופציונליים, פעולות, ג'וקרים, פרא) */
+/** Generate a full Lolos deck (מיושר ל־index.tsx: מספרים, שברים אופציונליים, פעולות, סלינדה, פרא) */
 const DEFAULT_FRAC_COUNTS: { frac: Fraction; count: number }[] = [
   { frac: '1/2', count: 6 }, { frac: '1/3', count: 4 },
   { frac: '1/4', count: 3 }, { frac: '1/5', count: 2 },

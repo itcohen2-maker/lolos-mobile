@@ -35,7 +35,7 @@ function BigVisual({ type }: { type: Slide['visual'] }) {
   if (type === 'goal') return <Text style={styles.bigVisual}>🎯 9</Text>;
   if (type === 'dice') return <Text style={styles.bigVisual}>🎲 5  4  1</Text>;
   if (type === 'equation') return <Text style={styles.bigVisual}>5 + 4 = 9</Text>;
-  if (type === 'cards') return <Text style={styles.bigVisual}>🃏 4 + 🃏 5</Text>;
+  if (type === 'cards') return <Text style={styles.bigVisual}>4 + 5</Text>;
   return <Text style={styles.bigVisual}>★  פרא   1/2  שבר</Text>;
 }
 

@@ -10,6 +10,8 @@ export default function DiceArea() {
   const { t } = useLocale()
   const [rolling, setRolling] = useState(false)
 
+  if (state.phase === 'identical-tutorial') return null
+
   const handleRoll = () => {
     if (state.phase !== 'roll-dice') return
     setRolling(true)

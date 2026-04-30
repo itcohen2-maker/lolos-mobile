@@ -19,6 +19,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { useMultiplayer } from '../hooks/useMultiplayer';
+import { useAuth } from '../hooks/useAuth';
 import type { BotDifficulty, Fraction, HostGameSettings, Operation } from '../../shared/types';
 
 const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
@@ -40,6 +41,7 @@ function lobbyTimerLabel(t: TFn, ts: HostGameSettings['timerSetting'], customSec
       : t('lobby.timerSec', { n: customSec });
   }
   if (ts === '60') return t('lobby.timerMin');
+  if (ts === '90') return t('lobby.timerMinHalf');
   return t('lobby.timerSec', { n: ts });
 }
 
@@ -106,9 +108,19 @@ export function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: strin
   }
 }
 
-export function LobbyEntry({ onBackToChoice, defaultPlayerName }: { onBackToChoice?: () => void; defaultPlayerName?: string } = {}) {
+export function LobbyEntry({
+  onBackToChoice,
+  defaultPlayerName,
+  onOpenCelebrationMockup,
+}: {
+  onBackToChoice?: () => void;
+  defaultPlayerName?: string;
+  onOpenCelebrationMockup?: () => void;
+} = {}) {
   const { t, isRTL } = useLocale();
   const { createRoom, joinRoom, error, clearError, setServerUrl } = useMultiplayer();
+  const { user, profile } = useAuth();
+  const shortUserId = user?.id ? user.id.slice(0, 3).toUpperCase() : null;
   const ta = isRTL ? 'right' : 'left';
   const [step, setStep] = useState<'create' | 'join'>('create');
   const [playerName, setPlayerName] = useState((defaultPlayerName ?? '').slice(0, 7));
@@ -189,13 +201,18 @@ export function LobbyEntry({ onBackToChoice, defaultPlayerName }: { onBackToChoi
           <Text style={styles.backBtnText}>{t('lobby.backToMode')}</Text>
         </TouchableOpacity>
       )}
+      {onOpenCelebrationMockup && (
+        <TouchableOpacity style={styles.mockupLinkBtn} onPress={onOpenCelebrationMockup}>
+          <Text style={styles.mockupLinkText}>חדר מוקאפ חגיגה</Text>
+        </TouchableOpacity>
+      )}
       <View style={styles.logoWrap}>
         <SalindaLogoOption06 width={260} />
       </View>
       <Text style={styles.title}>{t('lobby.connectTitle')}</Text>
       <Text style={styles.subtitle}>{t('lobby.connectSubtitle')}</Text>
       <TouchableOpacity style={styles.rulesLinkBtn} onPress={() => setRulesOpen(true)} accessibilityRole="button">
-        <Text style={styles.rulesLinkText}>{t('start.showRules')}</Text>
+        <Text style={styles.rulesLinkText}>הדרכה | {t('start.showRules')}</Text>
       </TouchableOpacity>
       <Modal visible={rulesOpen} transparent animationType="fade" onRequestClose={() => setRulesOpen(false)}>
         <View style={styles.rulesModalBackdrop}>
@@ -230,14 +247,19 @@ export function LobbyEntry({ onBackToChoice, defaultPlayerName }: { onBackToChoi
       )}
 
       <>
-        <Text style={styles.label}>{t('lobby.yourName')}</Text>
+        <Text style={[styles.label, { alignSelf: 'center', textAlign: 'center' }]}>{t('lobby.yourName')}</Text>
+          <Text style={styles.userIdText}>
+            {isRTL
+              ? `מזהה משתמש: ${shortUserId ?? 'לא זמין עדיין'}${profile?.username ? ` • ${profile.username}` : ''}`
+              : `User ID: ${shortUserId ?? 'Not available yet'}${profile?.username ? ` • ${profile.username}` : ''}`}
+          </Text>
           <TextInput
             style={styles.input}
             value={playerName}
             onChangeText={(x) => setPlayerName(x.slice(0, 7))}
             placeholder={t('lobby.namePlaceholder')}
             placeholderTextColor="#6B7280"
-            textAlign={ta}
+            textAlign="center"
             maxLength={7}
           />
           {step === 'create' && (
@@ -285,7 +307,7 @@ export function LobbyEntry({ onBackToChoice, defaultPlayerName }: { onBackToChoi
   );
 }
 
-export function LobbyScreen() {
+export function LobbyScreen({ onOpenCelebrationMockup }: { onOpenCelebrationMockup?: () => void } = {}) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const { roomCode, players, lobbyStatus, isHost, connected, startGame, startBotGame, leaveRoom, error, clearError, serverUrl } = useMultiplayer();
@@ -485,6 +507,11 @@ export function LobbyScreen() {
       <TouchableOpacity style={styles.backBtn} onPress={() => leaveRoom()}>
         <Text style={styles.backBtnText}>{t('lobby.leaveRoom')}</Text>
       </TouchableOpacity>
+      {onOpenCelebrationMockup && (
+        <TouchableOpacity style={styles.mockupLinkBtn} onPress={onOpenCelebrationMockup}>
+          <Text style={styles.mockupLinkText}>חדר מוקאפ חגיגה</Text>
+        </TouchableOpacity>
+      )}
       <View style={styles.logoWrap}>
         <SalindaLogoOption06 width={260} />
       </View>
@@ -675,8 +702,8 @@ export function LobbyScreen() {
             {(
               [
                 ['off', t('lobby.timerOff')] as const,
-                ['30', t('lobby.timerSec', { n: 30 })] as const,
                 ['60', t('lobby.timerMin')] as const,
+                ['90', t('lobby.timerMinHalf')] as const,
                 ['custom', t('lobby.timerCustom')] as const,
               ]
             ).map(([key, label]) => (
@@ -690,24 +717,32 @@ export function LobbyScreen() {
             ))}
           </View>
           {timerSetting === 'custom' && (
-            <>
-              <Text style={styles.hint}>{t('lobby.timerCustomHint')}</Text>
-              <TextInput
-                style={styles.input}
-                value={String(timerCustomSeconds)}
-                onChangeText={(tx) => {
-                  const n = parseInt(tx.replace(/\D/g, ''), 10);
-                  if (Number.isNaN(n)) {
-                    setTimerCustomSeconds(60);
-                    return;
-                  }
-                  setTimerCustomSeconds(Math.min(600, Math.max(1, n)));
-                }}
-                keyboardType="number-pad"
-                maxLength={3}
-                textAlign="center"
-              />
-            </>
+            <View style={styles.timerCustomRow}>
+              <View style={styles.timerStepper}>
+                <Text style={styles.timerStepLabel}>{t('start.timerPickerMin')}</Text>
+                <View style={styles.timerStepRow}>
+                  <TouchableOpacity onPress={() => setTimerCustomSeconds((s) => Math.max(1, s - 60))} style={styles.timerStepBtn}>
+                    <Text style={styles.timerStepBtnTxt}>−</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.timerStepVal}>{Math.floor(timerCustomSeconds / 60)}</Text>
+                  <TouchableOpacity onPress={() => setTimerCustomSeconds((s) => Math.min(600, s + 60))} style={styles.timerStepBtn}>
+                    <Text style={styles.timerStepBtnTxt}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              <View style={styles.timerStepper}>
+                <Text style={styles.timerStepLabel}>{t('start.timerPickerSec')}</Text>
+                <View style={styles.timerStepRow}>
+                  <TouchableOpacity onPress={() => setTimerCustomSeconds((s) => Math.max(1, Math.floor(s / 60) * 60 + Math.max(0, (s % 60) - 5)))} style={styles.timerStepBtn}>
+                    <Text style={styles.timerStepBtnTxt}>−</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.timerStepVal}>{String(timerCustomSeconds % 60).padStart(2, '0')}</Text>
+                  <TouchableOpacity onPress={() => setTimerCustomSeconds((s) => Math.min(600, Math.floor(s / 60) * 60 + Math.min(55, (s % 60) + 5)))} style={styles.timerStepBtn}>
+                    <Text style={styles.timerStepBtnTxt}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
           )}
             </>
           )}
@@ -747,15 +782,9 @@ export function LobbyScreen() {
                     : t('lobby.waitingForPlayer')}
                 </Text>
               )}
-              {canStartBotGame && (
+              {isHost && (
                 <View style={styles.botOfferBox}>
-                  <Text style={[styles.botOfferTitle, { textAlign: ta }]}>
-                    {botOfferReady ? t('lobby.botOfferTitle') : t('lobby.startBotGame')}
-                  </Text>
-                  <Text style={[styles.botOfferBody, { textAlign: ta }]}>
-                    {botOfferReady ? t('lobby.botOfferBody') : t('lobby.waitingForPlayer')}
-                  </Text>
-                  <Text style={[styles.label, { marginTop: 8, alignSelf: 'stretch' }]}>{t('lobby.botDifficultyLabel')}</Text>
+                  <Text style={[styles.label, { alignSelf: 'stretch' }]}>{t('lobby.botDifficultyLabel')}</Text>
                   <View style={styles.timerGrid}>
                     {(
                       [
@@ -819,6 +848,7 @@ const styles = StyleSheet.create({
   backBtnText: { color: brand.cyan, fontSize: 14, fontWeight: '600' },
   title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8, alignSelf: 'stretch', textAlign: 'right' },
   subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24, alignSelf: 'stretch', textAlign: 'right' },
+  userIdText: { color: '#93C5FD', fontSize: 12, marginBottom: 8, textAlign: 'center', alignSelf: 'stretch' },
   label: { color: '#D1D5DB', fontSize: 14, fontWeight: '600', alignSelf: 'flex-start', marginTop: 16, marginBottom: 8 },
   input: {
     width: '100%',
@@ -927,6 +957,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timerChipText: { color: '#9CA3AF', fontWeight: '600', fontSize: 13 },
+  timerCustomRow: { flexDirection: 'row', justifyContent: 'center', gap: 32, paddingVertical: 12, paddingHorizontal: 8 },
+  timerStepper: { alignItems: 'center', gap: 6 },
+  timerStepLabel: { color: '#9CA3AF', fontSize: 11, fontWeight: '700' },
+  timerStepRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  timerStepBtn: { backgroundColor: '#374151', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  timerStepBtnTxt: { color: '#FFF', fontSize: 18, fontWeight: '700' },
+  timerStepVal: { color: '#FFF', fontSize: 24, fontWeight: '900', minWidth: 36, textAlign: 'center' },
   fractionKindsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 8, marginBottom: 4 },
   fractionChip: { minWidth: 56, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center' },
   fractionChipOn: { borderColor: '#F59E0B', backgroundColor: 'rgba(244,114,182,0.28)' },
@@ -1053,6 +1090,23 @@ const styles = StyleSheet.create({
   rulesModalCloseBtnText: { color: '#111827', fontSize: 15, fontWeight: '800' },
   advancedToggleBtn: { marginTop: 12, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, borderWidth: 2, borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.18)' },
   advancedToggleText: { color: '#DDD6FE', fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  mockupLinkBtn: {
+    alignSelf: 'stretch',
+    marginTop: 10,
+    marginBottom: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(253,224,71,0.35)',
+    backgroundColor: 'rgba(253,224,71,0.1)',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+  },
+  mockupLinkText: {
+    color: '#FDE68A',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   operatorsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', alignSelf: 'stretch' },
   operatorChip: { flex: 1, minWidth: 92, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center' },
   operatorChipOn: { borderColor: '#FDE68A', backgroundColor: 'rgba(253,230,138,0.18)' },

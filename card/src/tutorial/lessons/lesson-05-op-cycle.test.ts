@@ -26,6 +26,7 @@ function makeRecordingApi(fanLength: number): {
     async openResultsChip() {},
     async tapMiniResult() {},
     l6CopyConfig: () => null,
+    l11Config: () => null,
   };
   return { api, scrollCalls, pulseCalls };
 }
@@ -36,15 +37,18 @@ describe('lesson-05 step 2 (joker-place) botDemo', () => {
     const step = lesson05OpCycle.steps[1];
     await step.botDemo(api);
 
-    expect(scrollCalls.map((c) => c.idx)).toEqual([2]);
+    // Two scroll calls: an instant snap (durationMs:0) to place Slinda at
+    // the visual centre before the learner sees the fan, then an animated
+    // "settle" a moment later that doubles as a visual cue.
+    expect(scrollCalls.map((c) => c.idx)).toEqual([2, 2]);
     expect(pulseCalls.map((c) => c.idx)).toEqual([2]);
   });
 
   it('still lands on a valid index for a 4-card fan', async () => {
-    // floor(4/2) = 2 → valid (indices 0..3).
+    // Slinda's rigged index (2) is valid for any fan of length ≥ 3.
     const { api, scrollCalls } = makeRecordingApi(4);
     const step = lesson05OpCycle.steps[1];
     await step.botDemo(api);
-    expect(scrollCalls.map((c) => c.idx)).toEqual([2]);
+    expect(scrollCalls.map((c) => c.idx)).toEqual([2, 2]);
   });
 });

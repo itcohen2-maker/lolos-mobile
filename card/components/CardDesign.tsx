@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // CardDesign.tsx — עיצוב הקלפים (הוצא מ-index.tsx)
-// LinearGradient, צללים 3D, טקסט 3D, קלף בסיס, קלפי מספר/שבר/פעולה/ג'וקר/פרא
+// LinearGradient, צללים 3D, טקסט 3D, קלף בסיס, קלפי מספר/שבר/פעולה/סלינדה/פרא
 // ═══════════════════════════════════════════════════════════════
 
 import React, { useEffect, useRef } from 'react';
@@ -129,7 +129,7 @@ export function Line3D({
   );
 }
 
-// ─── Jester SVG (ג'וקר) ────────────────────────────────────────
+// ─── Jester SVG (סלינדה) ────────────────────────────────────────
 
 export function JesterSvg({ size = 45 }: { size?: number }) {
   const h = size * 1.4;
@@ -411,7 +411,6 @@ export function FractionCard({
   const maxOff = small ? 6 : 8;
   const lineW = small ? 38 : 44;
   const lineH = small ? 5 : 6;
-  const resolved = card.resolvedTarget != null;
   return (
     <BaseCard borderColor={denCl.face} selected={selected} onPress={onPress} small={small}>
       <View style={{ alignItems: 'center' }}>
@@ -420,11 +419,6 @@ export function FractionCard({
           <Line3D width={lineW} height={lineH} faceColor={denCl.face} darkColor={denCl.dark} lightColor={denCl.light} layers={3} />
         </View>
         <Text3D text={den} fontSize={fs} faceColor={denCl.face} darkColor={denCl.dark} lightColor={denCl.light} maxOffset={maxOff} />
-        {resolved && (
-          <Text style={{ fontSize: small ? 11 : 13, fontWeight: '700', color: denCl.face, marginTop: small ? 2 : 3 }}>
-            → {card.resolvedTarget}
-          </Text>
-        )}
       </View>
     </BaseCard>
   );
@@ -467,7 +461,7 @@ export function OperationCardComp({
   );
 }
 
-// ─── קלף ג'וקר ─────────────────────────────────────────────────
+// ─── קלף סלינדה ─────────────────────────────────────────────────
 
 export function JokerCard({
   card: _c,
@@ -554,7 +548,7 @@ export function JokerCard({
   );
 }
 
-// הערה: ב־index.tsx הג'וקר משתמש ב־Image של joker.jpg. כאן השארנו JesterSvg.
+// הערה: ב־index.tsx סלינדה משתמשת ב־Image של joker.jpg. כאן השארנו JesterSvg.
 // אם תרצה תמונה, החלף את ה־View עם JesterSvg ב־:
 // <Image source={require('../assets/joker.jpg')} style={{ width: svgSize, height: svgSize, borderRadius: 6 }} resizeMode="contain" />
 

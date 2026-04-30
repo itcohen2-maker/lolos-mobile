@@ -143,7 +143,7 @@ export function createBotDemonstrator(isCancelled?: () => boolean): DemoApi {
     l6CopyConfig(): { pickA: number; pickB: number; op: '+' | '-' | 'x' | '÷'; target: number } | null {
       return tutorialBus.getL6CopyConfig();
     },
-    l11Config(): { addA: number; addB: number } | null {
+    l11Config(): { addA: number; addB: number; target: number } | null {
       return tutorialBus.getL11Config();
     },
   };

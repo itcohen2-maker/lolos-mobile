@@ -88,7 +88,7 @@ export function pickBotStagedPlan(
   maxWild: number,
   validateStagedCards: (
     staged: Card[],
-    opCard: null,
+    opCard: Card | null,
     target: number,
     maxWildArg: number,
   ) => boolean,
@@ -122,8 +122,9 @@ export function pickBotStagedPlan(
       plans.push({
         target: option.result,
         equationDisplay: option.equation,
-        // Stage only numbers/wilds in solved phase; operation cards belong to equation commits.
-        stagedCardIds: numberCards.map((c) => c.id),
+        // The committed op card goes to equationCommits (dice-equation slot).
+        // A second op card from candidates used for staged arithmetic must be staged too.
+        stagedCardIds: [...numberCards.map((c) => c.id), ...(opCard ? [opCard.id] : [])],
         equationCommits,
         score,
       });

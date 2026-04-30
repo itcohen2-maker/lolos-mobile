@@ -125,7 +125,7 @@ export interface HostGameSettings {
   /** מכנים לשברים בחבילה — רלוונטי כש־showFractions */
   fractionKinds?: Fraction[];
   abVariant?: 'control_0_12_plus' | 'variant_0_15_plus';
-  timerSetting: '30' | '60' | 'off' | 'custom';
+  timerSetting: '60' | '90' | 'off' | 'custom';
   timerCustomSeconds: number;
   /** רמת בוט — משחק מול בוט בלובי / התאמה למנוע; אופציונלי */
   botDifficulty?: BotDifficulty;

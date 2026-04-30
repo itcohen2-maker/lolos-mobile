@@ -219,7 +219,7 @@ export function CasinoButton({ text, onPress, disabled, width = 300, height = 62
 
 // Pre-computed suit symbol positions (scattered across button area)
 const suits = ['\u2660', '\u2665', '\u2666', '\u2663'];
-const suitPositions: { left: string; top: string; sym: string; red: boolean }[] = [];
+const suitPositions: { left: number | `${number}%`; top: number | `${number}%`; sym: string; red: boolean }[] = [];
 for (let row = 0; row < 3; row++) {
   for (let col = 0; col < 14; col++) {
     const idx = (col + row * 2) % 4;

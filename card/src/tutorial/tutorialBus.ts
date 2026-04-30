@@ -54,6 +54,8 @@ export type UserEvent =
   | { kind: 'fanScrolled'; toIdx: number }
   | { kind: 'cardTapped'; cardId: string }
   | { kind: 'diceRolled' }
+  | { kind: 'l3TipAck' }
+  | { kind: 'l3SolvedAck' }
   /** Fired when the learner manually taps a die in the EquationBuilder
    *  (NOT via tutorialBus). Lessons can match on a specific die index. */
   | { kind: 'eqUserPickedDice'; idx: number }
@@ -67,7 +69,7 @@ export type UserEvent =
    *  taps the two key buttons. */
   | { kind: 'eqReadyToConfirm' }
   | { kind: 'eqConfirmedByUser' }
-  | { kind: 'userPlayedCards' }
+  | { kind: 'userPlayedCards'; count?: number; hasZero?: boolean; hasWild?: boolean }
   /** Lesson 5 (operation signs) progress signals. `l5AllSignsCycled` fires
    *  once the learner has cycled the `?` slot through all four operation
    *  symbols (+, -, ×, ÷). `l5JokerPlaced` fires after the learner picked a
@@ -273,9 +275,14 @@ let manualEqConfirm = false;
 /** When true: enables equation builder (dice visible + clickable) in L9 stage 1. */
 let l9ParensFilter = false;
 
+/** When true: L7 step 1 — show parens-right mini cards from validTargets directly,
+ *  bypassing the l7ParensResults filter (which requires operators in equation). */
+let l7Step1Mode = false;
+let l6WildStepMode = false;
+
 /** Lesson 11 (multi-play) addends — published by InteractiveTutorialScreen
  *  before the bot demo so the bot stages the correct cards. */
-let l11Config: { addA: number; addB: number; target: number } | null = null;
+let l11Config: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null = null;
 
 /** Subscribers notified when L5 UI flags change (hide fan / guided mode) so GameScreen can re-render. */
 const l5UiListeners = new Set<VoidListener>();
@@ -555,10 +562,26 @@ export const tutorialBus = {
     return l9ParensFilter;
   },
 
-  setL11Config(cfg: { addA: number; addB: number; target: number } | null): void {
+  setL7Step1Mode(on: boolean): void {
+    l7Step1Mode = on;
+    notifyL5Ui();
+  },
+  getL7Step1Mode(): boolean {
+    return l7Step1Mode;
+  },
+
+  setL6WildStepMode(on: boolean): void {
+    l6WildStepMode = on;
+    notifyL5Ui();
+  },
+  getL6WildStepMode(): boolean {
+    return l6WildStepMode;
+  },
+
+  setL11Config(cfg: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null): void {
     l11Config = cfg;
   },
-  getL11Config(): { addA: number; addB: number; target: number } | null {
+  getL11Config(): { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null {
     return l11Config;
   },
 
@@ -614,6 +637,8 @@ export const tutorialBus = {
     botDemoActive = false;
     manualEqConfirm = false;
     l9ParensFilter = false;
+    l7Step1Mode = false;
+    l6WildStepMode = false;
     l11Config = null;
     l5UiListeners.clear();
     lastEquationResult = null;

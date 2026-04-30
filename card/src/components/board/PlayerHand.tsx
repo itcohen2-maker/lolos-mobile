@@ -11,6 +11,7 @@ export default function PlayerHand() {
   const currentPlayer = state.players[state.currentPlayerIndex]
   if (!currentPlayer) return null
 
+  const isIdenticalTutorial = state.phase === 'identical-tutorial'
   const isRollPhase = state.phase === 'roll-dice'
   const isSelecting = state.phase === 'select-cards'
   const topDiscard = state.discardPile[state.discardPile.length - 1]
@@ -25,6 +26,14 @@ export default function PlayerHand() {
   })
 
   const handleCardPress = (card: typeof sortedHand[0]) => {
+    if (isIdenticalTutorial) {
+      if (validateIdenticalPlay(card, topDiscard)) {
+        dispatch({ type: 'SET_MESSAGE', message: t('tutorial.identicalPracticeSuccess') })
+        dispatch({ type: 'COMPLETE_IDENTICAL_TUTORIAL' })
+      }
+      return
+    }
+
     if (isRollPhase) {
       // Pre-roll: only identical plays allowed — tap matching card to play & end turn
       if (validateIdenticalPlay(card, topDiscard)) {
@@ -63,7 +72,7 @@ export default function PlayerHand() {
       >
         {sortedHand.map((card) => {
           const isSelected = state.selectedCards.some((c) => c.id === card.id)
-          const isTappable = isRollPhase || isSelecting
+          const isTappable = isIdenticalTutorial || isRollPhase || isSelecting
           return (
             <GameCard
               key={card.id}

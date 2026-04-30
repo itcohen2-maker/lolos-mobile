@@ -43,14 +43,14 @@ const PALETTES = {
     s1: '#2A1A00', s2: '#3D2600', s3: '#523300', s4: '#664200',
     hi: 'rgba(200,140,20,', sym: '#886622', symhi: '#CCAA33',
     twinkle: 'rgba(255,240,180,0.5)', twinkleGlow: 'rgba(210,160,30,0)',
-    text: { fill: '#1a1510', stroke: 'rgba(180,140,30,0.4)', shadow: 'rgba(80,50,0,0.5)' },
+    text: { fill: '#FFFFFF', stroke: 'rgba(80,50,0,0.55)', shadow: 'rgba(40,20,0,0.7)' },
     rnShadow: '#2a1a00',
   },
   orange: {
     s1: '#3A1400', s2: '#5A2200', s3: '#7A3300', s4: '#A34705',
     hi: 'rgba(255,145,40,', sym: '#B85A16', symhi: '#F08C3A',
     twinkle: 'rgba(255,210,170,0.52)', twinkleGlow: 'rgba(255,140,40,0)',
-    text: { fill: '#FFF3E4', stroke: 'rgba(130,55,10,0.55)', shadow: 'rgba(70,25,0,0.72)' },
+    text: { fill: '#FFFFFF', stroke: 'rgba(80,30,5,0.2)', shadow: 'rgba(40,10,0,0.45)' },
     rnShadow: '#4a1c00',
   },
   purple: {

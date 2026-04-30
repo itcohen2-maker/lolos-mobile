@@ -102,8 +102,15 @@ export const lesson04Equation: Lesson = {
       celebrateKey: 'tutorial.l4b.celebrate',
     },
     {
+      id: 'did-you-know',
+      // Step 3 — "הידעת?" intro overlay before the full-build step.
+      // The learner just taps "בוא ננסה" to proceed; no game interaction needed.
+      botDemo: async (api) => { await api.wait(300); },
+      outcome: (event) => event.kind === 'l4DidYouKnowAck',
+    },
+    {
       id: 'full-build',
-      // Step 3 — guided full build. Unlike steps 1-2, the learner drives the
+      // Step 4 — guided full build. Unlike steps 1-2, the learner drives the
       // whole flow: add 2 numbers + an op, press "אשר את התרגיל", pick cards
       // that match the result, press "בחרתי". InteractiveTutorialScreen tracks
       // the sub-phase (build → confirm → pick → play) and draws an arrow at

@@ -44,22 +44,32 @@ export const lesson05OpCycle: Lesson = {
     },
     {
       id: 'joker-place',
-      // Slinda is rigged in the centre of the L5 hand (index 2 of 5 — see
-      // InteractiveTutorialScreen's L5.2 rigging block). Scroll there and
-      // pulse so the learner's eye lands on her before the bubble prompts
-      // them to tap. Using floor(fanLength/2) keeps the pointer correct
-      // even if the hand size changes.
+      // Slinda is rigged at index 2 (centre of the 5-card L5.2 hand — see
+      // InteractiveTutorialScreen's L5.2 rigging block). We hardcode 2
+      // rather than floor(fanLength/2) because fanLength may still report
+      // 0 at the moment botDemo runs (the fan hasn't re-rendered the new
+      // hand yet), which would scroll to index 0 instead of Slinda.
       botDemo: async (api) => {
-        const jokerIdx = Math.floor(api.fanLength() / 2);
+        const jokerIdx = 2;
+        await api.scrollFanTo(jokerIdx, { durationMs: 0 });
         await api.wait(600);
         await api.scrollFanTo(jokerIdx, { durationMs: 700, easing: 'settle' });
         await api.wait(250);
         await api.pulseCard(jokerIdx, 2200);
       },
-      outcome: (event) => event.kind === 'l5JokerFlowCompleted',
+      outcome: (event) => event.kind === 'l5JokerFlowCompleted' && event.op === '+',
       hintKey: 'tutorial.l5b.hintTapJoker',
       botHintKey: 'tutorial.l5b.botIntro',
       celebrateKey: 'tutorial.l5b.celebrate',
+    },
+    {
+      id: 'important-tip',
+      botDemo: async (api) => {
+        await api.wait(400);
+      },
+      outcome: (event) => event.kind === 'l3TipAck',
+      hintKey: 'tutorial.l3.tipCta',
+      botHintKey: 'tutorial.l3.tipBody',
     },
   ],
 };

@@ -35,7 +35,9 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     // Keep physical layout stable across languages.
     // We still drive text direction with `isRTL`, but avoid global RTL flips.
     I18nManager.allowRTL(true);
-    I18nManager.swapLeftAndRightInRTL(false);
+    if (typeof I18nManager.swapLeftAndRightInRTL === 'function') {
+      I18nManager.swapLeftAndRightInRTL(false);
+    }
   }, []);
 
   const setLocale = useCallback(async (l: AppLocale) => {
