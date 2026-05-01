@@ -13,6 +13,7 @@ import type {
   ContinueVsBotAck,
   EquationCommitPayload,
   HostGameSettings,
+  LobbyTableVisibility,
   Operation,
   Player,
   ServerGameState,
@@ -36,6 +37,7 @@ import { checkRateLimit, cleanupRateLimit } from './rateLimiter';
 import {
   createRoom,
   joinRoom,
+  joinPrivateRoom,
   leaveRoom,
   reconnectPlayer,
   getRoomBySocket,
@@ -45,6 +47,13 @@ import {
   hasBot,
   setDisconnectGraceTimer,
   shouldStartDisconnectGrace,
+  configureRoomTable,
+  markRandomJoiner,
+  startRoomCountdown,
+  clearRoomCountdown,
+  setRoomCountdownTimer,
+  syncRoomTableStatus,
+  getRoomTables,
 } from './roomManager';
 import {
   startGame,
@@ -78,6 +87,7 @@ type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 const BOT_OFFER_DELAY_MS = 0;
+const TABLE_START_COUNTDOWN_MS = 30_000;
 const BOT_DIFF_LEVELS: BotDifficulty[] = ['easy', 'medium', 'hard'];
 
 /** לקוחות ישנים שעדיין שולחים beginner */
@@ -106,6 +116,10 @@ function normalizeGameSettingsPatch(patch?: Partial<HostGameSettings>): Partial<
     out.enabledOperators = normalized.length > 0 ? [...new Set(normalized)] : undefined;
   }
   return out;
+}
+
+function normalizeTableVisibility(raw: unknown): LobbyTableVisibility {
+  return raw === 'private_locked' ? 'private_locked' : 'public';
 }
 
 function playerLocale(room: Room, playerId: string): AppLocale {
@@ -138,6 +152,15 @@ function emitLobbyStatus(io: IOServer, room: Room): void {
     status: room.lobbyStatus,
     botOfferAt: room.botOfferAt,
   });
+}
+
+function emitTablesUpdated(io: IOServer, socket?: IOSocket): void {
+  const payload = { tables: getRoomTables() };
+  if (socket) {
+    socket.emit('tables_updated', payload);
+    return;
+  }
+  io.emit('tables_updated', payload);
 }
 
 function clearBotOfferTimer(room: Room): void {
@@ -319,6 +342,7 @@ function scheduleBotOffer(io: IOServer, room: Room): void {
 }
 
 function refreshLobbyStatus(io: IOServer, room: Room): void {
+  syncRoomTableStatus(room);
   if (room.state) {
     room.lobbyStatus = hasBot(room) ? 'bot_game_started' : 'waiting_for_player';
     room.botOfferAt = null;
@@ -528,7 +552,6 @@ function handleBotPreRoll(io: IOServer, room: Room, state: ServerGameState): voi
     emitBotStepToast(io, room, (locale) => {
       const denom = Number(String(attackFraction.fraction ?? '').split('/')[1] ?? 0) || 1;
       const topVisibleValue =
-        topDiscard?.resolvedTarget ??
         topDiscard?.resolvedValue ??
         (topDiscard?.type === 'number' ? (topDiscard.value ?? null) : null);
       const divideX = topVisibleValue ?? state.pendingFractionTarget ?? denom;
@@ -741,17 +764,71 @@ function startRoomGame(
   difficulty: 'easy' | 'full',
   gameSettings?: Partial<HostGameSettings>,
 ): void {
+  clearRoomCountdown(room);
   room.state = startGame(room, difficulty, gameSettings);
   room.gameStartedAt = Date.now();
   room.matchRecorded = false;
   room.lastActivity = Date.now();
   clearRoomDisconnectGrace(room);
+  syncRoomTableStatus(room);
   room.lobbyStatus = hasBot(room) ? 'bot_game_started' : 'waiting_for_player';
   room.botOfferAt = null;
   emitLobbyStatus(io, room);
+  io.to(room.code).emit('table_status_changed', {
+    roomCode: room.code,
+    status: room.tableStatus,
+    countdownEndsAt: room.countdownEndsAt,
+  });
+  emitTablesUpdated(io);
   sendGameStarted(io, room);
   scheduleRoomTurnTimer(io, room);
   scheduleBotAction(io, room);
+}
+
+function handleWaitingRoomRosterChange(io: IOServer, room: Room): void {
+  const humanCount = room.players.filter((player) => !player.isBot).length;
+  if (room.countdownEndsAt != null && humanCount < 2) {
+    clearRoomCountdown(room);
+    io.to(room.code).emit('table_status_changed', {
+      roomCode: room.code,
+      status: room.tableStatus,
+      countdownEndsAt: null,
+    });
+  }
+  syncRoomTableStatus(room);
+  emitTablesUpdated(io);
+}
+
+function startTableCountdown(io: IOServer, room: Room): void {
+  const difficulty = room.configuredDifficulty;
+  if (!difficulty) return;
+  const countdownEndsAt = startRoomCountdown(room, TABLE_START_COUNTDOWN_MS);
+  io.to(room.code).emit('table_countdown_started', { roomCode: room.code, countdownEndsAt });
+  io.to(room.code).emit('table_status_changed', {
+    roomCode: room.code,
+    status: room.tableStatus,
+    countdownEndsAt,
+  });
+  emitTablesUpdated(io);
+  setRoomCountdownTimer(
+    room,
+    setTimeout(() => {
+      setRoomCountdownTimer(room, null);
+      if (room.state) return;
+      if (room.players.filter((player) => !player.isBot).length < 2) {
+        clearRoomCountdown(room);
+        syncRoomTableStatus(room);
+        io.to(room.code).emit('table_status_changed', {
+          roomCode: room.code,
+          status: room.tableStatus,
+          countdownEndsAt: null,
+        });
+        emitTablesUpdated(io);
+        return;
+      }
+      startRoomGame(io, room, difficulty, room.configuredGameSettings ?? undefined);
+    }, TABLE_START_COUNTDOWN_MS),
+  );
 }
 
 export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
@@ -765,6 +842,163 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     return false;
   }
 
+  socket.on('list_tables', () => {
+    emitTablesUpdated(io, socket);
+  });
+
+  socket.on('create_table', ({ playerName, locale }) => {
+    if (rateLimited()) return;
+    const name = sanitizePlayerName(playerName);
+    if (!name) {
+      socket.emit('error', { message: 'Invalid player name' });
+      return;
+    }
+    const loc = validateLocale(locale);
+    const { room, playerId } = createRoom(name, socket.id, loc);
+    const creatingPlayer = room.players.find((p) => p.id === playerId);
+    if (creatingPlayer) creatingPlayer.supabaseUserId = socket.data.userId ?? undefined;
+    socket.join(room.code);
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: room.inviteCode,
+      visibility: room.tableVisibility,
+    });
+    emitRoomPlayers(io, room);
+    refreshLobbyStatus(io, room);
+    emitTablesUpdated(io);
+  });
+
+  socket.on('configure_table', ({ visibility, maxParticipants, difficulty, gameSettings }) => {
+    if (rateLimited()) return;
+    const diff = validateDifficulty(difficulty);
+    const info = getRoomBySocket(socket.id);
+    const loc = info ? playerLocale(info.room, info.playerId) : 'he';
+    if (!diff) {
+      socket.emit('error', { message: 'Invalid difficulty' });
+      return;
+    }
+    if (!info) {
+      socket.emit('error', { message: t(loc, 'game.noRoom') });
+      return;
+    }
+    const { room, playerId } = info;
+    if (!isHost(room, playerId)) {
+      socket.emit('error', { message: t(loc, 'game.hostOnlyStart') });
+      return;
+    }
+    configureRoomTable(room, {
+      visibility: normalizeTableVisibility(visibility),
+      maxParticipants,
+      difficulty: diff,
+      gameSettings: normalizeGameSettingsPatch(gameSettings),
+    });
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: room.inviteCode,
+      visibility: room.tableVisibility,
+    });
+    refreshLobbyStatus(io, room);
+    emitTablesUpdated(io);
+  });
+
+  socket.on('join_table', ({ roomCode, playerName, locale }) => {
+    if (rateLimited()) return;
+    const code = validateRoomCode(roomCode);
+    const name = sanitizePlayerName(playerName);
+    const loc = validateLocale(locale);
+    if (!code) {
+      socket.emit('error', { message: t(loc, 'room.notFound') });
+      return;
+    }
+    if (!name) {
+      socket.emit('error', { message: 'Invalid player name' });
+      return;
+    }
+    const result = joinRoom(code, name, socket.id, loc);
+    if ('error' in result) {
+      socket.emit('error', { message: t(loc, result.error.key, result.error.params) });
+      return;
+    }
+    const { room, playerId } = result;
+    markRandomJoiner(room);
+    const joiningPlayer = room.players.find((p) => p.id === playerId);
+    if (joiningPlayer) joiningPlayer.supabaseUserId = socket.data.userId ?? undefined;
+    socket.join(room.code);
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: null,
+      visibility: room.tableVisibility,
+    });
+    emitRoomPlayers(io, room);
+    refreshLobbyStatus(io, room);
+    handleWaitingRoomRosterChange(io, room);
+  });
+
+  socket.on('join_private_table_with_code', ({ roomCode, inviteCode, playerName, locale }) => {
+    if (rateLimited()) return;
+    const code = validateRoomCode(roomCode);
+    const safeInvite = String(inviteCode ?? '').trim();
+    const name = sanitizePlayerName(playerName);
+    const loc = validateLocale(locale);
+    if (!code) {
+      socket.emit('error', { message: t(loc, 'room.notFound') });
+      return;
+    }
+    if (!name) {
+      socket.emit('error', { message: 'Invalid player name' });
+      return;
+    }
+    const result = joinPrivateRoom(code, safeInvite, name, socket.id, loc);
+    if ('error' in result) {
+      socket.emit('error', { message: t(loc, result.error.key, result.error.params) });
+      return;
+    }
+    const { room, playerId } = result;
+    const joiningPlayer = room.players.find((p) => p.id === playerId);
+    if (joiningPlayer) joiningPlayer.supabaseUserId = socket.data.userId ?? undefined;
+    socket.join(room.code);
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: null,
+      visibility: room.tableVisibility,
+    });
+    emitRoomPlayers(io, room);
+    refreshLobbyStatus(io, room);
+    handleWaitingRoomRosterChange(io, room);
+  });
+
+  socket.on('start_table_countdown', () => {
+    if (rateLimited()) return;
+    const info = getRoomBySocket(socket.id);
+    const loc = info ? playerLocale(info.room, info.playerId) : 'he';
+    if (!info) {
+      socket.emit('error', { message: t(loc, 'game.noRoom') });
+      return;
+    }
+    const { room, playerId } = info;
+    if (!isHost(room, playerId)) {
+      socket.emit('error', { message: t(loc, 'game.hostOnlyCountdown') });
+      return;
+    }
+    if (room.players.filter((player) => !player.isBot).length < 2) {
+      socket.emit('error', { message: t(loc, 'game.minTwoPlayers') });
+      return;
+    }
+    if (!room.configuredDifficulty) {
+      socket.emit('error', { message: t(loc, 'game.tableNotConfigured') });
+      return;
+    }
+    if (room.countdownEndsAt != null) {
+      socket.emit('error', { message: t(loc, 'game.countdownAlreadyRunning') });
+      return;
+    }
+    startTableCountdown(io, room);
+  });
+
   socket.on('create_room', ({ playerName, locale }) => {
     if (rateLimited()) return;
     const name = sanitizePlayerName(playerName);
@@ -777,9 +1011,15 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     const creatingPlayer = room.players.find((p) => p.id === playerId);
     if (creatingPlayer) creatingPlayer.supabaseUserId = socket.data.userId ?? undefined;
     socket.join(room.code);
-    socket.emit('room_created', { roomCode: room.code, playerId });
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: room.inviteCode,
+      visibility: room.tableVisibility,
+    });
     emitRoomPlayers(io, room);
     refreshLobbyStatus(io, room);
+    emitTablesUpdated(io);
   });
 
   socket.on('join_room', ({ roomCode, playerName, locale }) => {
@@ -804,9 +1044,15 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     const joiningPlayer = room.players.find((p) => p.id === playerId);
     if (joiningPlayer) joiningPlayer.supabaseUserId = socket.data.userId ?? undefined;
     socket.join(room.code);
-    socket.emit('room_created', { roomCode: room.code, playerId });
+    socket.emit('room_created', {
+      roomCode: room.code,
+      playerId,
+      inviteCode: null,
+      visibility: room.tableVisibility,
+    });
     emitRoomPlayers(io, room);
     refreshLobbyStatus(io, room);
+    handleWaitingRoomRosterChange(io, room);
   });
 
   socket.on('leave_room', () => {
@@ -834,6 +1080,9 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
       clearRoomDisconnectGrace(room);
       emitRoomPlayers(io, room);
       refreshLobbyStatus(io, room);
+      handleWaitingRoomRosterChange(io, room);
+    } else {
+      emitTablesUpdated(io);
     }
   });
 
@@ -872,6 +1121,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     }
     emitRoomPlayers(io, room);
     refreshLobbyStatus(io, room);
+    handleWaitingRoomRosterChange(io, room);
     scheduleBotAction(io, room);
   });
 

@@ -466,9 +466,9 @@ function buildPreparedMultiPlayBonusCards(addA: number, addB: number, prefix: st
   const ts = Date.now();
   return [
     { id: `${prefix}-num-a-${ts}`, type: 'number', value: addA },
+    { id: `${prefix}-wild-${ts}`, type: 'wild' },
     { id: `${prefix}-num-b-${ts}`, type: 'number', value: addB },
     { id: `${prefix}-zero-${ts}`, type: 'number', value: 0 },
-    { id: `${prefix}-wild-${ts}`, type: 'wild' },
     { id: `${prefix}-frac-${ts}`, type: 'fraction', fraction: '1/2' },
     { id: `${prefix}-joker-${ts}`, type: 'joker' },
   ];
@@ -481,6 +481,7 @@ export function InteractiveTutorialScreen({ onExit, onProgressChange, gameDispat
     (s: MimicState, a: MimicAction) => mimicReducer(s, a, LESSON_SHAPES),
     INITIAL_MIMIC_STATE,
   );
+  const advancedStartedFromWelcomeRef = useRef(false);
   const tutorialProgress = React.useMemo(() => getTutorialProgressSnapshot(engine), [engine]);
   // Tutorial-owned dice state — used only for lesson 3 so the lesson is
   // self-contained and doesn't depend on the underlying game phase.
@@ -2149,7 +2150,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     const [addA, addB] = prepared.pair;
     const playerHand = buildPreparedPairCards(prepared.hand, 'tut-l11-step2');
     const botHand = playerHand.map((c) => ({ ...c, id: `bot-${c.id}` }));
-    tutorialBus.setL11Config({ addA, addB, target, includeZero: false, includeWild: false });
+    tutorialBus.setL11Config({ addA, addB, target, includeZero: true, includeWild: false });
     l11PreparedRef.current = prepared;
     const discardCard = { id: `tut-l11-step2-discard-${Date.now()}`, type: 'number' as const, value: target };
     gameDispatch({ type: 'TUTORIAL_SET_SHOW_POSSIBLE_RESULTS', value: false });
@@ -2183,8 +2184,11 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     while (pool.length > 1 && (target === l8Step3LastTargetRef.current || target === l11LastResultRef.current));
     l8Step3LastTargetRef.current = target;
     const prepared = buildPreparedPairExercise(target);
-    const [addA, addB] = prepared.pair;
-    tutorialBus.setL11Config({ addA, addB, target, includeZero: true, includeWild: false });
+    const wildValue = target >= 20 ? 4 : target >= 16 ? 3 : 2;
+    const pairTarget = target - wildValue;
+    const addA = Math.max(1, Math.floor(pairTarget / 2));
+    const addB = pairTarget - addA;
+    tutorialBus.setL11Config({ addA, addB, target, includeZero: true, includeWild: true, wildValue });
     l11PreparedRef.current = prepared;
   }, [engine.lessonIndex, engine.phase, engine.stepIndex, gameDispatch]);
 
@@ -2239,6 +2243,15 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     return () => tutorialBus.setL4Step3Mode(false);
   }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
 
+  useEffect(() => {
+    const on =
+      engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
+      engine.stepIndex === 1 &&
+      engine.phase === 'await-mimic';
+    tutorialBus.setL11StrictMultiPlayMode(on);
+    return () => tutorialBus.setL11StrictMultiPlayMode(false);
+  }, [engine.lessonIndex, engine.stepIndex, engine.phase]);
+
   const solvedPlayConfirmedRef = useRef('');
   useEffect(() => {
     const shouldWatchSolvedPlay =
@@ -2275,6 +2288,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       count: playedCards.length,
       hasZero: playedCards.some((c: Card) => c.type === 'number' && c.value === 0),
       hasWild: playedCards.some((c: Card) => c.type === 'wild'),
+      positiveNumberCount: playedCards.filter((c: Card) => c.type === 'number' && (c.value ?? 0) > 0).length,
     });
   }, [
     engine.lessonIndex,
@@ -3029,9 +3043,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
   const lessonOrdinal = isAdvancedLesson
     ? (engine.lessonIndex - MIMIC_FIRST_FRACTION_LESSON_INDEX + 1)
     : (engine.lessonIndex + 1);
-  const stepLabel = currentLessonStepCount > 1
-    ? `${lessonOrdinal}.${engine.stepIndex + 1}`
-    : String(lessonOrdinal);
   const tutorialLayersBeforeCurrentLesson = LESSONS
     .slice(0, engine.lessonIndex)
     .reduce((total, lesson) => total + lesson.steps.length * 4, 0);
@@ -3048,12 +3059,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     1,
     1 + tutorialLayersBeforeCurrentLesson + tutorialCurrentStepLayerBase + tutorialCurrentPhaseLayerOffset,
   );
-  const totalLessonCount = isAdvancedLesson ? totalAdvancedLessons : totalCoreLessons;
-  const showStepProgress =
-    engine.phase !== 'idle' &&
-    engine.phase !== 'core-complete' &&
-    engine.phase !== 'post-signs-choice' &&
-    engine.phase !== 'all-done';
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
   // bubble at the previous lesson's position so it doesn't jump; only the
@@ -3171,7 +3176,6 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               <View
                 style={{
                   flexDirection: 'row',
-                  direction: 'ltr',
                   gap: 12,
                   paddingVertical: 14,
                   paddingHorizontal: 18,
@@ -3284,7 +3288,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             >
               <View
                 style={{
-                  flexDirection: 'row', direction: 'ltr', alignItems: 'center', gap: 14,
+                  flexDirection: 'row', alignItems: 'center', gap: 14,
                   paddingVertical: 18, paddingHorizontal: 24, borderRadius: 20,
                   backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
                 }}
@@ -3346,7 +3350,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               pointerEvents="box-none"
               style={{ position: 'absolute', top: HEADER_COL_H + 260, left: 0, right: 0, alignItems: 'center', zIndex: 9100 }}
             >
-              <View style={{ flexDirection: 'row', direction: 'ltr', gap: 12, alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
                 {(['+', '-', 'x', '÷'] as L5Op[]).map((op) => (
                   <TouchableOpacity key={op} activeOpacity={0.85} onPress={() => onOpCardTap(op)}>
                     <View
@@ -3415,7 +3419,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
                   <Text style={{ color: '#FEF9C3', fontSize: 18, fontWeight: '900', textAlign: 'center', marginBottom: 16 }}>
                     {t('tutorial.l5.jokerPickTitle')}
                   </Text>
-                  <View style={{ flexDirection: 'row', direction: 'ltr', gap: 10, justifyContent: 'center' }}>
+                  <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'center' }}>
                     {(['+', '-', 'x', '÷'] as L5Op[]).map((op) => (
                       <TouchableOpacity
                         key={op}
@@ -3447,39 +3451,34 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
         );
       })() : null}
 
-      {/* Skip + Back buttons + step progress pill — top-right row. */}
+      {/* Skip + Back buttons — top-right row. */}
       <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 9600, flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-        {showStepProgress ? (
-          <View pointerEvents="none" style={{
-            backgroundColor: 'rgba(15,23,42,0.82)',
-            borderRadius: 20,
-            paddingHorizontal: 12,
-            paddingVertical: 5,
-            borderWidth: 1.5,
-            borderColor: 'rgba(250,204,21,0.72)',
-          }}>
-            <Text style={{ color: '#FDE68A', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
-              {`#${tutorialLayerNumber}`}
-            </Text>
-          </View>
-        ) : null}
-        {showStepProgress ? (
-          <View pointerEvents="none" style={{
-            backgroundColor: 'rgba(15,23,42,0.82)',
-            borderRadius: 20,
-            paddingHorizontal: 12,
-            paddingVertical: 5,
-            borderWidth: 1.5,
-            borderColor: 'rgba(148,163,184,0.55)',
-          }}>
-            <Text style={{ color: '#CBD5E1', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>
-              {`${stepLabel} / ${totalLessonCount}`}
-            </Text>
-          </View>
-        ) : null}
+        <View pointerEvents="none" style={{
+          backgroundColor: 'rgba(15,23,42,0.82)',
+          borderRadius: 20,
+          paddingHorizontal: 12,
+          paddingVertical: 5,
+          borderWidth: 1.5,
+          borderColor: 'rgba(250,204,21,0.72)',
+        }}>
+          <Text style={{ color: '#FDE68A', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
+            {`#${tutorialLayerNumber}`}
+          </Text>
+        </View>
         <TouchableOpacity
           onPress={() => {
             if (showWelcomeBubble) return;
+            if (
+              advancedStartedFromWelcomeRef.current &&
+              engine.lessonIndex === MIMIC_FIRST_FRACTION_LESSON_INDEX &&
+              engine.stepIndex === 0
+            ) {
+              advancedStartedFromWelcomeRef.current = false;
+              dispatchEngine({ type: 'EXIT' });
+              dispatchEngine({ type: 'START' });
+              setShowWelcomeBubble(true);
+              return;
+            }
             // L8 step 1 (identical card): go back to step 0 mockup.
             // GO_BACK lands on intro phase → DISMISS_INTRO jumps to bot-demo
             // so isL10Intro becomes true and the "קלף זהה" mockup shows.
@@ -3726,14 +3725,15 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
           the learner sees a single instruction bubble instead of two. */}
       {false && engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
        (engine.stepIndex === 0 || engine.stepIndex === 1) &&
-       engine.phase === 'await-mimic' && (
+       engine.phase === 'await-mimic' &&
+       !gameState?.hasPlayedCards && (
         <View
           pointerEvents="none"
           style={{
             position: 'absolute',
-            top: 58,
-            left: 8,
-            right: 8,
+            top: 124,
+            left: 18,
+            right: 18,
             alignItems: 'center',
             zIndex: 12000,
           }}
@@ -3765,14 +3765,15 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
 
       {engine.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX &&
        (engine.stepIndex === 0 || engine.stepIndex === 1) &&
-       engine.phase === 'await-mimic' && (
+       engine.phase === 'await-mimic' &&
+       !gameState?.hasPlayedCards && (
         <View
           pointerEvents="none"
           style={{
             position: 'absolute',
-            top: 58,
-            left: 8,
-            right: 8,
+            top: 72,
+            left: HEADER_COL_W + 14,
+            right: 12,
             alignItems: 'center',
             zIndex: 12000,
           }}
@@ -3786,6 +3787,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               paddingVertical: 18,
               paddingHorizontal: 20,
               width: '100%',
+              maxWidth: 340,
               minHeight: 118,
               alignItems: 'center',
               justifyContent: 'center',
@@ -3795,7 +3797,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               }),
             }}
           >
-            <Text style={{ color: '#fff7ed', fontSize: 20, fontWeight: '900', textAlign: 'center', lineHeight: 28 }}>
+            <Text style={{ color: '#fff7ed', fontSize: 18, fontWeight: '900', textAlign: 'center', lineHeight: 26 }}>
               {t(
                 l11TopHintKey,
                 { n: String(gameState?.equationResult ?? '?') },
@@ -3806,6 +3808,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       )}
 
       {isL11SecondExerciseAwait &&
+       !gameState?.hasPlayedCards &&
        l11PositiveNumberCount >= 1 &&
        !l11HasZeroStaged &&
        !l11ZeroGiftApproved && (
@@ -3912,8 +3915,8 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
         >
           <HappyBubble
             text={locale === 'he'
-              ? `הפרא יכול להיות כל מספר שתבחרו, והפעם הוא ${gameState?.equationResult ?? '?'}`
-              : `The wild can be any number you choose, and this time it is ${gameState?.equationResult ?? '?'}`
+              ? `הפרא יכול להיות כל מספר שתבחרו, והפעם הוא ${tutorialBus.getL11Config()?.wildValue ?? gameState?.equationResult ?? '?'}`
+              : `The wild can be any number you choose, and this time it is ${tutorialBus.getL11Config()?.wildValue ?? gameState?.equationResult ?? '?'}`
             }
             tone="celebrate"
             arrowSize="big"
@@ -4622,7 +4625,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               <SlindaCoin size={20} />
             </View>
             <TouchableOpacity
-              onPress={() => setShowWelcomeBubble(false)}
+              onPress={() => {
+                advancedStartedFromWelcomeRef.current = false;
+                setShowWelcomeBubble(false);
+              }}
               style={{
                 paddingVertical: 15,
                 paddingHorizontal: 28,
@@ -4640,6 +4646,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
+                advancedStartedFromWelcomeRef.current = true;
                 setShowWelcomeBubble(false);
                 dispatchEngine({ type: 'JUMP_TO_ADVANCED' });
               }}
@@ -4655,7 +4662,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               }}
             >
               <Text style={{ color: '#FFFFFF', fontWeight: '900', fontSize: 16 }}>
-                {locale === 'he' ? 'הדרכת מיתקדמים' : 'Advanced Tutorial'}
+                {locale === 'he' ? 'הדרכת מתקדמים' : 'Advanced Tutorial'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -4718,7 +4725,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             </Text>
             {/* Advanced fractions option */}
             <TouchableOpacity
-              onPress={() => dispatchEngine({ type: 'CHOOSE_ADVANCED_FRACTIONS' })}
+              onPress={() => {
+                advancedStartedFromWelcomeRef.current = false;
+                dispatchEngine({ type: 'CHOOSE_ADVANCED_FRACTIONS' });
+              }}
               style={{
                 paddingVertical: 15,
                 paddingHorizontal: 28,
@@ -4792,7 +4802,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
               {t('tutorial.fracBranch.body')}
             </Text>
             <TouchableOpacity
-              onPress={() => dispatchEngine({ type: 'CHOOSE_ADVANCED_FRACTIONS' })}
+              onPress={() => {
+                advancedStartedFromWelcomeRef.current = false;
+                dispatchEngine({ type: 'CHOOSE_ADVANCED_FRACTIONS' });
+              }}
               style={{ paddingVertical: 14, borderRadius: 16, backgroundColor: '#2563EB', marginBottom: 10 }}
             >
               <Text style={{ color: '#fff', fontWeight: '900', textAlign: 'center', fontSize: 16 }}>
@@ -4825,7 +4838,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
             backgroundColor: 'rgba(0,0,0,0.65)',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 9400,
+            zIndex: 15000,
             paddingHorizontal: 20,
           }}
         >

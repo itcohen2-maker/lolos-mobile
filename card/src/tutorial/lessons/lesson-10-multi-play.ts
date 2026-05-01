@@ -25,7 +25,11 @@ export const lesson10MultiPlay: Lesson = {
       botDemo: async (api) => {
         await api.wait(0);
       },
-      outcome: (e) => e.kind === 'userPlayedCards' && (e.count ?? 0) > 2 && !!e.hasZero,
+      outcome: (e) => e.kind === 'userPlayedCards' &&
+        (e.count ?? 0) > 2 &&
+        (e.positiveNumberCount ?? 0) >= 2 &&
+        !!e.hasZero &&
+        !!e.hasWild,
       hintKey: 'tutorial.multiPlayExerciseMore.hint',
       celebrateKey: 'tutorial.multiPlayExercise.celebrate',
     },

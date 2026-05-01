@@ -83,7 +83,7 @@ import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMult
 import { AuthProvider, useAuth } from './src/hooks/useAuth';
 import { ShopScreen } from './src/screens/ShopScreen';
 import { MyThemesScreen } from './src/screens/MyThemesScreen';
-import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/LobbyScreens';
+import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/OnlineTableScreens';
 import { CelebrationMockupRoom } from './src/screens/CelebrationMockupRoom';
 import { ExtractedMeterCelebrationOverlayCard } from './src/components/ExtractedMeterCelebration';
 import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
@@ -1185,7 +1185,6 @@ function validateStagedCards(
   const numCards = numberCards.filter(c => c.type === 'number');
   const values = numCards.map(c => c.value ?? 0);
   if (wildCount > 1) return false;
-  if (numCards.length > 2) return false;
   if (wildCount === 1) {
     if (!opCard) {
       const sum = values.reduce((s, v) => s + v, 0);
@@ -1260,6 +1259,22 @@ function computeWildValueInStaged(
       }
     }
   }
+  return null;
+}
+
+function getL11MultiPlayTutorialMissingKey(
+  stagedCards: Card[],
+  cfg: ReturnType<typeof tutorialBus.getL11Config>,
+): string | null {
+  if (!tutorialBus.getL11StrictMultiPlayMode() || !cfg?.includeWild) return null;
+  const positiveNumberCount = stagedCards.filter(c => c.type === 'number' && (c.value ?? 0) > 0).length;
+  const hasZero = stagedCards.some(c => c.type === 'number' && c.value === 0);
+  const hasWild = stagedCards.some(c => c.type === 'wild');
+
+  if (positiveNumberCount < 1) return 'tutorial.multiPlayExerciseMore.needNumber';
+  if (!hasZero) return 'tutorial.multiPlayExerciseMore.needZero';
+  if (positiveNumberCount < 2) return 'tutorial.multiPlayExerciseMore.needSecondNumber';
+  if (!hasWild) return 'tutorial.multiPlayExerciseMore.needWild';
   return null;
 }
 
@@ -1402,6 +1417,7 @@ function resolveDiscardNumberCardFromStaged(
 }
 
 function checkWin(st: GameState): GameState {
+  if (st.isTutorial) return st;
   const cp = st.players[st.currentPlayerIndex];
   // Win at 2-or-fewer cards so that a multi-card play (e.g. equation that
   // burns two numbers at once) that skips straight from 3 → 1 still triggers
@@ -1873,6 +1889,10 @@ function gameReducer(
       const stNumbers = st.stagedCards.filter(c => c.type === 'number' || c.type === 'wild');
       const stOpCards = st.stagedCards.filter(c => c.type === 'operation');
       const stOpCard = stOpCards.length === 1 ? stOpCards[0] : null;
+      const l11MissingKey = st.isTutorial
+        ? getL11MultiPlayTutorialMissingKey(st.stagedCards, tutorialBus.getL11Config())
+        : null;
+      if (l11MissingKey) return { ...st, message: tf(l11MissingKey) };
       if (stNumbers.length === 0) return { ...st, message: tf('confirm.needNumberOrWild') };
       if (st.isTutorial && tutorialBus.getL6WildStepMode()) {
         const hasWild = stNumbers.some(c => c.type === 'wild');
@@ -5638,8 +5658,6 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       setOp2(parsed.operators[1] ?? null);
     };
     prefill();
-    const retry = setTimeout(prefill, 60);
-    return () => clearTimeout(retry);
   }, [
     state.isTutorial,
     state.phase,
@@ -5654,7 +5672,9 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     dice3,
     op1,
     op2,
-    parensRight,
+    // parensRight intentionally omitted: setParensRight inside prefill() updates
+    // GameScreen state which feeds back here via prop, creating a cascade. The
+    // tutorialSolvedAutofillKeyRef ref-guard already prevents double-execution.
   ]);
 
   // Effective operators: hand cards override local cycle when placed in position 0 or 1
@@ -5895,20 +5915,32 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   // Notify parent about confirm readiness
   const stableConfirm = useCallback(() => confirmRef.current(), []);
+  const lastConfirmReadyRef = useRef<boolean | null>(null);
   useEffect(() => {
-    if (onConfirmChange) {
-      onConfirmChange(ok && !isSolved && interactive ? { onConfirm: stableConfirm } : null);
-    }
+    if (!onConfirmChange) return;
+    const ready = ok && !isSolved && interactive;
+    if (lastConfirmReadyRef.current === ready) return;
+    lastConfirmReadyRef.current = ready;
+    onConfirmChange(ready ? { onConfirm: stableConfirm } : null);
   }, [ok, isSolved, interactive, onConfirmChange, stableConfirm]);
-  useEffect(() => () => onConfirmChange?.(null), []);
+  useEffect(() => () => {
+    lastConfirmReadyRef.current = null;
+    onConfirmChange?.(null);
+  }, []);
 
   // Notify parent about result state for rendering outside the table
+  const lastResultPayloadRef = useRef<string | null>(null);
   useEffect(() => {
-    if (onResultChange) {
-      onResultChange(showBuilder ? { result: finalResult, ok, hasError } : null);
-    }
-  }, [finalResult, ok, hasError, showBuilder]);
-  useEffect(() => () => onResultChange?.(null), []);
+    if (!onResultChange) return;
+    const payloadKey = showBuilder ? `${finalResult ?? 'x'}|${ok ? 1 : 0}|${hasError ? 1 : 0}` : null;
+    if (lastResultPayloadRef.current === payloadKey) return;
+    lastResultPayloadRef.current = payloadKey;
+    onResultChange(showBuilder ? { result: finalResult, ok, hasError } : null);
+  }, [finalResult, ok, hasError, showBuilder, onResultChange]);
+  useEffect(() => () => {
+    lastResultPayloadRef.current = null;
+    onResultChange?.(null);
+  }, []);
 
   if (!showBuilder) return null;
 
@@ -6448,7 +6480,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 const eqS = StyleSheet.create({
   wrap: { backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', alignSelf: 'center' as any, width: '100%', maxWidth: '100%', gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', overflow: 'visible' as const },
   title: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '700', textAlign: 'center' },
-  diceRow: { flexDirection: 'row', gap: 12, justifyContent: 'center', direction: 'ltr' as any },
+  diceRow: { flexDirection: 'row', gap: 12, justifyContent: 'center' },
   diceBtn: { width: 56, height: 56, borderRadius: 14, backgroundColor: 'rgba(255,200,60,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,200,60,0.2)', overflow: 'hidden' },
   diceBtnFace: { backgroundColor: 'transparent', borderColor: 'rgba(232,184,48,0.4)', borderWidth: 2, padding: 0 },
   diceBtnUsed: { opacity: 0.25 },
@@ -6460,7 +6492,6 @@ const eqS = StyleSheet.create({
     maxWidth: '100%',
     alignSelf: 'center' as any,
     flexDirection: 'row',
-    direction: 'ltr' as any,
     flexWrap: 'nowrap' as const,
     alignItems: 'center',
     justifyContent: 'center',
@@ -6473,7 +6504,7 @@ const eqS = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.06)',
   },
   /** קבוצה שלמה של סלוטים+סימנים — לא נשברת באמצע */
-  eqChunk: { flexDirection: 'row', direction: 'ltr' as any, alignItems: 'center', gap: 6, flexShrink: 0 },
+  eqChunk: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
   bracket: { fontSize: 36, lineHeight: 44, fontWeight: '900', color: '#F97316', marginHorizontal: 1, textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
   equalsSmall: { fontSize: 14, fontWeight: '800', color: 'rgba(0,0,0,0.5)', marginHorizontal: 1 },
   subResultBox: {
@@ -7823,6 +7854,10 @@ function BottomControlsBar() {
   const so = state.phase === 'solved';
   const showSolved = so && !state.hasPlayedCards;
   const hasStaged = showSolved && state.stagedCards.length > 0;
+  const l11PlaceMissingKey = state.isTutorial
+    ? getL11MultiPlayTutorialMissingKey(state.stagedCards, tutorialBus.getL11Config())
+    : null;
+  const placeCardsDisabled = l11PlaceMissingKey != null;
 
   const placeMultipleSoundRef = useRef<Audio.Sound | null>(null);
   const placeMultipleLoadingRef = useRef(false);
@@ -7875,9 +7910,10 @@ function BottomControlsBar() {
   const showBar = showSolved;
 
   const onPlaceCards = useCallback(() => {
+    if (placeCardsDisabled) return;
     if (soundOn && state.stagedCards.length >= 2) playPlaceMultipleSound();
     dispatch({ type: 'CONFIRM_STAGED' });
-  }, [state.stagedCards.length, dispatch, playPlaceMultipleSound, soundOn]);
+  }, [placeCardsDisabled, state.stagedCards.length, dispatch, playPlaceMultipleSound, soundOn]);
 
   const BOTTOM_PLACE_BTN_W = 160;
   const bottomRowW = BOTTOM_PLACE_BTN_W;
@@ -7960,6 +7996,7 @@ function BottomControlsBar() {
                   height={44}
                   fontSize={15}
                   textColor="#FFFFFF"
+                  disabled={placeCardsDisabled}
                   onPress={onPlaceCards}
                 />
               </View>
@@ -8420,12 +8457,10 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
         const saved = await AsyncStorage.getItem('lulos_guidance_enabled');
         if (cancelled) return;
         if (saved != null) {
-          // Pre-fill toggle with saved preference, then still open the prompt.
           const enabled = saved !== 'false';
           setGuidanceOn(enabled);
           dispatch({ type: 'SET_GUIDANCE_ENABLED', enabled });
         }
-        // Always show the prompt so the user can choose each session.
         setGuidancePromptOpen(true);
       } catch (_) {
         if (!cancelled) setGuidancePromptOpen(true);
@@ -9141,8 +9176,8 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
       >
         <View style={{ flex: 1, minHeight: 0 }}>
         <ScrollView
-          style={{ flex: 1, direction: 'rtl' }}
-          contentContainerStyle={{ paddingBottom: 16, direction: 'rtl' }}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 16 }}
           showsVerticalScrollIndicator
           nestedScrollEnabled
           keyboardShouldPersistTaps="handled"
@@ -9153,7 +9188,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               fontSize: 12,
               lineHeight: 18,
               fontWeight: '600',
-              textAlign: 'center',
+              textAlign: 'right',
               writingDirection: 'rtl',
               marginBottom: 14,
               paddingHorizontal: 4,
@@ -9178,7 +9213,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                     fontSize: 15,
                     fontWeight: '800',
                     marginBottom: 6,
-                    textAlign: isRTL ? 'left' : 'right',
+                    textAlign: isRTL ? 'right' : 'left',
                     writingDirection: isRTL ? 'rtl' : 'ltr',
                   },
                 ]}
@@ -9189,7 +9224,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
             {gameMode === 'pass-and-play' && (
               <LinearGradient colors={['#188038','#34A853']} start={{x:0,y:0}} end={{x:1,y:1}} style={hsS.rowGradientOuter}>
                 <View style={[hsS.row, hsS.rowPlayers, { flexDirection: 'row' }]}>
-                  <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.playerCount')}</Text>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.playerCount')}</Text>
                   <View style={hsS.stepper}>
                     <Text style={hsS.stepVal}>{playerCount}</Text>
                   </View>
@@ -9216,7 +9251,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                     fontSize: 15,
                     fontWeight: '800',
                     marginBottom: 6,
-                    textAlign: isRTL ? 'left' : 'right',
+                    textAlign: isRTL ? 'right' : 'left',
                     writingDirection: isRTL ? 'rtl' : 'ltr',
                   },
                 ]}
@@ -9229,7 +9264,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   fontSize: 12,
                   lineHeight: 18,
                   fontWeight: '600',
-                  textAlign: isRTL ? 'left' : 'right',
+                  textAlign: isRTL ? 'right' : 'left',
                   writingDirection: isRTL ? 'rtl' : 'ltr',
                   marginBottom: 8,
                 }}
@@ -9238,9 +9273,9 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </Text>
             </View>
           <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowRange, { flexDirection: 'row' }]}>
-              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.numberRange')}</Text>
-              <View style={hsS.toggleGroup}>
+            <View style={[hsS.rowStackToggle, hsS.rowRange, isRTL ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.numberRange')}</Text>
+              <View style={[hsS.toggleGroupFull, isRTL ? { justifyContent: 'flex-end', alignSelf: 'flex-end' } : null]}>
                 {([['full', '0-25'], ['easy', '0-12']] as const).map(([key, label]) => (
                   <TouchableOpacity key={key} onPress={() => setNumberRange(key)} activeOpacity={0.7}
                     style={[hsS.toggleBtn, numberRange === key ? hsS.toggleOn : hsS.toggleOff]}>
@@ -9250,13 +9285,13 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </View>
             </View>
           </LinearGradient>
-          <Text style={[hsS.advHint, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
-            {t('start.advancedSetup.hint.numberRangeRow')}
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+            {isRTL ? 'בוחרים אם לשחק בטווח 0–12 או 0–25.' : 'Choose whether to play in the 0–12 or 0–25 range.'}
           </Text>
           <LinearGradient colors={['#4285F4', '#8ab4f8']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowFractions, { flexDirection: 'row' }]}>
-              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.fractions')}</Text>
-              <View style={hsS.toggleGroup}>
+            <View style={[hsS.rowStackToggle, hsS.rowFractions, isRTL ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.fractions')}</Text>
+              <View style={[hsS.toggleGroupFull, isRTL ? { justifyContent: 'flex-end', alignSelf: 'flex-end' } : null]}>
                 {([
                   [true, t('lobby.withFractions')],
                   [false, t('lobby.noFractions')],
@@ -9269,7 +9304,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </View>
             </View>
           </LinearGradient>
-          <Text style={[hsS.advHint, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
             {t('start.advancedSetup.hint.fractionsRow')}
           </Text>
           {fractions && (
@@ -9280,7 +9315,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   fontSize: 12,
                   fontWeight: '700',
                   marginBottom: 8,
-                  textAlign: isRTL ? 'left' : 'right',
+                  textAlign: isRTL ? 'right' : 'left',
                   writingDirection: isRTL ? 'rtl' : 'ltr',
                 }}
               >
@@ -9319,7 +9354,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
             </View>
           )}
           <View style={{ paddingHorizontal: 10, paddingBottom: 10, gap: 8 }}>
-            <Text style={{ color: 'rgba(226,232,240,0.92)', fontSize: 12, fontWeight: '700', textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }}>
+            <Text style={{ color: 'rgba(226,232,240,0.92)', fontSize: 12, fontWeight: '700', textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }}>
               {t('start.advancedSetup.operatorsTitle')}
             </Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
@@ -9369,7 +9404,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                     fontSize: 15,
                     fontWeight: '800',
                     marginBottom: 6,
-                    textAlign: isRTL ? 'left' : 'right',
+                    textAlign: isRTL ? 'right' : 'left',
                     writingDirection: isRTL ? 'rtl' : 'ltr',
                   },
                 ]}
@@ -9382,7 +9417,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   fontSize: 12,
                   lineHeight: 18,
                   fontWeight: '600',
-                  textAlign: isRTL ? 'left' : 'right',
+                  textAlign: isRTL ? 'right' : 'left',
                   writingDirection: isRTL ? 'rtl' : 'ltr',
                   marginBottom: 8,
                 }}
@@ -9391,9 +9426,9 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </Text>
             </View>
           <LinearGradient colors={['#d93025', '#EA4335']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.rowStackToggle, hsS.rowPossibleResults]}>
-              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.possibleResults')}</Text>
-              <View style={hsS.toggleGroupFull}>
+            <View style={[hsS.rowStackToggle, hsS.rowPossibleResults, isRTL ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.possibleResults')}</Text>
+              <View style={[hsS.toggleGroupFull, isRTL ? { justifyContent: 'flex-end', alignSelf: 'flex-end' } : null]}>
                 {([
                   [true, t('lobby.show')],
                   [false, t('lobby.hide')],
@@ -9410,13 +9445,13 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </View>
             </View>
           </LinearGradient>
-          <Text style={[hsS.advHint, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
             {t('start.advancedSetup.hint.possibleResultsRow')}
           </Text>
           <LinearGradient colors={['#34A853', '#81c995']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.rowStackToggle, hsS.rowSolveExercise]}>
-              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.solveExercise')}</Text>
-              <View style={hsS.toggleGroupFull}>
+            <View style={[hsS.rowStackToggle, hsS.rowSolveExercise, isRTL ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('lobby.solveExercise')}</Text>
+              <View style={[hsS.toggleGroupFull, isRTL ? { justifyContent: 'flex-end', alignSelf: 'flex-end' } : null]}>
                 {([
                   [true, t('lobby.on')],
                   [false, t('lobby.off')],
@@ -9436,7 +9471,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </View>
             </View>
           </LinearGradient>
-          <Text style={[hsS.advHint, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
             {t('start.advancedSetup.hint.solveExerciseRow')}
           </Text>
           </View>
@@ -9450,7 +9485,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                     fontSize: 15,
                     fontWeight: '800',
                     marginBottom: 6,
-                    textAlign: isRTL ? 'left' : 'right',
+                    textAlign: isRTL ? 'right' : 'left',
                     writingDirection: isRTL ? 'rtl' : 'ltr',
                   },
                 ]}
@@ -9463,7 +9498,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                   fontSize: 12,
                   lineHeight: 18,
                   fontWeight: '600',
-                  textAlign: isRTL ? 'left' : 'right',
+                  textAlign: isRTL ? 'right' : 'left',
                   writingDirection: isRTL ? 'rtl' : 'ltr',
                   marginBottom: 8,
                 }}
@@ -9472,9 +9507,9 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </Text>
             </View>
           <LinearGradient colors={['#EA4335', '#f28b82']} start={{ x: isRTL ? 1 : 0, y: 0 }} end={{ x: isRTL ? 0 : 1, y: 1 }} style={hsS.rowGradientOuter}>
-            <View style={[hsS.row, hsS.rowTimer, { flexDirection: 'row' }]}>
-              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.timerRow')}</Text>
-              <View style={hsS.timerWheelWrap}>
+            <View style={[hsS.rowStackToggle, hsS.rowTimer, isRTL ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }]}>
+              <Text style={[hsS.rowLabel, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>{t('start.wheel.timerRow')}</Text>
+              <View style={[hsS.timerWheelWrap, { width: '100%', marginStart: 0 }]}>
                 <HorizontalOptionWheel
                   options={timerWheelOptions}
                   selectedKey={timer}
@@ -9517,7 +9552,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </View>
             </LinearGradient>
           )}
-          <Text style={[hsS.advHint, { textAlign: isRTL ? 'left' : 'right', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
+          <Text style={[hsS.advHint, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
             {t('start.advancedSetup.hint.timerOptions')}
           </Text>
           </View>
@@ -9592,36 +9627,42 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
             <GameModeToggleBlock gameMode={gameMode} setGameMode={setGameMode} />
           </WheelRow>
 
-          {/* 2. מספר שחקנים — רק במצב מקומי */}
-          {gameMode === 'pass-and-play' && (
+          {/* 2. מספר שחקנים — תמיד מוצג; פעיל רק במצב מקומי */}
           <WheelRow index={1}>
-          <LinearGradient colors={['#188038','#34A853']} start={{x:0,y:0}} end={{x:1,y:1}} style={hsS.rowGradientOuter}>
+          <LinearGradient
+            colors={gameMode === 'pass-and-play' ? ['#188038', '#34A853'] : ['#374151', '#4B5563']}
+            start={{x:0,y:0}}
+            end={{x:1,y:1}}
+            style={[hsS.rowGradientOuter, gameMode !== 'pass-and-play' && { opacity: 0.82 }]}
+          >
           <View style={[hsS.row, hsS.rowPlayers]}>
             <Text style={hsS.rowLabel}>{t('start.playerCount')}</Text>
             <View style={hsS.stepper}>
               <TouchableOpacity
                 onPress={() => {
+                  if (gameMode !== 'pass-and-play') return;
                   const next = Math.max(2, playerCount - 1);
                   playPlayerCountSound(next);
                   setPlayerCount(next);
                 }}
-                disabled={playerCount <= 2} activeOpacity={0.7}
-                style={[hsS.stepBtnWrap, playerCount <= 2 && { opacity: 0.3 }]}
+                disabled={gameMode !== 'pass-and-play' || playerCount <= 2} activeOpacity={0.7}
+                style={[hsS.stepBtnWrap, (gameMode !== 'pass-and-play' || playerCount <= 2) && { opacity: 0.3 }]}
               >
                 <LinearGradient colors={['#fde293','#FBBC05','#f9ab00','#e37400']} locations={[0,0.4,0.8,1]} style={hsS.stepBtn}>
                   <View style={hsS.stepBtnInner} />
                   <Text style={hsS.stepBtnTxt}>−</Text>
                 </LinearGradient>
               </TouchableOpacity>
-              <Text style={hsS.stepVal}>{playerCount}</Text>
+              <Text style={hsS.stepVal}>{gameMode === 'pass-and-play' ? playerCount : 2}</Text>
               <TouchableOpacity
                 onPress={() => {
+                  if (gameMode !== 'pass-and-play') return;
                   const next = Math.min(6, playerCount + 1);
                   playPlayerCountSound(next);
                   setPlayerCount(next);
                 }}
-                disabled={playerCount >= 6} activeOpacity={0.7}
-                style={[hsS.stepBtnWrap, playerCount >= 6 && { opacity: 0.3 }]}
+                disabled={gameMode !== 'pass-and-play' || playerCount >= 6} activeOpacity={0.7}
+                style={[hsS.stepBtnWrap, (gameMode !== 'pass-and-play' || playerCount >= 6) && { opacity: 0.3 }]}
               >
                 <LinearGradient colors={['#fde293','#FBBC05','#f9ab00','#e37400']} locations={[0,0.4,0.8,1]} style={hsS.stepBtn}>
                   <View style={hsS.stepBtnInner} />
@@ -9632,7 +9673,6 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
           </View>
           </LinearGradient>
           </WheelRow>
-          )}
 
           {/* 3. טווח מספרים */}
           <WheelRow index={numberRangeWheelIndex}>
@@ -9703,20 +9743,6 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
                 <Text style={[hsS.advancedEntryTeaser, { textAlign: isRTL ? 'right' : 'left', writingDirection: isRTL ? 'rtl' : 'ltr' }]}>
                   {t('start.advancedSetup.entryRowTeaser')}
                 </Text>
-                <View style={[hsS.advancedEntryChipRow, { flexDirection: 'row', flexWrap: 'wrap', rowGap: 6 }]}>
-                  <View style={[hsS.advancedStageChip, hsS.advancedStageChipActive]}>
-                    <Text style={[hsS.advancedStageChipTxt, hsS.advancedStageChipTxtActive]}>
-                      {t('start.advancedSetup.entryChip.operators', {
-                        value: operatorPreset === 'all' ? t('start.advancedSetup.operators.all.label') : operatorPreset === 'mulDiv' ? t('start.advancedSetup.operators.mulDiv.label') : t('start.advancedSetup.operators.plusMinus.label'),
-                      })}
-                    </Text>
-                  </View>
-                  <View style={[hsS.advancedStageChip, hsS.advancedStageChipActive]}>
-                    <Text style={[hsS.advancedStageChipTxt, hsS.advancedStageChipTxtActive]}>
-                      {t('start.advancedSetup.entryChip.fractions', { value: fractions ? t('lobby.withFractions') : t('lobby.noFractions') })}
-                    </Text>
-                  </View>
-                </View>
               </View>
               <View style={[hsS.advancedEntryCtaWrap, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                 <Text style={hsS.advancedEntryCtaTxt}>{t('start.advancedSetup.entryOpenCta')}</Text>
@@ -9814,7 +9840,6 @@ const hsS = StyleSheet.create({
     alignSelf: 'stretch',
     justifyContent: 'flex-start',
     gap: 5,
-    direction: 'ltr',
   },
   // מעטפת חיצונית לגרדיאנט של שורות נבחרות
   rowGradientOuter: {
@@ -9863,7 +9888,7 @@ const hsS = StyleSheet.create({
   rowHint: { color: 'rgba(255,255,255,0.72)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
   rowSubHint: { color: 'rgba(255,255,255,0.88)', fontSize: 11, lineHeight: 16, flexShrink: 1 },
   // LTR: ברירת מחדל (האופציה הראשונה בכל מערך) תמיד משמאל גם תחת forceRTL
-  toggleGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, direction: 'ltr' },
+  toggleGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   toggleBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1 },
   toggleOn: {
     backgroundColor: '#FBBF24', borderColor: '#92400E', borderWidth: 2,
@@ -9914,7 +9939,7 @@ const hsS = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
   },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 10, direction: 'ltr' },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   stepBtnWrap: {
     borderRadius: 10,
     ...Platform.select({
@@ -10258,39 +10283,71 @@ function PlayerNameModal({
               }}
             >
               <Text style={{color:'#FDE68A',fontSize:18,fontWeight:'800',textAlign:'center',marginBottom:10}}>{t('player.namePrompt')}</Text>
-              <TextInput
-                value={name}
-                onChangeText={(txt) => {
-                  const sliced = txt.slice(0, 7);
-                  sendDebugLog('H5', 'index.tsx:PlayerNameModal.onChangeText', 'Name input changed', {
-                    rawLength: txt.length,
-                    slicedLength: sliced.length,
-                    value: sliced,
-                  });
-                  setName(sliced);
-                }}
-                onFocus={() => {
-                  if (isDefaultPlayerName(name)) setName('');
-                }}
-                placeholder=""
-                placeholderTextColor="rgba(255,255,255,0.4)"
-                maxLength={7}
-                editable
-                blurOnSubmit={false}
+              <LinearGradient
+                colors={['#FFF4B8', '#E7BF3A', '#BA7E10']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
                 style={{
-                  backgroundColor: 'rgba(15,23,42,0.95)',
-                  borderRadius: 12,
-                  borderWidth: 2,
-                  borderColor: 'rgba(255,215,0,0.4)',
-                  paddingHorizontal: 16,
-                  paddingVertical: 12,
-                  color: '#FFF',
-                  fontSize: 18,
-                  fontWeight: '700',
-                  textAlign: 'center',
+                  borderRadius: 26,
+                  padding: 3,
                   marginBottom: 14,
+                  shadowColor: '#4A3200',
+                  shadowOffset: { width: 0, height: 6 },
+                  shadowOpacity: 0.28,
+                  shadowRadius: 10,
+                  elevation: 7,
                 }}
-              />
+              >
+                <LinearGradient
+                  colors={['#0B153C', '#142763', '#1B3F8C']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={{
+                    borderRadius: 23,
+                    overflow: 'hidden',
+                    position: 'relative',
+                  }}
+                >
+                  <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
+                  <Text style={{ position: 'absolute', top: 5, left: 20, color: 'rgba(230,240,255,0.55)', fontSize: 10 }}>✦</Text>
+                  <Text style={{ position: 'absolute', top: 12, right: 28, color: 'rgba(255,248,200,0.42)', fontSize: 8 }}>✦</Text>
+                  <Text style={{ position: 'absolute', bottom: 8, left: 54, color: 'rgba(200,225,255,0.3)', fontSize: 7 }}>✦</Text>
+                  <Text style={{ position: 'absolute', bottom: 10, right: 60, color: 'rgba(255,248,200,0.32)', fontSize: 7 }}>✦</Text>
+                  </View>
+                  <TextInput
+                    value={name}
+                  onChangeText={(txt) => {
+                      const sliced = txt.slice(0, 7);
+                      sendDebugLog('H5', 'index.tsx:PlayerNameModal.onChangeText', 'Name input changed', {
+                        rawLength: txt.length,
+                        slicedLength: sliced.length,
+                        value: sliced,
+                      });
+                      setName(sliced);
+                    }}
+                    onFocus={() => {
+                      if (isDefaultPlayerName(name)) setName('');
+                    }}
+                    placeholder=""
+                    placeholderTextColor="rgba(226,235,255,0.8)"
+                    maxLength={7}
+                    editable
+                    blurOnSubmit={false}
+                    style={{
+                      backgroundColor: 'transparent',
+                      borderRadius: 21,
+                      borderWidth: 1,
+                      borderColor: 'rgba(226,232,255,0.14)',
+                      paddingHorizontal: 16,
+                      paddingVertical: 12,
+                      color: '#EAF1FF',
+                      fontSize: 18,
+                      fontWeight: '800',
+                      textAlign: 'center',
+                    }}
+                  />
+                </LinearGradient>
+              </LinearGradient>
               <View style={{ alignItems: 'center', marginTop: 4 }}>
                 <CasinoButton text={t('ui.confirm')} width={220} height={48} fontSize={19} onPress={handleConfirm} />
               </View>
@@ -10825,7 +10882,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       ) : null}
       <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
       {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
-      <View pointerEvents="box-none" style={{flexDirection:'row',direction:'ltr' as any,alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
+      <View pointerEvents="box-none" style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
         {!state.isTutorial ? (
         <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
           <LulosButton text={t('ui.exitGame')} color="red" width={72} height={32} fontSize={11} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
@@ -10876,7 +10933,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
               state.players.find(p => !p.isBot) ??
               (state.players.length === 1 ? state.players[0] : null);
             return meterPlayer ? (
-              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -11 }}>
                 <ExcellenceMeter
                   value={meterPlayer.courageMeterPercent ?? 0}
                   pulseKey={meterPlayer.courageRewardPulseId ?? 0}
@@ -11461,7 +11518,7 @@ function PlayerSidebar({
   return (
     <View style={{ flex: 1, minWidth: 0, alignItems: 'flex-end' }}>
       {/* שורה אחת: שבבי שחקנים + חוקים — כדי שלא ישתלבו כמה ילדים ב־space-between מול יציאה (בעיה שנראית במולטיפלייר) */}
-      <View style={{ flexDirection: 'row', direction: 'ltr' as any, alignItems: 'flex-start', justifyContent: 'flex-end', minWidth: 0 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', minWidth: 0 }}>
         <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 0, flexWrap: 'nowrap', minWidth: 0 }}>
           {visible.map((p) => {
             const isCurrent = cp?.id === p.id;
@@ -11596,6 +11653,9 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { t, isRTL } = useLocale();
   const { profile, awardCoins } = useAuth();
   const { table, background, activeTableSkin } = useActiveTheme();
+  const gameTableSurface = activeTableSkin
+    ? resolveGameTableSurface(activeTableSkin, pokerTableImg)
+    : null;
   const safe = useGameSafeArea();
   const soundOn = state.soundsEnabled !== false;
   const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
@@ -13011,6 +13071,10 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         : [],
     [state.phase, state.stagedCards, state.equationResult, state.mathRangeMax],
   );
+  const l11PlaceMissingKey = state.isTutorial
+    ? getL11MultiPlayTutorialMissingKey(state.stagedCards, tutorialBus.getL11Config())
+    : null;
+  const placeCardsDisabled = l11PlaceMissingKey != null;
   const PLACE_NOW_BTN_W = 220;
   /** רוחב מינימלי סביב הכפתור — מונע anchor שלילי וחפיפה עם צ'יפים במסכים צרים */
   const PLACE_NOW_ORBIT_W = Math.max(PLACE_NOW_BTN_W + 32, Math.min(SCREEN_W - 16, 420));
@@ -13041,6 +13105,15 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       {/* רקע מסך — ערכת הנושא של האווירה הכללית. בטוטוריאל תמיד כהה אטום. */}
       {state.isTutorial ? (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: '#0a1628' }]} />
+      ) : background.image ? (
+        <ImageBackground source={background.image} resizeMode="cover" style={StyleSheet.absoluteFill}>
+          <LinearGradient
+            colors={[...background.gradient]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0.85, y: 1 }}
+            style={[StyleSheet.absoluteFill, { opacity: 0.62 }]}
+          />
+        </ImageBackground>
       ) : (
         <LinearGradient
           colors={[...background.gradient]}
@@ -13094,7 +13167,6 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           zIndex: 400,
           ...(Platform.OS === 'android' ? { elevation: 400 } : {}),
           flexDirection: 'row',
-          direction: 'ltr' as any,
           alignItems: 'flex-start',
           justifyContent: 'space-between',
           paddingBottom: 4,
@@ -13164,7 +13236,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
               state.players.find(p => !p.isBot) ??
               (state.players.length === 1 ? state.players[0] : null);
             return meterPlayer ? (
-              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -6 }}>
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -11 }}>
                 <ExcellenceMeter
                   value={meterPlayer.courageMeterPercent ?? 0}
                   pulseKey={meterPlayer.courageRewardPulseId ?? 0}
@@ -13189,7 +13261,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         )}
       </View>
       {/* ── SLOT 2: תוצאות אפשריות (הערימה ממוקמת לפי Y מוחלט) ── */}
-      <View style={{flexShrink:0,flexDirection:'row',direction:'ltr' as any,alignItems:'center',justifyContent:'flex-start',flexWrap:'wrap',gap:12,paddingHorizontal:12,paddingVertical:4,zIndex:1}} />
+      <View style={{flexShrink:0,flexDirection:'row',alignItems:'center',justifyContent:'flex-start',flexWrap:'wrap',gap:12,paddingHorizontal:12,paddingVertical:4,zIndex:1}} />
 
       {/* ערימה — מיקום מוחלט לפי צירים. מוסתרת בטוטוריאל חוץ משיעור השברים
           (שם המשתמש חייב לראות את הקלף שבראש הערימה כדי להבין מתי אפשר
@@ -13298,22 +13370,59 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       {/* ── SLOT 3: שולחן ירוק + תרגיל + טיימר (מוקאפ תרגיל הועבר ליד תוצאות אפשריות) ── */}
       <View style={{position:'absolute',top:EQUATION_TABLE_TOP,left:17,right:7,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0,transform:[{translateX:EQUATION_TABLE_SHIFT_X}]}}>
         <View style={{flex:1,minWidth:0,justifyContent:'flex-end',paddingBottom:75}}>
-          <ImageBackground
-            source={resolveGameTableSurface(activeTableSkin?.image ?? null, pokerTableImg) as any}
-            style={{
-              alignSelf:'center',
-              width:'100%',
-              height:240,
-              justifyContent:'center',
-              alignItems:'center',
-              paddingVertical:10,
-              paddingHorizontal:8,
-              overflow:'hidden',
-            }}
-            resizeMode="stretch"
-          >
-            <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
-          </ImageBackground>
+          {gameTableSurface ? (
+            <ImageBackground
+              source={gameTableSurface.source as any}
+              style={{
+                alignSelf:'center',
+                width:'100%',
+                height:240,
+                justifyContent:'center',
+                alignItems:'center',
+                paddingVertical:10,
+                paddingHorizontal:8,
+                overflow:'hidden',
+              }}
+              imageStyle={gameTableSurface.imageStyle}
+              resizeMode={gameTableSurface.resizeMode}
+            >
+              <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
+            </ImageBackground>
+          ) : table.gradient ? (
+            <LinearGradient
+              colors={table.gradient}
+              style={{
+                alignSelf:'center',
+                width:'100%',
+                height:240,
+                justifyContent:'center',
+                alignItems:'center',
+                paddingVertical:10,
+                paddingHorizontal:8,
+                overflow:'hidden',
+                borderRadius: 999,
+              }}
+            >
+              <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
+            </LinearGradient>
+          ) : (
+            <ImageBackground
+              source={pokerTableImg as any}
+              style={{
+                alignSelf:'center',
+                width:'100%',
+                height:240,
+                justifyContent:'center',
+                alignItems:'center',
+                paddingVertical:10,
+                paddingHorizontal:8,
+                overflow:'hidden',
+              }}
+              resizeMode="stretch"
+            >
+              <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
+            </ImageBackground>
+          )}
           {!l5GuidedTutorial ? <StagingZone /> : null}
         </View>
       </View>
@@ -13597,7 +13706,9 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                   height={54}
                   fontSize={20}
                   textColor="#FFFFFF"
+                  disabled={placeCardsDisabled}
                   onPress={() => {
+                    if (placeCardsDisabled) return;
                     dispatch({ type: 'CONFIRM_STAGED' });
                   }}
                 />
@@ -14263,7 +14374,6 @@ function BotMissionStrip(
             color: '#FECACA',
             textAlign: 'center',
             writingDirection: 'ltr',
-            direction: 'ltr',
             textShadowColor: 'rgba(0,0,0,0.8)',
             textShadowOffset: { width: 0, height: 1 },
             textShadowRadius: 2,
@@ -14534,7 +14644,6 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
               fontWeight: '900',
               textAlign: 'center',
               writingDirection: 'ltr',
-              direction: 'ltr',
             }}
           >
             {`\u2066${state.dice!.die1} · ${state.dice!.die2} · ${state.dice!.die3}\u2069`}
@@ -14574,7 +14683,6 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
               fontWeight: '900',
               textAlign: 'center',
               writingDirection: 'ltr',
-              direction: 'ltr',
               textShadowColor: 'rgba(0,0,0,0.8)',
               textShadowOffset: { width: 0, height: 1 },
               textShadowRadius: 2,
@@ -15212,9 +15320,9 @@ function PlayModeChoiceScreen({
   onPreferredNameChange: (name: string) => void;
 }) {
   const { t, locale, setLocale } = useLocale();
-  const { profile, user } = useAuth();
-  const shortUserId = user?.id ? user.id.slice(0, 3).toUpperCase() : null;
+  const { profile } = useAuth();
   const [storedProfiles, setStoredProfiles] = useState<StoredPlayerProfile[]>([]);
+  const preferredNameSeededRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -15228,7 +15336,8 @@ function PlayModeChoiceScreen({
             return b.updatedAt.localeCompare(a.updatedAt);
           });
         setStoredProfiles(profiles);
-        if (!preferredName.trim() && store.activePlayerName) {
+        if (!preferredNameSeededRef.current && !preferredName.trim() && store.activePlayerName) {
+          preferredNameSeededRef.current = true;
           onPreferredNameChange(store.activePlayerName);
         }
       })
@@ -15258,65 +15367,60 @@ function PlayModeChoiceScreen({
         </View>
       )}
       <Text style={{ alignSelf: 'stretch', color: '#D1D5DB', fontSize: 13, fontWeight: '700', marginBottom: 6, textAlign: 'center' }}>{t('lobby.yourName')}</Text>
-      <Text style={{ alignSelf: 'stretch', color: '#93C5FD', fontSize: 12, marginBottom: 6, textAlign: 'center' }}>
-        {locale === 'he'
-          ? `מזהה משתמש: ${shortUserId ?? 'לא זמין עדיין'}${profile?.username ? ` • ${profile.username}` : ''}`
-          : `User ID: ${shortUserId ?? 'Not available yet'}${profile?.username ? ` • ${profile.username}` : ''}`}
-      </Text>
-      <TextInput
+      <LinearGradient
+        colors={['#FFF4B8', '#E7BF3A', '#BA7E10']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
         style={{
           width: 280,
-          backgroundColor: 'rgba(255,255,255,0.1)',
-          borderWidth: 1,
-          borderColor: '#4B5563',
-          borderRadius: 12,
-          paddingHorizontal: 14,
-          paddingVertical: 10,
-          color: '#FFF',
-          fontSize: 15,
+          borderRadius: 26,
+          padding: 3,
           marginBottom: 16,
-          textAlign: 'center',
+          shadowColor: '#4A3200',
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: 0.32,
+          shadowRadius: 10,
+          elevation: 7,
         }}
-        value={preferredName}
-        onChangeText={(name) => onPreferredNameChange(name.slice(0, 7))}
-        placeholder={t('lobby.namePlaceholder')}
-        placeholderTextColor="#6B7280"
-        maxLength={7}
-      />
-      {storedProfiles.length > 0 && (
-        <View style={{ width: 280, marginBottom: 16, gap: 8 }}>
-          <Text style={{ color: '#94A3B8', fontSize: 12, textAlign: 'center' }}>
-            {locale === 'he' ? 'שחקנים שמורים' : 'Saved players'}
-          </Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
-            {storedProfiles.slice(0, 6).map((player) => {
-              const selected = preferredName.trim() === player.name;
-              return (
-                <TouchableOpacity
-                  key={player.name}
-                  onPress={() => onPreferredNameChange(player.name)}
-                  style={{
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: selected ? '#FACC15' : 'rgba(148,163,184,0.45)',
-                    backgroundColor: selected ? 'rgba(250,204,21,0.16)' : 'rgba(15,23,42,0.72)',
-                    minWidth: 82,
-                    alignItems: 'center',
-                    gap: 2,
-                  }}
-                >
-                  <Text style={{ color: selected ? '#FDE68A' : '#E5E7EB', fontSize: 12, fontWeight: '800' }}>{player.name}</Text>
-                  <Text style={{ color: '#93C5FD', fontSize: 10 }}>
-                    {`${player.courageMeterPercent}% • ${player.courageCoins}`}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+      >
+        <LinearGradient
+          colors={['#0B153C', '#142763', '#1B3F8C']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            borderRadius: 23,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
+          <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
+            <Text style={{ position: 'absolute', top: 5, left: 20, color: 'rgba(230,240,255,0.55)', fontSize: 10 }}>✦</Text>
+            <Text style={{ position: 'absolute', top: 12, right: 28, color: 'rgba(255,248,200,0.42)', fontSize: 8 }}>✦</Text>
+            <Text style={{ position: 'absolute', bottom: 7, left: 58, color: 'rgba(200,225,255,0.3)', fontSize: 7 }}>✦</Text>
+            <Text style={{ position: 'absolute', bottom: 9, right: 62, color: 'rgba(255,248,200,0.32)', fontSize: 7 }}>✦</Text>
           </View>
-        </View>
-      )}
+          <TextInput
+            style={{
+              width: '100%',
+              backgroundColor: 'transparent',
+              borderWidth: 1,
+              borderColor: 'rgba(226,232,255,0.14)',
+              borderRadius: 21,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              color: '#EAF1FF',
+              fontSize: 16,
+              fontWeight: '800',
+              textAlign: 'center',
+            }}
+            value={preferredName}
+            onChangeText={(name) => onPreferredNameChange(name.slice(0, 7))}
+            placeholder={t('lobby.namePlaceholder')}
+            placeholderTextColor="rgba(226,235,255,0.8)"
+            maxLength={7}
+          />
+        </LinearGradient>
+      </LinearGradient>
       <LulosButton text={t('mode.local')} color="green" width={280} height={52} fontSize={15} onPress={onLocal} style={{ marginBottom: 16 }} />
       <LulosButton text={t('mode.online')} color="blue" width={280} height={52} fontSize={15} onPress={onOnline} style={{ marginBottom: 16 }} />
       <LulosButton

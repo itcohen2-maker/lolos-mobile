@@ -9,20 +9,29 @@ import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.SUPABASE_URL ?? '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+const hasSupabaseAdminConfig = !!(url && serviceRoleKey);
 
-if (!url || !serviceRoleKey) {
+if (!hasSupabaseAdminConfig) {
   console.warn(
     '[supabaseAdmin] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing. ' +
     'Rating updates and match recording will not work.'
   );
 }
 
-export const supabaseAdmin = createClient(url, serviceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+export const supabaseAdmin = hasSupabaseAdminConfig
+  ? createClient(url, serviceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    })
+  : null;
+
+function adminUnavailable(context: string): boolean {
+  if (supabaseAdmin) return false;
+  console.warn(`[supabaseAdmin] Skipping ${context}: admin client is not configured.`);
+  return true;
+}
 
 // ── Coin helpers ──
 
@@ -38,8 +47,9 @@ export async function awardCoinsForPlayer(opts: {
   source: CoinSource;
   matchId?: string;
 }): Promise<void> {
+  if (adminUnavailable('awardCoinsForPlayer')) return;
   try {
-    const { error } = await supabaseAdmin.rpc('award_coins_for_player', {
+    const { error } = await supabaseAdmin!.rpc('award_coins_for_player', {
       p_player_id: opts.playerId,
       p_amount: opts.amount,
       p_source: opts.source,
@@ -81,9 +91,10 @@ export async function recordMatch(opts: {
   winnerId: string | null;
   participants: RatingUpdate[];
 }): Promise<void> {
+  if (adminUnavailable('recordMatch')) return;
   try {
     // 1. Insert match
-    const { data: match, error: matchErr } = await supabaseAdmin
+    const { data: match, error: matchErr } = await supabaseAdmin!
       .from('matches')
       .insert({
         room_code: opts.roomCode,
@@ -103,7 +114,7 @@ export async function recordMatch(opts: {
 
     // 2. For each participant: read current rating, compute new, insert row, update profile
     for (const p of opts.participants) {
-      const { data: profile } = await supabaseAdmin
+      const { data: profile } = await supabaseAdmin!
         .from('profiles')
         .select('rating, wins, losses, abandons')
         .eq('id', p.playerId)
@@ -115,7 +126,7 @@ export async function recordMatch(opts: {
       const ratingAfter = clampRating(ratingBefore + p.delta);
 
       // Insert participant row
-      await supabaseAdmin.from('match_participants').insert({
+      await supabaseAdmin!.from('match_participants').insert({
         match_id: match.id,
         player_id: p.playerId,
         rating_before: ratingBefore,
@@ -130,7 +141,7 @@ export async function recordMatch(opts: {
       else if (p.abandoned) updates.abandons = profile.abandons + 1;
       else updates.losses = profile.losses + 1;
 
-      await supabaseAdmin
+      await supabaseAdmin!
         .from('profiles')
         .update(updates)
         .eq('id', p.playerId);
@@ -151,8 +162,9 @@ export async function recordMatch(opts: {
 
 /** Apply abandonment penalty to a single player (disconnect grace expired). */
 export async function penalizeAbandon(playerId: string, roomCode: string): Promise<void> {
+  if (adminUnavailable(`penalizeAbandon(${roomCode})`)) return;
   try {
-    const { data: profile } = await supabaseAdmin
+    const { data: profile } = await supabaseAdmin!
       .from('profiles')
       .select('rating, abandons')
       .eq('id', playerId)
@@ -162,7 +174,7 @@ export async function penalizeAbandon(playerId: string, roomCode: string): Promi
 
     const ratingAfter = clampRating(profile.rating - RATING_ABANDON_PENALTY);
 
-    await supabaseAdmin
+    await supabaseAdmin!
       .from('profiles')
       .update({
         rating: ratingAfter,

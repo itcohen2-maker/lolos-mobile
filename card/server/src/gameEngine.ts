@@ -771,7 +771,7 @@ export function defendFractionSolve(st: ServerGameState, cardId: string, wildRes
 
   const cp = st.players[st.currentPlayerIndex];
   const np = st.players.map((p, i) => i === st.currentPlayerIndex ? { ...p, hand: cp.hand.filter(c => c.id !== card.id) } : p);
-  let ns = {
+  let ns: ServerGameState = {
     ...st, players: np, discardPile: [...st.discardPile, cardToDiscard],
     pendingFractionTarget: null, fractionPenalty: 0,
     fractionAttackResolved: true, lastCardValue: lastVal,

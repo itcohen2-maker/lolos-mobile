@@ -148,6 +148,11 @@ export function mimicReducer(
   }
 
   if (action.type === 'OUTCOME_MATCHED' && state.phase === 'await-mimic') {
+    const lesson = lessons[state.lessonIndex];
+    const isLastStep = state.stepIndex >= ((lesson?.stepCount ?? 1) - 1);
+    if (state.lessonIndex === MIMIC_MULTI_PLAY_LESSON_INDEX && isLastStep) {
+      return { ...state, phase: 'advanced-complete' };
+    }
     return { ...state, phase: 'celebrate' };
   }
 

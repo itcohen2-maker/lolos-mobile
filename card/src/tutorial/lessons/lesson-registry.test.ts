@@ -26,6 +26,13 @@ describe('lesson registry smoke', () => {
       'multi-play-exercise-2',
     ]);
   });
+  it('lesson 10 second exercise requires two positive numbers, zero, and wild', () => {
+    const step = LESSONS[9].steps[1];
+    expect(step.outcome({ kind: 'userPlayedCards', count: 4, positiveNumberCount: 2, hasZero: true, hasWild: true })).toBe(true);
+    expect(step.outcome({ kind: 'userPlayedCards', count: 3, positiveNumberCount: 1, hasZero: true, hasWild: true })).toBe(false);
+    expect(step.outcome({ kind: 'userPlayedCards', count: 3, positiveNumberCount: 2, hasZero: false, hasWild: true })).toBe(false);
+    expect(step.outcome({ kind: 'userPlayedCards', count: 3, positiveNumberCount: 2, hasZero: true, hasWild: false })).toBe(false);
+  });
   it('lesson 4 (equation-basics) has 4 steps: play-card, fill-missing-die, did-you-know, full-build', () => {
     expect(LESSONS[3].steps.map(s => s.id)).toEqual(['play-card', 'fill-missing-die', 'did-you-know', 'full-build']);
   });

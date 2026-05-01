@@ -44,7 +44,21 @@
       "Bash(curl:*)",
       "Bash(kill %1)",
       "Bash(wait)",
-      "Bash(adb logcat:*)"
+      "Bash(adb logcat:*)",
+      "Bash(npx jest *)",
+      "Bash(npm test *)",
+      "Bash(npm run *)",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__get_cost",
+      "mcp__supabase__confirm_cost",
+      "mcp__supabase__create_project",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__get_publishable_keys",
+      "mcp__render__list_services",
+      "mcp__render__list_workspaces",
+      "mcp__render__update_environment_variables"
     ]
   }
 }

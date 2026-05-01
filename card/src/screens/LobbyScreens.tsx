@@ -19,8 +19,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { useMultiplayer } from '../hooks/useMultiplayer';
-import { useAuth } from '../hooks/useAuth';
-import type { BotDifficulty, Fraction, HostGameSettings, Operation } from '../../shared/types';
+import type { BotDifficulty, Fraction, HostGameSettings, LobbyTableSummary, Operation } from '../../shared/types';
 
 const ALL_FRACTION_KINDS: readonly Fraction[] = ['1/2', '1/3', '1/4', '1/5'];
 import type { MsgParams } from '../../shared/i18n';
@@ -83,23 +82,30 @@ function isLocalServerUrl(url: string): boolean {
   );
 }
 
-function guestInviteSearchParams(roomCode: string, serverUrl: string): URLSearchParams {
+function guestInviteSearchParams(roomCode: string, serverUrl: string, inviteCode?: string | null): URLSearchParams {
   const fallbackPublicServer =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
       ? String(process.env.EXPO_PUBLIC_SERVER_URL).trim()
       : '';
   const safeServerUrl = isLocalServerUrl(serverUrl) ? fallbackPublicServer : serverUrl.trim();
   const params = new URLSearchParams({ room: roomCode });
+  if (inviteCode?.trim()) params.set('invite', inviteCode.trim());
   if (safeServerUrl) params.set('server', safeServerUrl);
   return params;
 }
 
-export function parseJoinParamsFromUrl(): { roomCode?: string; serverUrl?: string; name?: string } {
+function countdownSeconds(deadlineAt: number | null): number | null {
+  if (!deadlineAt) return null;
+  return Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
+}
+
+export function parseJoinParamsFromUrl(): { roomCode?: string; inviteCode?: string; serverUrl?: string; name?: string } {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return {};
   try {
     const params = new URLSearchParams(window.location.search);
     return {
       roomCode: params.get('room') ?? undefined,
+      inviteCode: params.get('invite') ?? undefined,
       serverUrl: params.get('server') ?? undefined,
       name: params.get('name') ?? undefined,
     };
@@ -119,8 +125,6 @@ export function LobbyEntry({
 } = {}) {
   const { t, isRTL } = useLocale();
   const { createRoom, joinRoom, error, clearError, setServerUrl } = useMultiplayer();
-  const { user, profile } = useAuth();
-  const shortUserId = user?.id ? user.id.slice(0, 3).toUpperCase() : null;
   const ta = isRTL ? 'right' : 'left';
   const [step, setStep] = useState<'create' | 'join'>('create');
   const [playerName, setPlayerName] = useState((defaultPlayerName ?? '').slice(0, 7));
@@ -216,7 +220,7 @@ export function LobbyEntry({
       </TouchableOpacity>
       <Modal visible={rulesOpen} transparent animationType="fade" onRequestClose={() => setRulesOpen(false)}>
         <View style={styles.rulesModalBackdrop}>
-          <View style={[styles.rulesModalCard, { direction: isRTL ? 'rtl' : 'ltr' }]}>
+          <View style={styles.rulesModalCard}>
             <View style={styles.rulesModalLogoWrap}>
               <SalindaLogoOption06 width={220} />
             </View>
@@ -248,20 +252,17 @@ export function LobbyEntry({
 
       <>
         <Text style={[styles.label, { alignSelf: 'center', textAlign: 'center' }]}>{t('lobby.yourName')}</Text>
-          <Text style={styles.userIdText}>
-            {isRTL
-              ? `מזהה משתמש: ${shortUserId ?? 'לא זמין עדיין'}${profile?.username ? ` • ${profile.username}` : ''}`
-              : `User ID: ${shortUserId ?? 'Not available yet'}${profile?.username ? ` • ${profile.username}` : ''}`}
-          </Text>
-          <TextInput
-            style={styles.input}
-            value={playerName}
-            onChangeText={(x) => setPlayerName(x.slice(0, 7))}
-            placeholder={t('lobby.namePlaceholder')}
-            placeholderTextColor="#6B7280"
-            textAlign="center"
-            maxLength={7}
-          />
+          <View style={styles.inputShell}>
+            <TextInput
+              style={styles.input}
+              value={playerName}
+              onChangeText={(x) => setPlayerName(x.slice(0, 7))}
+              placeholder={t('lobby.namePlaceholder')}
+              placeholderTextColor="#94A3B8"
+              textAlign="center"
+              maxLength={7}
+            />
+          </View>
           {step === 'create' && (
             <TouchableOpacity
               style={[styles.primaryBtn, !playerName.trim() && styles.primaryBtnDisabled]}
@@ -274,16 +275,18 @@ export function LobbyEntry({
           {step === 'join' && (
             <>
               <Text style={styles.label}>{t('lobby.roomCode')}</Text>
-              <TextInput
-                style={styles.input}
-                value={roomCode}
-                onChangeText={(text) => setRoomCode(text.replace(/\D/g, '').slice(0, 4))}
-                placeholder="1234"
-                placeholderTextColor="#6B7280"
-                keyboardType="number-pad"
-                maxLength={4}
-                textAlign="center"
-              />
+              <View style={styles.inputShell}>
+                <TextInput
+                  style={styles.input}
+                  value={roomCode}
+                  onChangeText={(text) => setRoomCode(text.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="1234"
+                  placeholderTextColor="#94A3B8"
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  textAlign="center"
+                />
+              </View>
               <TouchableOpacity
                 style={[styles.primaryBtn, (!playerName.trim() || roomCode.length < 4) && styles.primaryBtnDisabled]}
                 onPress={handleJoin}
@@ -848,19 +851,30 @@ const styles = StyleSheet.create({
   backBtnText: { color: brand.cyan, fontSize: 14, fontWeight: '600' },
   title: { fontSize: 32, fontWeight: '800', color: '#F59E0B', marginBottom: 8, alignSelf: 'stretch', textAlign: 'right' },
   subtitle: { color: '#9CA3AF', fontSize: 14, marginBottom: 24, alignSelf: 'stretch', textAlign: 'right' },
-  userIdText: { color: '#93C5FD', fontSize: 12, marginBottom: 8, textAlign: 'center', alignSelf: 'stretch' },
   label: { color: '#D1D5DB', fontSize: 14, fontWeight: '600', alignSelf: 'flex-start', marginTop: 16, marginBottom: 8 },
+  inputShell: {
+    width: '100%',
+    backgroundColor: '#D4A010',
+    borderRadius: 18,
+    padding: 3,
+    marginBottom: 8,
+    shadowColor: '#4A3200',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    elevation: 6,
+  },
   input: {
     width: '100%',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#132238',
     borderWidth: 1,
-    borderColor: '#4B5563',
-    borderRadius: 12,
+    borderColor: 'rgba(255,240,180,0.22)',
+    borderRadius: 15,
     paddingHorizontal: 16,
     paddingVertical: 12,
     color: '#FFF',
     fontSize: 16,
-    marginBottom: 8,
+    fontWeight: '700',
   },
   hint: { color: '#6B7280', fontSize: 12, marginTop: 4, marginBottom: 12 },
   primaryBtn: {

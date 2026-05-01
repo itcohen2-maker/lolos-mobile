@@ -69,7 +69,7 @@ export type UserEvent =
    *  taps the two key buttons. */
   | { kind: 'eqReadyToConfirm' }
   | { kind: 'eqConfirmedByUser' }
-  | { kind: 'userPlayedCards'; count?: number; hasZero?: boolean; hasWild?: boolean }
+  | { kind: 'userPlayedCards'; count?: number; hasZero?: boolean; hasWild?: boolean; positiveNumberCount?: number }
   /** Lesson 5 (operation signs) progress signals. `l5AllSignsCycled` fires
    *  once the learner has cycled the `?` slot through all four operation
    *  symbols (+, -, ×, ÷). `l5JokerPlaced` fires after the learner picked a
@@ -282,7 +282,8 @@ let l6WildStepMode = false;
 
 /** Lesson 11 (multi-play) addends — published by InteractiveTutorialScreen
  *  before the bot demo so the bot stages the correct cards. */
-let l11Config: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null = null;
+let l11Config: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean; wildValue?: number } | null = null;
+let l11StrictMultiPlayMode = false;
 
 /** Subscribers notified when L5 UI flags change (hide fan / guided mode) so GameScreen can re-render. */
 const l5UiListeners = new Set<VoidListener>();
@@ -578,11 +579,18 @@ export const tutorialBus = {
     return l6WildStepMode;
   },
 
-  setL11Config(cfg: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null): void {
+  setL11Config(cfg: { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean; wildValue?: number } | null): void {
     l11Config = cfg;
   },
-  getL11Config(): { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean } | null {
+  getL11Config(): { addA: number; addB: number; target: number; includeZero: boolean; includeWild: boolean; wildValue?: number } | null {
     return l11Config;
+  },
+  setL11StrictMultiPlayMode(on: boolean): void {
+    if (l11StrictMultiPlayMode === on) return;
+    l11StrictMultiPlayMode = on;
+  },
+  getL11StrictMultiPlayMode(): boolean {
+    return l11StrictMultiPlayMode;
   },
 
   subscribeL5Ui(fn: VoidListener): () => void {
@@ -640,6 +648,7 @@ export const tutorialBus = {
     l7Step1Mode = false;
     l6WildStepMode = false;
     l11Config = null;
+    l11StrictMultiPlayMode = false;
     l5UiListeners.clear();
     lastEquationResult = null;
     layouts.confirmEqBtn = null;
