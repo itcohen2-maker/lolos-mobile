@@ -4,7 +4,17 @@
 
 import { randomInt } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
-import type { AppLocale, LobbyStatus, Player, ServerGameState } from '../../shared/types';
+import type {
+  AppLocale,
+  HostGameSettings,
+  LobbyStatus,
+  LobbyTableStatus,
+  LobbyTableSummary,
+  LobbyTableTheme,
+  LobbyTableVisibility,
+  Player,
+  ServerGameState,
+} from '../../shared/types';
 import type { LocalizedMessage } from '../../shared/i18n';
 import { sanitizePlayerName } from '../../shared/validation';
 
@@ -22,10 +32,20 @@ export interface Room {
   disconnectDeadlineAt: number | null;
   disconnectedPlayerId: string | null;
   disconnectTimer?: ReturnType<typeof setTimeout> | null;
+  countdownTimer?: ReturnType<typeof setTimeout> | null;
   /** Epoch ms when startGame was called — used as startedAt for match recording */
   gameStartedAt?: number;
   /** Guard: true once recordMatch has been called for this game session */
   matchRecorded?: boolean;
+  tableVisibility: LobbyTableVisibility;
+  tableStatus: LobbyTableStatus;
+  inviteCode: string | null;
+  maxParticipants: number;
+  countdownEndsAt: number | null;
+  hasRandomJoiner: boolean;
+  tableTheme: LobbyTableTheme;
+  configuredDifficulty: 'easy' | 'full' | null;
+  configuredGameSettings: Partial<HostGameSettings> | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -33,6 +53,9 @@ const socketToRoom = new Map<string, { roomCode: string; playerId: string }>();
 
 const CODE_CHARS = '0123456789';
 const CODE_LENGTH = 4;
+const INVITE_CODE_LENGTH = 6;
+const TABLE_MIN_PARTICIPANTS = 2;
+const TABLE_MAX_PARTICIPANTS = 6;
 
 function generateRoomCode(): string {
   let code: string;
@@ -42,6 +65,14 @@ function generateRoomCode(): string {
       code += CODE_CHARS[randomInt(0, CODE_CHARS.length)];
     }
   } while (rooms.has(code));
+  return code;
+}
+
+function generateInviteCode(): string {
+  let code = '';
+  for (let i = 0; i < INVITE_CODE_LENGTH; i++) {
+    code += CODE_CHARS[randomInt(0, CODE_CHARS.length)];
+  }
   return code;
 }
 
@@ -69,6 +100,10 @@ function clearRoomTimers(room: Room): void {
   if (room.disconnectTimer) {
     clearTimeout(room.disconnectTimer);
     room.disconnectTimer = undefined;
+  }
+  if (room.countdownTimer) {
+    clearTimeout(room.countdownTimer);
+    room.countdownTimer = undefined;
   }
 }
 
@@ -104,6 +139,15 @@ export function createRoom(
     botOfferAt: null,
     disconnectDeadlineAt: null,
     disconnectedPlayerId: null,
+    tableVisibility: 'public',
+    tableStatus: 'configuring',
+    inviteCode: null,
+    maxParticipants: TABLE_MAX_PARTICIPANTS,
+    countdownEndsAt: null,
+    hasRandomJoiner: false,
+    tableTheme: 'classic',
+    configuredDifficulty: null,
+    configuredGameSettings: null,
   };
   rooms.set(code, room);
   socketToRoom.set(socketId, { roomCode: code, playerId });
@@ -120,7 +164,9 @@ export function joinRoom(
   const room = rooms.get(roomCode);
   if (!room) return { error: { key: 'room.notFound' } };
   if (room.state) return { error: { key: 'room.gameAlreadyStarted' } };
-  if (room.players.length >= 6) return { error: { key: 'room.full' } };
+  if (room.tableStatus === 'configuring') return { error: { key: 'room.notConfigured' } };
+  if (room.tableStatus === 'countdown') return { error: { key: 'room.notJoinable' } };
+  if (room.players.length >= room.maxParticipants) return { error: { key: 'room.full', params: { count: room.maxParticipants } } };
   if (room.players.some((player) => player.name === playerName)) return { error: { key: 'room.nameTaken' } };
 
   const playerId = uuidv4();
@@ -142,6 +188,20 @@ export function joinRoom(
   socketToRoom.set(socketId, { roomCode, playerId });
   console.log(`[ROOM] ${playerName} (${playerId}) joined ${roomCode}`);
   return { room, playerId };
+}
+
+export function joinPrivateRoom(
+  roomCode: string,
+  inviteCode: string,
+  playerName: string,
+  socketId: string,
+  locale: AppLocale = 'he',
+): { room: Room; playerId: string } | { error: LocalizedMessage } {
+  const room = rooms.get(roomCode);
+  if (!room) return { error: { key: 'room.notFound' } };
+  if (room.tableVisibility !== 'private_locked') return { error: { key: 'room.notJoinable' } };
+  if ((room.inviteCode ?? '') !== inviteCode.trim()) return { error: { key: 'room.invalidInviteCode' } };
+  return joinRoom(roomCode, playerName, socketId, locale);
 }
 
 export function leaveRoom(socketId: string): { room: Room; playerId: string; playerName: string } | null {
@@ -182,6 +242,14 @@ export function leaveRoom(socketId: string): { room: Room; playerId: string; pla
       room.botOfferAt = null;
       room.disconnectDeadlineAt = null;
       room.disconnectedPlayerId = null;
+      if (room.countdownEndsAt != null && room.players.filter((candidate) => !candidate.isBot).length < 2) {
+        room.countdownEndsAt = null;
+        room.tableStatus = 'waiting';
+        if (room.countdownTimer) {
+          clearTimeout(room.countdownTimer);
+          room.countdownTimer = undefined;
+        }
+      }
     }
   }
 
@@ -291,11 +359,110 @@ export function addBotPlayer(room: Room, locale: AppLocale = 'he', rawDisplayNam
   room.lastActivity = Date.now();
   room.lobbyStatus = 'bot_game_started';
   room.botOfferAt = null;
+  room.tableStatus = 'in_game';
+  room.countdownEndsAt = null;
   if (room.botOfferTimer) {
     clearTimeout(room.botOfferTimer);
     room.botOfferTimer = undefined;
   }
   return bot;
+}
+
+export function configureRoomTable(
+  room: Room,
+  config: {
+    visibility: LobbyTableVisibility;
+    maxParticipants: number;
+    difficulty: 'easy' | 'full';
+    gameSettings?: Partial<HostGameSettings>;
+  },
+): void {
+  const maxParticipants = Math.max(TABLE_MIN_PARTICIPANTS, Math.min(TABLE_MAX_PARTICIPANTS, Math.floor(config.maxParticipants)));
+  room.tableVisibility = config.visibility;
+  room.maxParticipants = maxParticipants;
+  room.inviteCode = config.visibility === 'private_locked' ? generateInviteCode() : null;
+  room.configuredDifficulty = config.difficulty;
+  room.configuredGameSettings = config.gameSettings ? { ...config.gameSettings } : {};
+  room.tableStatus = room.players.length >= room.maxParticipants ? 'full' : 'waiting';
+  room.lastActivity = Date.now();
+}
+
+export function markRandomJoiner(room: Room): void {
+  room.hasRandomJoiner = true;
+  room.lastActivity = Date.now();
+}
+
+export function startRoomCountdown(room: Room, ms: number): number {
+  if (room.countdownTimer) clearTimeout(room.countdownTimer);
+  const countdownEndsAt = Date.now() + ms;
+  room.countdownEndsAt = countdownEndsAt;
+  room.tableStatus = 'countdown';
+  room.lastActivity = Date.now();
+  return countdownEndsAt;
+}
+
+export function clearRoomCountdown(room: Room): void {
+  if (room.countdownTimer) {
+    clearTimeout(room.countdownTimer);
+    room.countdownTimer = undefined;
+  }
+  room.countdownEndsAt = null;
+  if (!room.state) {
+    room.tableStatus = room.players.length >= room.maxParticipants ? 'full' : room.configuredDifficulty ? 'waiting' : 'configuring';
+  }
+}
+
+export function setRoomCountdownTimer(room: Room, timer: ReturnType<typeof setTimeout> | null): void {
+  room.countdownTimer = timer;
+}
+
+export function syncRoomTableStatus(room: Room): void {
+  if (room.state) {
+    room.tableStatus = 'in_game';
+    room.countdownEndsAt = null;
+    return;
+  }
+  if (room.countdownEndsAt != null) {
+    room.tableStatus = 'countdown';
+    return;
+  }
+  if (!room.configuredDifficulty) {
+    room.tableStatus = 'configuring';
+    return;
+  }
+  room.tableStatus = room.players.length >= room.maxParticipants ? 'full' : 'waiting';
+}
+
+export function getRoomTables(): LobbyTableSummary[] {
+  const summaries: LobbyTableSummary[] = [];
+  for (const room of rooms.values()) {
+    syncRoomTableStatus(room);
+    if (room.tableStatus === 'configuring' || room.tableStatus === 'in_game') continue;
+    const host = room.players.find((player) => player.isHost && !player.isBot) ?? room.players.find((player) => !player.isBot);
+    summaries.push({
+      roomCode: room.code,
+      hostName: host?.name ?? 'Host',
+      visibility: room.tableVisibility,
+      status: room.tableStatus,
+      currentParticipants: room.players.filter((player) => !player.isBot).length,
+      maxParticipants: room.maxParticipants,
+      countdownEndsAt: room.countdownEndsAt,
+      hasRandomJoiner: room.hasRandomJoiner,
+      tableTheme: room.tableTheme,
+      configuredDifficulty: room.configuredDifficulty,
+      timerSetting: room.configuredGameSettings?.timerSetting ?? null,
+      timerCustomSeconds: room.configuredGameSettings?.timerCustomSeconds ?? null,
+    });
+  }
+  return summaries.sort((a, b) => {
+    const statusRank = (value: LobbyTableStatus) => {
+      if (value === 'waiting') return 0;
+      if (value === 'countdown') return 1;
+      if (value === 'full') return 2;
+      return 3;
+    };
+    return statusRank(a.status) - statusRank(b.status) || a.roomCode.localeCompare(b.roomCode);
+  });
 }
 
 const ROOM_TIMEOUT_MS = 30 * 60 * 1000;

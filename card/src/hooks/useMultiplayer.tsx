@@ -14,6 +14,8 @@ import type {
   ContinueVsBotAck,
   Fraction,
   LobbyStatus,
+  LobbyTableSummary,
+  LobbyTableVisibility,
   Operation,
   PlayerView,
   HostGameSettings,
@@ -97,6 +99,15 @@ function readServerFromWebQuery(): string | null {
   }
 }
 
+function inferLocalWebSocketUrl(): string | null {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return null;
+  const host = window.location.hostname?.trim().toLowerCase();
+  if (!host) return null;
+  if (host === 'localhost' || host === '127.0.0.1') return `http://${host}:${DEFAULT_SOCKET_PORT}`;
+  return null;
+}
+
 function normalizeServerUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, '');
 }
@@ -133,6 +144,9 @@ function getServerUrl(): string {
 
   const fromWeb = readServerFromWebQuery();
   if (fromWeb) return normalizeServerUrl(fromWeb);
+
+  const localWeb = inferLocalWebSocketUrl();
+  if (localWeb) return normalizeServerUrl(localWeb);
 
   const fromEnv =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL
@@ -180,10 +194,24 @@ export interface MultiplayerContextValue {
   // Room (when connected)
   roomCode: string | null;
   playerId: string | null;
+  currentInviteCode: string | null;
+  currentTableVisibility: LobbyTableVisibility | null;
   players: LobbyPlayer[];
+  tables: LobbyTableSummary[];
   lobbyStatus: LobbyStatusState | null;
   isHost: boolean;
   inRoom: boolean;
+  refreshTables: () => void;
+  createTable: (playerName: string) => void;
+  configureTable: (config: {
+    visibility: LobbyTableVisibility;
+    maxParticipants: number;
+    difficulty: 'easy' | 'full';
+    gameSettings?: Partial<HostGameSettings>;
+  }) => void;
+  joinTable: (roomCode: string, playerName: string) => void;
+  joinPrivateTable: (roomCode: string, inviteCode: string, playerName: string) => void;
+  startTableCountdown: () => void;
   createRoom: (playerName: string) => void;
   joinRoom: (roomCode: string, playerName: string) => void;
   leaveRoom: () => void;
@@ -432,7 +460,10 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
+  const [currentInviteCode, setCurrentInviteCode] = useState<string | null>(null);
+  const [currentTableVisibility, setCurrentTableVisibility] = useState<LobbyTableVisibility | null>(null);
   const [players, setPlayers] = useState<LobbyPlayer[]>([]);
+  const [tables, setTables] = useState<LobbyTableSummary[]>([]);
   const [lobbyStatus, setLobbyStatus] = useState<LobbyStatusState | null>(null);
   const [isHost, setIsHost] = useState(false);
   const [serverState, setServerState] = useState<PlayerView | null>(null);
@@ -480,9 +511,12 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     setReconnectNotice(null);
     setRoomCode(null);
     setPlayerId(null);
+    setCurrentInviteCode(null);
+    setCurrentTableVisibility(null);
     playerIdRef.current = null;
     roomCodeSessionRef.current = null;
     setPlayers([]);
+    setTables([]);
     setLobbyStatus(null);
     setServerState(null);
     setDisconnectChoice(null);
@@ -525,6 +559,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     socket.on('connect', () => {
       console.log('[MP][debug] socket connected →', want);
       setConnected(true);
+      socket.emit('list_tables');
       if (awaitingReconnectSyncRef.current) {
         const rc = roomCodeSessionRef.current;
         const pid = playerIdRef.current;
@@ -547,12 +582,37 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       }
       clearSessionAfterDisconnect();
     });
-    socket.on('room_created', ({ roomCode: code, playerId: pid }) => {
+    socket.on('room_created', ({ roomCode: code, playerId: pid, inviteCode, visibility }) => {
       console.log('[MP][debug] room_created received, code=', code, 'pid=', pid);
       roomCodeSessionRef.current = code;
       setRoomCode(code);
       setPlayerId(pid);
       playerIdRef.current = pid;
+      setCurrentInviteCode(inviteCode ?? null);
+      setCurrentTableVisibility(visibility ?? null);
+    });
+    socket.on('tables_updated', ({ tables: nextTables }: { tables: LobbyTableSummary[] }) => {
+      setTables(nextTables);
+    });
+    socket.on('table_countdown_started', ({ roomCode: code, countdownEndsAt }) => {
+      setTables((current) =>
+        current.map((table) =>
+          table.roomCode === code
+            ? { ...table, status: 'countdown', countdownEndsAt }
+            : table,
+        ),
+      );
+    });
+    socket.on('table_status_changed', ({ roomCode: code, status, countdownEndsAt }) => {
+      setTables((current) =>
+        current
+          .map((table) =>
+            table.roomCode === code
+              ? { ...table, status, countdownEndsAt }
+              : table,
+          )
+          .filter((table) => table.status !== 'in_game'),
+      );
     });
     socket.on('player_joined', ({ players: p }) => {
       const mapped = p.map((x: any) => ({
@@ -676,6 +736,45 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     [connect, locale],
   );
 
+  const refreshTables = useCallback(() => {
+    connect();
+    socketRef.current?.emit('list_tables');
+  }, [connect]);
+
+  const createTable = useCallback((playerName: string) => {
+    connect();
+    setIsHost(true);
+    socketRef.current?.emit('create_table', { playerName, locale });
+  }, [connect, locale]);
+
+  const configureTable = useCallback((config: {
+    visibility: LobbyTableVisibility;
+    maxParticipants: number;
+    difficulty: 'easy' | 'full';
+    gameSettings?: Partial<HostGameSettings>;
+  }) => {
+    socketRef.current?.emit('configure_table', config);
+  }, []);
+
+  const joinTable = useCallback((code: string, playerName: string) => {
+    connect();
+    socketRef.current?.emit('join_table', { roomCode: code.trim(), playerName, locale });
+  }, [connect, locale]);
+
+  const joinPrivateTable = useCallback((code: string, inviteCode: string, playerName: string) => {
+    connect();
+    socketRef.current?.emit('join_private_table_with_code', {
+      roomCode: code.trim(),
+      inviteCode: inviteCode.trim(),
+      playerName,
+      locale,
+    });
+  }, [connect, locale]);
+
+  const startTableCountdown = useCallback(() => {
+    socketRef.current?.emit('start_table_countdown');
+  }, []);
+
   const joinRoom = useCallback(
     (code: string, playerName: string) => {
       connect();
@@ -690,6 +789,8 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     socketRef.current?.emit('leave_room');
     setRoomCode(null);
     setPlayerId(null);
+    setCurrentInviteCode(null);
+    setCurrentTableVisibility(null);
     playerIdRef.current = null;
     roomCodeSessionRef.current = null;
     setPlayers([]);
@@ -818,10 +919,19 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     disconnect,
     roomCode,
     playerId,
+    currentInviteCode,
+    currentTableVisibility,
     players,
+    tables,
     lobbyStatus,
     isHost,
     inRoom,
+    refreshTables,
+    createTable,
+    configureTable,
+    joinTable,
+    joinPrivateTable,
+    startTableCountdown,
     createRoom,
     joinRoom,
     leaveRoom,

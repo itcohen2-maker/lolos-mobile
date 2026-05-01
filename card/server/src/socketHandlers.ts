@@ -81,7 +81,7 @@ import type { Room } from './roomManager';
 import { migrateDifficultyStage } from '../../shared/difficultyStages';
 import { normalizeOperationToken } from '../../shared/equationOpCycle';
 import { botNarrationToastText, renderBotNarration, type BotNarrationInput } from '../../shared/botNarration';
-import { recordMatch, RATING_WIN, RATING_LOSS, RATING_ABANDON_PENALTY } from './supabaseAdmin';
+import { fetchPlayerActiveTableTheme, recordMatch, RATING_WIN, RATING_LOSS, RATING_ABANDON_PENALTY } from './supabaseAdmin';
 
 type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -846,7 +846,7 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     emitTablesUpdated(io, socket);
   });
 
-  socket.on('create_table', ({ playerName, locale }) => {
+  socket.on('create_table', async ({ playerName, locale }) => {
     if (rateLimited()) return;
     const name = sanitizePlayerName(playerName);
     if (!name) {
@@ -857,6 +857,9 @@ export function registerSocketHandlers(io: IOServer, socket: IOSocket): void {
     const { room, playerId } = createRoom(name, socket.id, loc);
     const creatingPlayer = room.players.find((p) => p.id === playerId);
     if (creatingPlayer) creatingPlayer.supabaseUserId = socket.data.userId ?? undefined;
+    if (socket.data.userId) {
+      room.tableTheme = await fetchPlayerActiveTableTheme(socket.data.userId);
+    }
     socket.join(room.code);
     socket.emit('room_created', {
       roomCode: room.code,

@@ -58,6 +58,24 @@ export interface OpponentView {
 }
 
 export type LobbyStatus = 'waiting_for_player' | 'bot_offer' | 'bot_game_started';
+export type LobbyTableVisibility = 'public' | 'private_locked';
+export type LobbyTableStatus = 'configuring' | 'waiting' | 'countdown' | 'in_game' | 'full';
+export type LobbyTableTheme = 'classic' | 'royal' | 'forest' | 'ocean';
+
+export interface LobbyTableSummary {
+  roomCode: string;
+  hostName: string;
+  visibility: LobbyTableVisibility;
+  status: LobbyTableStatus;
+  currentParticipants: number;
+  maxParticipants: number;
+  countdownEndsAt: number | null;
+  hasRandomJoiner: boolean;
+  tableTheme: LobbyTableTheme;
+  configuredDifficulty: 'easy' | 'full' | null;
+  timerSetting: HostGameSettings['timerSetting'] | null;
+  timerCustomSeconds: number | null;
+}
 
 /** עמודה בטבלת טורניר — אינדקס שחקן במערך `players` של המשחק */
 export interface TournamentStanding {
@@ -252,6 +270,22 @@ export interface PlayerView {
 export interface ClientToServerEvents {
   create_room: (data: { playerName: string; locale?: AppLocale }) => void;
   join_room: (data: { roomCode: string; playerName: string; locale?: AppLocale }) => void;
+  list_tables: () => void;
+  create_table: (data: { playerName: string; locale?: AppLocale }) => void;
+  configure_table: (data: {
+    visibility: LobbyTableVisibility;
+    maxParticipants: number;
+    difficulty: 'easy' | 'full';
+    gameSettings?: Partial<HostGameSettings>;
+  }) => void;
+  join_table: (data: { roomCode: string; playerName: string; locale?: AppLocale }) => void;
+  join_private_table_with_code: (data: {
+    roomCode: string;
+    inviteCode: string;
+    playerName: string;
+    locale?: AppLocale;
+  }) => void;
+  start_table_countdown: () => void;
   leave_room: () => void;
   start_game: (data: { difficulty: 'easy' | 'full'; gameSettings?: Partial<HostGameSettings> }) => void;
   start_bot_game: (
@@ -289,10 +323,18 @@ export interface ClientToServerEvents {
 // ── Socket Events: Server → Client ──
 
 export interface ServerToClientEvents {
-  room_created: (data: { roomCode: string; playerId: string }) => void;
+  room_created: (data: {
+    roomCode: string;
+    playerId: string;
+    inviteCode?: string | null;
+    visibility?: LobbyTableVisibility;
+  }) => void;
   player_joined: (data: { players: { id: string; name: string; isHost: boolean; isConnected: boolean; isBot: boolean }[] }) => void;
   player_left: (data: { playerId: string; playerName: string }) => void;
   lobby_status: (data: { status: LobbyStatus; botOfferAt: number | null }) => void;
+  tables_updated: (data: { tables: LobbyTableSummary[] }) => void;
+  table_countdown_started: (data: { roomCode: string; countdownEndsAt: number }) => void;
+  table_status_changed: (data: { roomCode: string; status: LobbyTableStatus; countdownEndsAt: number | null }) => void;
   game_started: (data: PlayerView) => void;
   state_update: (data: PlayerView) => void;
   toast: (data: { message: string }) => void;

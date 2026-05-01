@@ -26,6 +26,11 @@ export async function authMiddleware(
     return next();
   }
 
+  if (!supabaseAdmin) {
+    socket.data.userId = null;
+    return next();
+  }
+
   try {
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 

@@ -6,6 +6,7 @@
 // ============================================================
 
 import { createClient } from '@supabase/supabase-js';
+import type { LobbyTableTheme } from '../../shared/types';
 
 const url = process.env.SUPABASE_URL ?? '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
@@ -31,6 +32,35 @@ function adminUnavailable(context: string): boolean {
   if (supabaseAdmin) return false;
   console.warn(`[supabaseAdmin] Skipping ${context}: admin client is not configured.`);
   return true;
+}
+
+const LOBBY_TABLE_THEMES = new Set<LobbyTableTheme>(['classic', 'royal', 'forest', 'ocean']);
+
+function normalizeLobbyTableTheme(raw: unknown): LobbyTableTheme {
+  return typeof raw === 'string' && LOBBY_TABLE_THEMES.has(raw as LobbyTableTheme)
+    ? (raw as LobbyTableTheme)
+    : 'classic';
+}
+
+export async function fetchPlayerActiveTableTheme(userId: string): Promise<LobbyTableTheme> {
+  if (adminUnavailable(`fetchPlayerActiveTableTheme(${userId})`)) return 'classic';
+  try {
+    const { data, error } = await supabaseAdmin!
+      .from('profiles')
+      .select('active_table_theme')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      console.warn('[supabaseAdmin] fetchPlayerActiveTableTheme:', error.message);
+      return 'classic';
+    }
+
+    return normalizeLobbyTableTheme(data?.active_table_theme);
+  } catch (err) {
+    console.error('[supabaseAdmin] fetchPlayerActiveTableTheme exception:', err);
+    return 'classic';
+  }
 }
 
 // ── Coin helpers ──
