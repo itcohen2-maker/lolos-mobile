@@ -5,7 +5,7 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { BackHandler, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { io, type Socket } from 'socket.io-client';
 import { supabase } from '../lib/supabase';
@@ -864,7 +864,17 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       return Promise.resolve(false);
     }
     return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        setError(locale === 'he' ? 'השרת לא הגיב. נסו שוב.' : 'Server did not respond. Please try again.');
+        resolve(false);
+      }, 7000);
       socket.emit('continue_vs_bot', (ack: ContinueVsBotAck) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         if (!ack?.ok) {
           setError(ack?.message || (locale === 'he' ? 'לא ניתן להמשיך מול בוט.' : 'Unable to continue vs bot.'));
           resolve(false);
@@ -885,6 +895,17 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const inRoom = !!(roomCode && playerId);
+
+  const leaveRoomRef = useRef(leaveRoom);
+  leaveRoomRef.current = leaveRoom;
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !inRoom) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      leaveRoomRef.current();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [inRoom]);
 
   // Build game override when we have server state: adapted state + dispatch that emits to socket
   const gameOverride = React.useMemo(() => {

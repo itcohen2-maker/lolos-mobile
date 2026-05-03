@@ -16,10 +16,16 @@ import { CARDS_PER_PLAYER } from '../../../shared/gameConstants';
 interface StartScreenProps {
   onBackToChoice?: () => void;
   onHowToPlay?: () => void;
+  onShop?: () => void;
   preferredName?: string;
 }
 
-export default function StartScreen({ preferredName }: StartScreenProps = {}) {
+export default function StartScreen({
+  onBackToChoice,
+  onHowToPlay,
+  onShop,
+  preferredName,
+}: StartScreenProps = {}) {
   const { t, isRTL } = useLocale();
   const { dispatch } = useGame();
   const [playerCount, setPlayerCount] = useState(2);
@@ -60,6 +66,26 @@ export default function StartScreen({ preferredName }: StartScreenProps = {}) {
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      <View style={styles.topActions}>
+        {onBackToChoice ? (
+          <Button variant="secondary" size="sm" onPress={onBackToChoice} style={styles.topActionBtn}>
+            {t('lobby.backToMode')}
+          </Button>
+        ) : null}
+        {onHowToPlay ? (
+          <Button variant="primary" size="sm" onPress={onHowToPlay} style={styles.topActionBtn}>
+            {t('mode.howToPlay')}
+          </Button>
+        ) : null}
+        {onShop ? (
+          <Button variant="gold" size="sm" onPress={onShop} style={styles.topActionBtn}>
+            {t('shop.openShop')}
+          </Button>
+        ) : null}
+        <Button variant="secondary" size="sm" onPress={() => setShowRules((prev) => !prev)} style={styles.topActionBtn}>
+          {t('start.rulesButton')}
+        </Button>
+      </View>
       <View style={styles.logoWrap}>
         <SalindaLogoOption06 width={300} />
       </View>
@@ -168,6 +194,16 @@ export default function StartScreen({ preferredName }: StartScreenProps = {}) {
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: '#111827' },
   container: { padding: 24, paddingTop: 60, alignItems: 'stretch' },
+  topActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  topActionBtn: {
+    minWidth: 92,
+  },
   logoWrap: { alignSelf: 'center', marginBottom: 8, maxWidth: '100%' },
   subtitle: { color: '#9CA3AF', fontSize: 13, marginTop: 4, marginBottom: 28, alignSelf: 'center', textAlign: 'center' },
   label: { color: '#D1D5DB', fontSize: 13, fontWeight: '600', alignSelf: 'stretch', marginBottom: 8, marginTop: 16 },

@@ -68,6 +68,22 @@ const LESSON_SHAPES = LESSONS.map((l) => ({ id: l.id, stepCount: l.steps.length 
 
 const CELEBRATE_MS = 900;
 const LESSON_DONE_MS = 1400;
+const HIDDEN_TUTORIAL_LAYERS = new Set([12, 15, 16, 17, 18]);
+
+function getHiddenLayerAdvanceAction(phase: MimicState['phase']): MimicAction | null {
+  switch (phase) {
+    case 'intro':
+      return { type: 'DISMISS_INTRO' };
+    case 'bot-demo':
+      return { type: 'BOT_DEMO_DONE' };
+    case 'await-mimic':
+      return { type: 'OUTCOME_MATCHED' };
+    case 'celebrate':
+      return { type: 'CELEBRATE_DONE' };
+    default:
+      return null;
+  }
+}
 
 // Pool of parens exercises: all use op1=minus, op2=minus.
 // parensLeft = (d1-d2)-d3, parensRight = d1-(d2-d3) = target.
@@ -474,7 +490,7 @@ function buildPreparedMultiPlayBonusCards(addA: number, addB: number, prefix: st
   ];
 }
 
-export function InteractiveTutorialScreen({ onExit, onProgressChange, gameDispatch, gameState }: Props): React.ReactElement {
+export function InteractiveTutorialScreen({ onExit, onProgressChange, gameDispatch, gameState }: Props): React.ReactElement | null {
   const { t, locale } = useLocale();
   const dims = useWindowDimensions();
   const [engine, dispatchEngine] = useReducer(
@@ -1709,30 +1725,32 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (l6RiggedRef.current) return;
     l6RiggedRef.current = true;
 
-    // Dice: two distinct values (die3 exists but is not used in the equation)
-    // so the mini-card strip shows a mix of options while the builder shows
-    // a clean two-number exercise. ROLL_DICE guarantees 'building' phase.
-    gameDispatch({ type: 'ROLL_DICE', values: { die1: 2, die2: 3, die3: 5 } });
+    // Dice: pick randomly from a safe pool so the mini-strip looks different
+    // each run. Each triplet guarantees distinct 2-dice sums so the strip
+    // always has 3+ reachable results. Hand cards mirror those sums so the
+    // fan looks connected to the possible-results strip.
+    const L6_DICE_POOL = [
+      { d1: 2, d2: 3, d3: 5 },  // sums: 5,7,8
+      { d1: 1, d2: 3, d3: 4 },  // sums: 4,5,7
+      { d1: 2, d2: 4, d3: 6 },  // sums: 6,8,10
+      { d1: 1, d2: 2, d3: 5 },  // sums: 3,6,7
+      { d1: 3, d2: 4, d3: 5 },  // sums: 7,8,9
+    ] as const;
+    const l6Pick = L6_DICE_POOL[Math.floor(Math.random() * L6_DICE_POOL.length)];
+    gameDispatch({ type: 'ROLL_DICE', values: { die1: l6Pick.d1, die2: l6Pick.d2, die3: l6Pick.d3 } });
 
-    // Hand: number cards 5, 7, 8 match the three 2-number results reachable
-    // from dice {2,3,5}: 2+3=5, 2+5=7, 3+5=8. Even though the learner doesn't
-    // play cards in L6, seeing familiar numbers in the fan makes the demo
-    // feel realistic and connected to the possible-results strip.
     const ts = Date.now();
+    const s12 = l6Pick.d1 + l6Pick.d2;
+    const s13 = l6Pick.d1 + l6Pick.d3;
+    const s23 = l6Pick.d2 + l6Pick.d3;
     const playerHand = [
-      { id: `tut-l6-num-5-${ts}`, type: 'number' as const, value: 5 },
+      { id: `tut-l6-num-${s12}-${ts}`, type: 'number' as const, value: s12 },
       { id: `tut-l6-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
-      { id: `tut-l6-num-7-${ts}`, type: 'number' as const, value: 7 },
-      { id: `tut-l6-num-8-${ts}`, type: 'number' as const, value: 8 },
+      { id: `tut-l6-num-${s13}-${ts}`, type: 'number' as const, value: s13 },
+      { id: `tut-l6-num-${s23}-${ts}`, type: 'number' as const, value: s23 },
       { id: `tut-l6-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
     ];
-    const botHand = [
-      { id: `tut-l6-bot-num-5-${ts}`, type: 'number' as const, value: 5 },
-      { id: `tut-l6-bot-op-plus-${ts}`, type: 'operation' as const, operation: '+' as const },
-      { id: `tut-l6-bot-num-7-${ts}`, type: 'number' as const, value: 7 },
-      { id: `tut-l6-bot-num-8-${ts}`, type: 'number' as const, value: 8 },
-      { id: `tut-l6-bot-op-times-${ts}`, type: 'operation' as const, operation: 'x' as const },
-    ];
+    const botHand = playerHand.map((c) => ({ ...c, id: `bot-${c.id}` }));
     gameDispatch({ type: 'TUTORIAL_SET_HANDS', hands: [botHand, playerHand] });
 
     // Enable the ResultsChip (boot defaults it to false so it stays hidden
@@ -1766,16 +1784,16 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       // force-opens so the bot demo + await-mimic have something to tap.
       tutorialBus.emitFanDemo({ kind: 'openResultsChip' });
       // Re-fill the dice AND both operators in the EquationBuilder so the
-      // learner sees a complete reference equation (2 + 3 + 5 = 10) next to
-      // the mini-cards strip. Without operators the slots show "?" which
-      // invites taps that are intentionally blocked, causing confusion.
-      setTimeout(() => {
-        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 });
-        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 });
-        tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 });
-        tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 1, op: '+' });
-        tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 2, op: '+' });
-      }, 0);
+      // learner sees a complete reference equation next to the mini-cards
+      // strip. Without operators the slots show "?" which invites taps that
+      // are intentionally blocked, causing confusion.
+      // Staggered timeouts prevent eqPickDice picks from clobbering each
+      // other (same issue as L5a — simultaneous picks read stale state).
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 0 }), 140);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 1 }), 280);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqPickDice', idx: 2 }), 420);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 1, op: '+' }), 560);
+      setTimeout(() => tutorialBus.emitFanDemo({ kind: 'eqSetOp', which: 2, op: '+' }), 700);
     } else if (engine.stepIndex === 2) {
       const cfg = tutorialBus.getL6CopyConfig();
       const target = cfg?.target ?? 7;
@@ -2678,7 +2696,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     if (l5PlaceWrongTimerRef.current) clearTimeout(l5PlaceWrongTimerRef.current);
     if (engine.lessonIndex !== 4 || engine.stepIndex !== 0 || engine.phase !== 'await-mimic') return;
     return tutorialBus.subscribeUserEvent((evt) => {
-      if (evt.kind !== 'l5OperatorPlaced' || evt.op === '+') return;
+      if (evt.kind !== 'l5OperatorPlaced' || evt.position !== 0 || evt.op === '+') return;
       setL5PlaceWrong(true);
       if (l5PlaceWrongTimerRef.current) clearTimeout(l5PlaceWrongTimerRef.current);
       l5PlaceWrongTimerRef.current = setTimeout(() => setL5PlaceWrong(false), 2000);
@@ -3059,6 +3077,16 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
     1,
     1 + tutorialLayersBeforeCurrentLesson + tutorialCurrentStepLayerBase + tutorialCurrentPhaseLayerOffset,
   );
+  const shouldHideTutorialLayer = HIDDEN_TUTORIAL_LAYERS.has(tutorialLayerNumber);
+
+  useEffect(() => {
+    if (!shouldHideTutorialLayer) return;
+    const nextAction = getHiddenLayerAdvanceAction(engine.phase);
+    if (!nextAction) return;
+    const timer = setTimeout(() => dispatchEngine(nextAction), 0);
+    return () => clearTimeout(timer);
+  }, [shouldHideTutorialLayer, engine.phase]);
+
   // Bubble sits just above whatever window is exposed for this lesson.
   // For the dice lesson's initial hint ("נסו להטיל קוביות") we keep the
   // bubble at the previous lesson's position so it doesn't jump; only the
@@ -3101,6 +3129,10 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       default: break;
     }
   };
+
+  if (shouldHideTutorialLayer) {
+    return null;
+  }
 
   return (
     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'box-none' }}>

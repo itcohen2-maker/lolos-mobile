@@ -1,7 +1,15 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal,
-  ScrollView, Platform, ActivityIndicator, ImageBackground, Image,
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Modal,
+  ScrollView,
+  Platform,
+  ActivityIndicator,
+  ImageBackground,
+  Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SlindaCoin } from '../../components/SlindaCoin';
@@ -22,10 +30,10 @@ export function MyThemesScreen({ visible, onClose }: Props) {
 
   const ownedThemes = (profile?.themes_owned ?? ['classic']) as ThemeId[];
   const ownedTableSkins = (profile?.table_skins_owned ?? []) as TableSkinId[];
-  const _rawTable = profile?.active_table_theme ?? 'classic';
-  const activeTable = (THEMES[_rawTable as ThemeId] ? _rawTable : 'classic') as ThemeId;
-  const _rawBg = profile?.active_card_back ?? 'classic';
-  const activeBackground = (THEMES[_rawBg as ThemeId] ? _rawBg : 'classic') as ThemeId;
+  const rawTable = profile?.active_table_theme ?? 'classic';
+  const activeTable = (THEMES[rawTable as ThemeId] ? rawTable : 'classic') as ThemeId;
+  const rawBg = profile?.active_card_back ?? 'classic';
+  const activeBackground = (THEMES[rawBg as ThemeId] ? rawBg : 'classic') as ThemeId;
   const activeTableSkin = (profile?.active_table_skin ?? null) as TableSkinId | null;
 
   async function handleSetSkin(kind: 'card_back' | 'table_theme', themeId: ThemeId) {
@@ -44,14 +52,12 @@ export function MyThemesScreen({ visible, onClose }: Props) {
     setLoading(null);
   }
 
-  const ownedList = THEME_IDS.filter(id => ownedThemes.includes(id));
+  const ownedList = THEME_IDS.filter((id) => ownedThemes.includes(id));
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.container}>
-
-          {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <SlindaCoin size={22} spin />
@@ -66,12 +72,12 @@ export function MyThemesScreen({ visible, onClose }: Props) {
           <View style={styles.dividerLine} />
 
           <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
-
-            {/* Table Section */}
             <Text style={styles.sectionTitle}>{t('themes.table')}</Text>
-            <Text style={styles.slotLabel}>{t('themes.currentlyUsed')}: {locale === 'he' ? THEMES[activeTable].name_he : THEMES[activeTable].name_en}</Text>
+            <Text style={styles.slotLabel}>
+              {t('themes.currentlyUsed')}: {locale === 'he' ? THEMES[activeTable].name_he : THEMES[activeTable].name_en}
+            </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-              {ownedList.map(id => {
+              {ownedList.map((id) => {
                 const theme = THEMES[id];
                 const isActive = id === activeTable;
                 const key = `table:${id}`;
@@ -104,11 +110,12 @@ export function MyThemesScreen({ visible, onClose }: Props) {
 
             <View style={styles.sectionSep} />
 
-            {/* Background Section */}
             <Text style={styles.sectionTitle}>{t('themes.background')}</Text>
-            <Text style={styles.slotLabel}>{t('themes.currentlyUsed')}: {locale === 'he' ? THEMES[activeBackground].name_he : THEMES[activeBackground].name_en}</Text>
+            <Text style={styles.slotLabel}>
+              {t('themes.currentlyUsed')}: {locale === 'he' ? THEMES[activeBackground].name_he : THEMES[activeBackground].name_en}
+            </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-              {ownedList.map(id => {
+              {ownedList.map((id) => {
                 const theme = THEMES[id];
                 const isActive = id === activeBackground;
                 const key = `card_back:${id}`;
@@ -144,7 +151,12 @@ export function MyThemesScreen({ visible, onClose }: Props) {
 
             <Text style={styles.sectionTitle}>{t('themes.tableSkin')}</Text>
             <Text style={styles.slotLabel}>
-              {t('themes.currentlyUsed')}: {activeTableSkin ? (locale === 'he' ? TABLE_SKINS[activeTableSkin].name_he : TABLE_SKINS[activeTableSkin].name_en) : t('themes.none')}
+              {t('themes.currentlyUsed')}:{' '}
+              {activeTableSkin
+                ? locale === 'he'
+                  ? TABLE_SKINS[activeTableSkin].name_he
+                  : TABLE_SKINS[activeTableSkin].name_en
+                : t('themes.none')}
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
               <TouchableOpacity
@@ -163,7 +175,7 @@ export function MyThemesScreen({ visible, onClose }: Props) {
                   <Text style={styles.equipLabel}>{t('themes.replaceable')}</Text>
                 )}
               </TouchableOpacity>
-              {TABLE_SKIN_IDS.filter(id => ownedTableSkins.includes(id)).map(id => {
+              {TABLE_SKIN_IDS.filter((id) => ownedTableSkins.includes(id)).map((id) => {
                 const skin = TABLE_SKINS[id];
                 const isActive = id === activeTableSkin;
                 const key = `table_skin:${id}`;
@@ -192,21 +204,17 @@ export function MyThemesScreen({ visible, onClose }: Props) {
 
             <View style={styles.sectionSep} />
 
-            {/* Mix notice */}
             <Text style={styles.mixNotice}>{t('themes.mixNotice')}</Text>
 
-            {/* Active combo preview */}
             <View style={styles.activeCombo}>
               <Text style={styles.activeComboLabel}>{t('themes.currentCombo')}</Text>
               <View style={styles.comboPreview}>
-                {/* Background */}
                 <LinearGradient
                   colors={THEMES[activeBackground].background.gradient}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 0.85, y: 1 }}
                   style={styles.comboBg}
                 >
-                  {/* Table on top */}
                   {THEMES[activeTable].table.gradient ? (
                     <LinearGradient
                       colors={THEMES[activeTable].table.gradient!}
@@ -222,7 +230,6 @@ export function MyThemesScreen({ visible, onClose }: Props) {
                 </LinearGradient>
               </View>
             </View>
-
           </ScrollView>
         </View>
       </View>

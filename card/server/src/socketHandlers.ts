@@ -87,7 +87,7 @@ type IOServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type IOSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 const BOT_OFFER_DELAY_MS = 0;
-const TABLE_START_COUNTDOWN_MS = 30_000;
+const TABLE_START_COUNTDOWN_MS = 10_000;
 const BOT_DIFF_LEVELS: BotDifficulty[] = ['easy', 'medium', 'hard'];
 
 /** לקוחות ישנים שעדיין שולחים beginner */

@@ -37,7 +37,10 @@ export const lesson05OpCycle: Lesson = {
       botDemo: async (api) => {
         await api.wait(2200);
       },
-      outcome: (event) => event.kind === 'l5OperatorPlaced' && event.op === '+',
+      outcome: (event) =>
+        event.kind === 'l5OperatorPlaced' &&
+        event.op === '+' &&
+        event.position === 0,
       hintKey: 'tutorial.l5a.hintChooseCard',
       botHintKey: 'tutorial.l5a.botIntro',
       celebrateKey: 'tutorial.l5a.celebrate',

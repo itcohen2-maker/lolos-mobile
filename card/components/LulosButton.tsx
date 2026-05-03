@@ -11,6 +11,7 @@ export interface LulosButtonProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  testID?: string;
   /** Override text color (e.g. '#FFFFFF' for white on dark yellow button) */
   textColor?: string;
   style?: any;
@@ -248,7 +249,7 @@ loop();
 <\/script></body></html>`;
 }
 
-export function LulosButton({ text, color, onPress, disabled, width, height = 68, fontSize, textColor, style }: LulosButtonProps) {
+export function LulosButton({ text, color, onPress, disabled, width, height = 68, fontSize, testID, textColor, style }: LulosButtonProps) {
   const fs = fontSize ?? Math.round(height * 0.38);
   const w = width ?? Math.max(140, Math.min(300, text.length * fs * 0.6 + 80));
   const palette = PALETTES[color];
@@ -271,9 +272,13 @@ export function LulosButton({ text, color, onPress, disabled, width, height = 68
     <View style={[{ width: w, height: height + 8, opacity: disabled ? 0.3 : 1 }, style]}>
       <TouchableOpacity
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !!disabled }}
+        disabled={!!disabled}
         onPress={disabled ? undefined : onPress}
         onPressIn={disabled ? undefined : handlePressIn}
         onPressOut={disabled ? undefined : handlePressOut}
+        testID={testID}
       >
         <Animated.View style={[
           {

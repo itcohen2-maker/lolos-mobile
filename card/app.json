@@ -14,7 +14,13 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cardgame.app"
+      "bundleIdentifier": "com.cardgame.app",
+      "userInterfaceStyle": "light",
+      "splash": {
+        "image": "./assets/splash-brand.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#111827"
+      }
     },
     "androidNavigationBar": {
       "backgroundColor": "#111827",
@@ -29,7 +35,19 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "Salinda / סלינדה",
+      "shortName": "סלינדה",
+      "dir": "rtl",
+      "display": "standalone",
+      "backgroundColor": "#111827",
+      "themeColor": "#111827",
+      "barStyle": "default",
+      "splash": {
+        "image": "./assets/splash-brand.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#111827"
+      }
     },
     "plugins": [
       "expo-system-ui",

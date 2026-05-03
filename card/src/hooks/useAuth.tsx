@@ -41,9 +41,11 @@ interface AuthContextValue {
   refreshProfile: () => Promise<void>;
   /** Purchase the Slinda card for 100 coins. Returns 'ok', 'already_owned', or 'insufficient_coins'. */
   purchaseSlinda: () => Promise<'ok' | 'already_owned' | 'insufficient_coins' | 'error'>;
-  /** Purchase a theme for 50 coins. */
+  /** Consume owned Slinda after activating it in-game. */
+  consumeSlinda: () => Promise<'ok' | 'not_owned' | 'error'>;
+  /** Purchase a theme for its configured store price. */
   purchaseTheme: (themeId: string) => Promise<'ok' | 'already_owned' | 'insufficient_coins' | 'invalid_theme' | 'error'>;
-  /** Purchase a table skin for 40 coins. */
+  /** Purchase a table skin for its configured store price. */
   purchaseTableSkin: (skinId: TableSkinId) => Promise<'ok' | 'already_owned' | 'insufficient_coins' | 'invalid_skin' | 'error'>;
   /** Set active card back, table theme, or table skin (must already be owned). */
   setActiveSkin: (kind: 'card_back' | 'table_theme' | 'table_skin', themeId: string) => Promise<'ok' | 'not_owned' | 'invalid' | 'error'>;
@@ -209,6 +211,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refreshProfile]);
 
+  const consumeSlinda = useCallback(async (): Promise<'ok' | 'not_owned' | 'error'> => {
+    try {
+      const { data, error } = await supabase.rpc('consume_slinda');
+      if (error) return 'error';
+      const result = data as string;
+      if (result === 'ok') await refreshProfile();
+      return result as 'ok' | 'not_owned';
+    } catch {
+      return 'error';
+    }
+  }, [refreshProfile]);
+
   const purchaseTheme = useCallback(async (themeId: string): Promise<'ok' | 'already_owned' | 'insufficient_coins' | 'invalid_theme' | 'error'> => {
     try {
       const { data, error } = await supabase.rpc('purchase_theme', { theme_id: themeId });
@@ -277,6 +291,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut: signOutFn,
         refreshProfile,
         purchaseSlinda,
+        consumeSlinda,
         purchaseTheme,
         purchaseTableSkin,
         setActiveSkin,

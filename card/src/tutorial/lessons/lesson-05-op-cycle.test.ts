@@ -52,3 +52,12 @@ describe('lesson-05 step 2 (joker-place) botDemo', () => {
     expect(scrollCalls.map((c) => c.idx)).toEqual([2, 2]);
   });
 });
+
+describe('lesson-05 step 1 (place-op) outcome', () => {
+  it('advances only when the plus card is placed in the first operator slot', () => {
+    const step = lesson05OpCycle.steps[0];
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '+', position: 0 })).toBe(true);
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '+', position: 1 })).toBe(false);
+    expect(step.outcome({ kind: 'l5OperatorPlaced', op: '-', position: 0 })).toBe(false);
+  });
+});

@@ -11,6 +11,6 @@ export class LobbyPage {
   readonly languageToggle: Locator = this.page.getByTestId('lobby-language-toggle');
 
   async goto() {
-    await this.page.goto('/');
+    await this.page.goto('/', { waitUntil: 'domcontentloaded' });
   }
 }

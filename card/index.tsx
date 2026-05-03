@@ -11,7 +11,7 @@ import { decideBotAction } from './src/bot/botBrain';
 import { translateBotAction } from './src/bot/executor';
 import type { BotAction } from './src/bot/types';
 import {
-  I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground,
+  I18nManager, View, Text, TextInput, ScrollView, TouchableOpacity, Image, ImageBackground, BackHandler,
   StyleSheet, Animated, Easing, Dimensions, Modal as RNModal, Platform, PanResponder, Alert,
   Keyboard, TouchableWithoutFeedback, KeyboardAvoidingView, NativeModules, AppState,
   StatusBar as RNStatusBar,
@@ -74,7 +74,7 @@ console.error = (...args: any[]) => {
 
 const pokerTableImg = Platform.OS === 'web'
   ? require('./assets/table_ovale.png')
-  : require('./assets/table.png');
+  : require('./assets/table_green_nobg.png');
 const gameBgImg = require('./assets/bg.jpg');
 /** רקע מסכי שחקן / מעבר תור — כחול־כהה, מובחן מתמונת הרקע של מסך המשחק (bg.jpg) */
 const playerScreensGradientColors = ['#070f1a', '#0f2840', '#153252'] as const;
@@ -82,14 +82,16 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { MultiplayerProvider, useMultiplayerOptional } from './src/hooks/useMultiplayer';
 import { AuthProvider, useAuth } from './src/hooks/useAuth';
 import { ShopScreen } from './src/screens/ShopScreen';
-import { MyThemesScreen } from './src/screens/MyThemesScreen';
-import { LobbyEntry, LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/OnlineTableScreens';
+import { LobbyScreen, LanguageToggle, parseJoinParamsFromUrl } from './src/screens/OnlineTableScreens';
+import { OnlineTablesEntryScreen } from './src/screens/OnlineTablesEntryScreen';
 import { CelebrationMockupRoom } from './src/screens/CelebrationMockupRoom';
 import { ExtractedMeterCelebrationOverlayCard } from './src/components/ExtractedMeterCelebration';
 import { CARDS_PER_PLAYER, TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED, wildDeckCount } from './shared/gameConstants';
 import { displayFontFamily } from './src/theme/fonts';
 import { ThemeProvider, useActiveTheme } from './src/theme/ThemeContext';
 import { resolveGameTableSurface } from './src/theme/gameTableSurface';
+import { clamp, getWebGameLayout } from './src/theme/webLayout';
+import { useWebViewportSize } from './src/hooks/useWebViewportSize';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -794,6 +796,7 @@ type GameAction =
   | { type: 'OPEN_JOKER_MODAL'; card: Card }
   | { type: 'CLOSE_JOKER_MODAL' }
   | { type: 'ADD_SLINDA_TO_HAND' }
+  | { type: 'REPLACE_CARD_WITH_SLINDA'; cardId: string }
   | { type: 'DISMISS_IDENTICAL_ALERT' }
   | { type: 'SUPPRESS_ONLINE_IDENTICAL_OVERLAY' }
   | { type: 'CLEAR_ONLINE_IDENTICAL_SUPPRESS' }
@@ -1353,7 +1356,7 @@ const initialState: GameState = {
   guidanceEnabled: null,
   hasSeenIntroHint: false,
   hasSeenSolvedHint: false,
-  soundsEnabled: true,
+  soundsEnabled: false,
   tournamentTable: [],
   possibleResultsInfoUses: 0,
   possibleResultsInfoCountedThisTurn: false,
@@ -1768,8 +1771,10 @@ function gameReducer(
         return { ...st, phase: 'pre-roll', pendingFractionTarget: denom, fractionPenalty: denom, fractionAttackResolved: false, message: '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, lastCourageCoinsAwarded: false, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
       }
       // Normal turn — reset; clear last-move display (הודעת עדכון רק במסך השחקן); notify if fraction chain just ended
+      // Keep fractionAttackResolved=true into pre-roll so PLAY_IDENTICAL is blocked for this turn only.
+      // It is cleared on the player's first real action (ROLL_DICE, DRAW_CARD, PLAY_FRACTION).
       const fracChainEnded = st.fractionAttackResolved && topDiscard?.type === 'fraction';
-      return { ...st, phase: 'pre-roll', fractionAttackResolved: false, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, lastCourageCoinsAwarded: false, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
+      return { ...st, phase: 'pre-roll', fractionAttackResolved: st.fractionAttackResolved, pendingFractionTarget: null, fractionPenalty: 0, message: fracChainEnded ? tf('local.fractionRoundEndedRoll') : '', lastDiscardCount: 0, lastEquationDisplay: null, lastCourageRewardReason: null, lastCourageCoinsAwarded: false, turnStartedAt: Date.now(), botFractionDefenseTicks: 0, botPresentation: { action: null, candidateCardId: null, ticks: 0, notification: null }, botPostEquationPauseTicks: 0, notifications: clearedNotifs };
     }
     case 'ROLL_DICE': {
       // In tutorial mode, allow ROLL_DICE from any phase so the lesson can
@@ -1779,6 +1784,7 @@ function gameReducer(
       let ns: GameState = { ...st, dice };
       if (isTriple(dice)) {
         ns = { ...ns, message: tf('toast.tripleDice', { n: String(dice.die1) }) };
+        ns = applyCourageStepReward(ns, tf('courage.reason.tripleDice', { n: String(dice.die1) }));
       }
       const vt = generateValidTargets(dice, st.enabledOperators, st.allowNegativeTargets, st.mathRangeMax);
       const currentIsBot =
@@ -1789,6 +1795,7 @@ function gameReducer(
         phase: 'building',
         diceRollSeq: (st.diceRollSeq ?? 0) + 1,
         consecutiveIdenticalPlays: 0,
+        fractionAttackResolved: false,
         message: ns.message || '',
         // Tutorial: when forcing ROLL_DICE from non-pre-roll, also clear
         // stale solved/played state so the EquationBuilder is fully fresh.
@@ -1948,6 +1955,7 @@ function gameReducer(
     }
     case 'PLAY_IDENTICAL': {
       if (st.phase !== 'pre-roll') return st;
+      if (st.fractionAttackResolved) return st; // blocked after fraction resolution — player must roll
       if (st.consecutiveIdenticalPlays >= 2) return st;
       if (action.card.type === 'operation' || action.card.type === 'joker') return st;
       const td = st.discardPile[st.discardPile.length - 1];
@@ -2223,6 +2231,25 @@ function gameReducer(
       );
       return { ...st, players: updatedPlayers };
     }
+    case 'REPLACE_CARD_WITH_SLINDA': {
+      const cpIdx = st.currentPlayerIndex;
+      const cp = st.players[cpIdx];
+      if (!cp) return st;
+      const replacedCard = cp.hand.find((card) => card.id === action.cardId);
+      if (!replacedCard) return st;
+      const newCard: Card = { id: makeId(), type: 'joker' };
+      const updatedHand = cp.hand.map((card) => (card.id === action.cardId ? newCard : card));
+      return {
+        ...st,
+        players: st.players.map((player, idx) => (idx === cpIdx ? { ...player, hand: updatedHand } : player)),
+        discardPile: [...st.discardPile, replacedCard],
+        activeOperation: null,
+        challengeSource: null,
+        selectedCards: [],
+        equationHandSlots: [null, null],
+        equationHandPick: null,
+      };
+    }
     case 'PLAY_JOKER': {
       return { ...st, jokerModalOpen: false, selectedCards: [], message: tf('joker.onlyInEquation') };
     }
@@ -2234,7 +2261,7 @@ function gameReducer(
       const drawnCard = s.drawPile[0];
       s = drawFromPile(s, 1, s.currentPlayerIndex);
       const drawMsg = tf('toast.drawOne', { name: drawCp.name });
-      s = { ...s, hasDrawnCard: true, activeOperation: null, challengeSource: null, equationOpsUsed: [], lastMoveMessage: drawMsg, moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: drawMsg }] };
+      s = { ...s, hasDrawnCard: true, fractionAttackResolved: false, activeOperation: null, challengeSource: null, equationOpsUsed: [], lastMoveMessage: drawMsg, moveHistory: [...st.moveHistory, { playerIndex: st.currentPlayerIndex, cardsDiscarded: 0, description: drawMsg }] };
       return endTurnLogic(s, tf);
     }
     case 'CALL_LOLOS': {
@@ -2919,9 +2946,13 @@ function GameProvider({ children }: { children: ReactNode }) {
   }, [override]);
 
   useEffect(() => {
-    AsyncStorage.getItem('lulos_sounds_enabled').then((v) => {
-      if (v === 'false') localDispatch({ type: 'SET_SOUNDS_ENABLED', enabled: false });
-    });
+    AsyncStorage.getItem('lulos_sounds_enabled')
+      .then((v) => {
+        localDispatch({ type: 'SET_SOUNDS_ENABLED', enabled: v === 'true' });
+      })
+      .catch(() => {
+        localDispatch({ type: 'SET_SOUNDS_ENABLED', enabled: false });
+      });
   }, []);
 
   const effectivePhase = override ? override.state.phase : localState.phase;
@@ -3169,6 +3200,7 @@ function AppModal({
   boxStyle,
   topAligned = false,
   customHeader,
+  testID,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -3179,10 +3211,18 @@ function AppModal({
   topAligned?: boolean;
   /** כותרת מותאמת (למשך רצף ויזואלי); אם מוגדר — לא משתמשים ב־title+✕ ברירת המחדל */
   customHeader?: React.ReactNode;
+  testID?: string;
 }) {
   return (
-    <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={[mS.overlay, topAligned && mS.overlayTop, { backgroundColor: `rgba(0,0,0,${overlayOpacity})` }]}><View style={[mS.box, boxStyle]}>
+    <RNModal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <View style={[mS.overlay, topAligned && mS.overlayTop, { backgroundColor: `rgba(0,0,0,${overlayOpacity})` }]}>
+        <View style={[mS.box, boxStyle]} testID={testID}>
         {customHeader != null ? (
           customHeader
         ) : (
@@ -3194,14 +3234,15 @@ function AppModal({
           </View>
         )}
         <View style={{ flex: 1, minHeight: 0 }}>{children}</View>
-      </View></View>
+        </View>
+      </View>
     </RNModal>
   );
 }
 const mS = StyleSheet.create({
-  overlay: { flex:1, justifyContent:'center', alignItems:'center', padding:20 },
+  overlay: { flex:1, justifyContent:'center', alignItems:'center', padding:20, zIndex: 20000, elevation: 32 },
   overlayTop: { justifyContent:'flex-start', paddingTop: 10 },
-  box: { backgroundColor:'#1F2937', borderRadius:16, padding:20, width:'100%', maxHeight:'80%' },
+  box: { backgroundColor:'#1F2937', borderRadius:16, padding:20, width:'100%', maxHeight:'80%', zIndex: 20001, elevation: 40 },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
   title: { color:'#FFF', fontSize:18, fontWeight:'700', flex:1, textAlign:'center' },
   close: { color:'#9CA3AF', fontSize:22 },
@@ -3275,7 +3316,7 @@ function getTipOfTheTurn(st: GameState, tf: (key: string, params?: MsgParams) =>
   if (st.phase === 'pre-roll') {
     if (st.pendingFractionTarget !== null)
       return tf('gameTip.fractionDefend', { d: st.fractionPenalty });
-    if (!st.hasPlayedCards && st.consecutiveIdenticalPlays < 2 && td && cp.hand.some(c => validateIdenticalPlay(c, td)))
+    if (!st.fractionAttackResolved && !st.hasPlayedCards && st.consecutiveIdenticalPlays < 2 && td && cp.hand.some(c => validateIdenticalPlay(c, td)))
       return tf('gameTip.identical');
     return tf('gameTip.rollOrMatch');
   }
@@ -3371,6 +3412,11 @@ function CardsCatalogContent({
 function RulesContent({ state, pregame }: { state: GameState | null; pregame?: RulesPregameContext | null }) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
+  const rulesAccentText = '#99F6E4';
+  const rulesAccentBorder = '#5EEAD4';
+  const rulesAccentSoftBorder = 'rgba(153,246,228,0.45)';
+  const rulesAccentBg = 'rgba(13,148,136,0.18)';
+  const rulesAccentDeepBg = 'rgba(17,94,89,0.3)';
   const tip = state ? getTipOfTheTurn(state, t) : t('gameTip.start');
   const range = state?.difficulty ?? pregame?.numberRange ?? 'full';
   const showFractions = state?.showFractions ?? pregame?.fractions ?? true;
@@ -3406,12 +3452,12 @@ function RulesContent({ state, pregame }: { state: GameState | null; pregame?: R
         <Text style={{ fontSize: 14, fontWeight: '800', color: '#4ADE80', marginBottom: 6, textAlign: ta }}>{t('rules.tipBanner')}</Text>
         <Text style={{ color: '#D1FAE5', fontSize: 13, lineHeight: 20, textAlign: ta }}>{tip}</Text>
       </View>
-      <View style={{ backgroundColor: 'rgba(30,64,175,0.35)', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,197,253,0.45)', padding: 12, marginBottom: 16 }}>
-        <Text style={{ fontSize: 13, fontWeight: '800', color: '#93C5FD', marginBottom: 6, textAlign: ta }}>{t('rules.sessionContextTitle')}</Text>
+      <View style={{ backgroundColor: rulesAccentDeepBg, borderRadius: 12, borderWidth: 1, borderColor: rulesAccentSoftBorder, padding: 12, marginBottom: 16 }}>
+        <Text style={{ fontSize: 13, fontWeight: '800', color: rulesAccentText, marginBottom: 6, textAlign: ta }}>{t('rules.sessionContextTitle')}</Text>
         <Text style={{ color: '#E2E8F0', fontSize: 13, lineHeight: 20, textAlign: ta }}>{sessionLine}</Text>
       </View>
-      <View style={{ backgroundColor: 'rgba(59,130,246,0.2)', borderRadius: 12, borderWidth: 2, borderColor: '#93C5FD', padding: 14, marginBottom: 16 }}>
-        <Text style={{ fontSize: 15, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.newUser')}</Text>
+      <View style={{ backgroundColor: rulesAccentBg, borderRadius: 12, borderWidth: 2, borderColor: rulesAccentBorder, padding: 14, marginBottom: 16 }}>
+        <Text style={{ fontSize: 15, fontWeight: '800', color: rulesAccentText, marginBottom: 8, textAlign: ta }}>{t('rules.newUser')}</Text>
         <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 22, textAlign: ta }}>
           {showPossibleResults ? t('welcome.body') : t('welcome.bodyNoPossibleResults')}
         </Text>
@@ -3420,12 +3466,12 @@ function RulesContent({ state, pregame }: { state: GameState | null; pregame?: R
         ) : null}
       </View>
       <View style={{ backgroundColor: '#111827', borderRadius: 12, borderWidth: 1, borderColor: '#374151', padding: 12, marginBottom: 10 }}>
-        <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.goalHeading')}</Text>
+        <Text style={{ fontSize: 14, fontWeight: '800', color: rulesAccentText, marginBottom: 8, textAlign: ta }}>{t('rules.goalHeading')}</Text>
         <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, marginBottom: 6, textAlign: ta }}>{t('start.rules.goal1', { n: CARDS_PER_PLAYER })}</Text>
         <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, textAlign: ta }}>{t('start.rules.goal2')}</Text>
       </View>
       <View style={{ backgroundColor: '#111827', borderRadius: 12, borderWidth: 1, borderColor: '#374151', padding: 12, marginBottom: 10 }}>
-        <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.turnHeading')}</Text>
+        <Text style={{ fontSize: 14, fontWeight: '800', color: rulesAccentText, marginBottom: 8, textAlign: ta }}>{t('rules.turnHeading')}</Text>
         <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, marginBottom: 6, textAlign: ta }}>{t('start.rules.t1')}</Text>
         <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, marginBottom: 6, textAlign: ta }}>{t('start.rules.t2')}</Text>
         <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, textAlign: ta }}>{t('start.rules.t3')}</Text>
@@ -3442,11 +3488,11 @@ function RulesContent({ state, pregame }: { state: GameState | null; pregame?: R
         <Text style={{ color: '#FEF3C7', fontSize: 13, lineHeight: 22, textAlign: ta }}>{t('rules.excellenceBody')}</Text>
       </View>
       <View style={{ backgroundColor: '#111827', borderRadius: 12, borderWidth: 1, borderColor: '#374151', padding: 12, marginBottom: 8 }}>
-        <Text style={{ fontSize: 14, fontWeight: '800', color: '#93C5FD', marginBottom: 8, textAlign: ta }}>{t('rules.cardTypesFooter')}</Text>
+        <Text style={{ fontSize: 14, fontWeight: '800', color: rulesAccentText, marginBottom: 8, textAlign: ta }}>{t('rules.cardTypesFooter')}</Text>
         {cardTypesToShow.map((item, i) => (
           <View key={`cards${i}`} style={{ marginBottom: 8 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#93C5FD', marginLeft: 8 }}>{t('rules.cardsCount', { count: item.count })}</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: rulesAccentText, marginLeft: 8 }}>{t('rules.cardsCount', { count: item.count })}</Text>
               <Text style={{ color: '#CBD5E1', fontSize: 13, lineHeight: 21, textAlign: ta, flex: 1 }}>{item.text}</Text>
             </View>
             {item.detail != null && <Text style={{ fontSize: 11, color: '#9CA3AF', textAlign: 'right', marginTop: 2 }}>{item.detail}</Text>}
@@ -3572,14 +3618,14 @@ function JesterSvg({ size = 45 }: { size?: number }) {
 //  BASE CARD — 3D white gradient, gloss sheen, colored border
 // ═══════════════════════════════════════════════════════════════
 
-function BaseCard({ children, borderColor = '#9CA3AF', selected = false, active = false, onPress, faceDown = false, small = false }: {
-  children: React.ReactNode; borderColor?: string; selected?: boolean; active?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean;
+function BaseCard({ children, borderColor = '#9CA3AF', selected = false, active = false, onPress, faceDown = false, small = false, testID }: {
+  children: React.ReactNode; borderColor?: string; selected?: boolean; active?: boolean; onPress?: () => void; faceDown?: boolean; small?: boolean; testID?: string;
 }) {
   const w = small ? 100 : 110;
   const h = small ? 140 : 158;
   // Face-down card (draw pile) — fixed indigo style, not themed
   if (faceDown) return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7} testID={testID}>
       <View style={[{ width: w, borderRadius: 12, borderBottomWidth: 6, borderBottomColor: '#1E1B4B' }, shadow3D('#000')]}>
         <LinearGradient colors={['#4338CA', '#312E81']} style={{ width: w, height: h, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(129,140,248,0.3)' }}>
           <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 3, borderColor: 'rgba(165,180,252,0.5)' }} />
@@ -3595,7 +3641,14 @@ function BaseCard({ children, borderColor = '#9CA3AF', selected = false, active 
   const shadowStyle = active ? glowActive() : (selected ? shadow3D('#FF9100', 16) : shadow3D('#000', 10));
 
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !onPress, selected }}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+      disabled={!onPress}
+      testID={testID}
+    >
       <View style={[{
         width: w, height: h, borderRadius: 12,
         borderBottomWidth: small ? 2 : 6, borderBottomColor: bottomEdge,
@@ -3644,13 +3697,13 @@ function getNumColors(v: number) {
   return { face: '#34A853', border: '#34A853', dark: '#1B5E2B', light: '#36944F' };
 }
 
-function NumberCard({ card, selected, active, onPress, small }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean }) {
+function NumberCard({ card, selected, active, onPress, small, testID }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   const v = card.value ?? 0;
   const cl = getNumColors(v);
   const fs = small ? 52 : 58;
   const maxOff = small ? 10 : 12;
   return (
-    <BaseCard borderColor={cl.border} selected={selected} active={active} onPress={onPress} small={small}>
+    <BaseCard borderColor={cl.border} selected={selected} active={active} onPress={onPress} small={small} testID={testID}>
       <Text3D text={String(v)} fontSize={fs} faceColor={cl.face} darkColor={cl.dark} lightColor={cl.light} maxOffset={maxOff} />
     </BaseCard>
   );
@@ -3777,7 +3830,7 @@ const fracColors: Record<string, { face: string; dark: string; light: string }> 
 };
 const numRed = { face: '#EA4335', dark: '#8B1A12', light: '#DC4736' };
 
-function FractionCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+function FractionCard({ card, selected, onPress, small, testID }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   const f = card.fraction ?? '1/2';
   const [num, den] = f.split('/');
   const denCl = fracColors[den] ?? numRed;
@@ -3786,7 +3839,7 @@ function FractionCard({ card, selected, onPress, small }: { card: Card; selected
   const lineW = small ? 38 : 44;
   const lineH = small ? 5 : 6;
   return (
-    <BaseCard borderColor={denCl.face} selected={selected} onPress={onPress} small={small}>
+    <BaseCard borderColor={denCl.face} selected={selected} onPress={onPress} small={small} testID={testID}>
       <View style={{ alignItems: 'center' }}>
         <Text3D text={num} fontSize={fs} faceColor={numRed.face} darkColor={numRed.dark} lightColor={numRed.light} maxOffset={maxOff} />
         <View style={{ marginVertical: small ? 2 : 3 }}>
@@ -4032,7 +4085,7 @@ function StagedChipOrbitLayer({
   );
 }
 
-function OperationCardComp({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+function OperationCardComp({ card, selected, onPress, small, testID }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   const op = card.operation ?? '+';
   const cl = opColors[op] ?? opColors['+'];
   const display = opDisplay[op] ?? op;
@@ -4040,13 +4093,13 @@ function OperationCardComp({ card, selected, onPress, small }: { card: Card; sel
   const fs = small ? 50 : 56;
   const maxOff = small ? 5 : 6;
   return (
-    <BaseCard borderColor={cl.face} selected={selected} onPress={onPress} small={small}>
+    <BaseCard borderColor={cl.face} selected={selected} onPress={onPress} small={small} testID={testID}>
       <Text3D text={display} fontSize={fs} faceColor={cl.face} darkColor={cl.dark} lightColor={cl.light} maxOffset={maxOff} />
     </BaseCard>
   );
 }
 
-function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+function JokerCard({ card: _c, selected, onPress, small, testID }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   const w = small ? 100 : 110;
   const h = small ? 140 : 158;
   const bw = 3;
@@ -4066,7 +4119,14 @@ function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selecte
   ];
 
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !onPress, selected }}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+      disabled={!onPress}
+      testID={testID}
+    >
       <View style={[{
         width: w, height: h, borderRadius: 12,
         transform: [{ translateY: selected ? -8 : 0 }],
@@ -4135,14 +4195,21 @@ function JokerCard({ card: _c, selected, onPress, small }: { card: Card; selecte
   );
 }
 
-function WildCard({ card, selected, onPress, small }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean }) {
+function WildCard({ card, selected, onPress, small, testID }: { card: Card; selected?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   const { state } = useGame();
   const w = small ? 100 : 110;
   const h = small ? 140 : 158;
   const fs = small ? 22 : 26;
   const resolved = card.resolvedValue != null;
   return (
-      <TouchableOpacity onPress={onPress} activeOpacity={onPress ? 0.7 : 1} disabled={!onPress}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !onPress, selected }}
+        onPress={onPress}
+        activeOpacity={onPress ? 0.7 : 1}
+        disabled={!onPress}
+        testID={testID}
+      >
         <View style={[{
           width: w, height: h, borderRadius: 12,
           transform: [{ translateY: selected ? -8 : 0 }],
@@ -4184,14 +4251,197 @@ function WildCard({ card, selected, onPress, small }: { card: Card; selected?: b
   );
 }
 
-function GameCard({ card, selected, active, onPress, small }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean }) {
+function GameCard({ card, selected, active, onPress, small, testID }: { card: Card; selected?: boolean; active?: boolean; onPress?: () => void; small?: boolean; testID?: string }) {
   switch (card.type) {
-    case 'number': return <NumberCard card={card} selected={selected} active={active} onPress={onPress} small={small} />;
-    case 'fraction': return <FractionCard card={card} selected={selected} onPress={onPress} small={small} />;
-    case 'operation': return <OperationCardComp card={card} selected={selected} onPress={onPress} small={small} />;
-    case 'joker': return <JokerCard card={card} selected={selected} onPress={onPress} small={small} />;
-    case 'wild': return <WildCard card={card} selected={selected} onPress={onPress} small={small} />;
+    case 'number': return <NumberCard card={card} selected={selected} active={active} onPress={onPress} small={small} testID={testID} />;
+    case 'fraction': return <FractionCard card={card} selected={selected} onPress={onPress} small={small} testID={testID} />;
+    case 'operation': return <OperationCardComp card={card} selected={selected} onPress={onPress} small={small} testID={testID} />;
+    case 'joker': return <JokerCard card={card} selected={selected} onPress={onPress} small={small} testID={testID} />;
+    case 'wild': return <WildCard card={card} selected={selected} onPress={onPress} small={small} testID={testID} />;
   }
+}
+
+const slindaCardImg = require('./assets/joker.jpg');
+
+function SlindaMiniCardButton({ onPress, disabled = false, testID }: { onPress: () => void; disabled?: boolean; testID?: string }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  const frameRadius = 11;
+  const cardWidth = 74;
+  const cardHeight = 93;
+
+  useEffect(() => {
+    if (disabled) {
+      pulse.stopAnimation();
+      pulse.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      pulse.setValue(0);
+    };
+  }, [disabled, pulse]);
+
+  return (
+    <Animated.View
+      style={{
+        opacity: disabled ? 0.52 : pulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.9, 1, 0.92] }),
+        transform: [{ scale: disabled ? 1 : pulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.05, 1] }) }],
+      }}
+    >
+      <TouchableOpacity
+        activeOpacity={disabled ? 1 : 0.9}
+        accessibilityRole="button"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={onPress}
+        testID={testID}
+        style={{
+          borderRadius: frameRadius,
+          overflow: 'hidden',
+          shadowColor: '#F59E0B',
+          shadowOpacity: 0.3,
+          shadowRadius: 6,
+          shadowOffset: { width: 0, height: 6 },
+          elevation: 8,
+        }}
+      >
+        <LinearGradient
+          colors={['rgba(255,249,196,0.96)', 'rgba(251,191,36,0.98)', 'rgba(180,83,9,0.98)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ padding: 2 }}
+        >
+          <Image
+            source={slindaCardImg}
+            resizeMode="cover"
+            style={{
+              width: cardWidth,
+              height: cardHeight,
+              borderRadius: frameRadius,
+              borderWidth: 1,
+              borderColor: 'rgba(254,243,199,0.95)',
+              backgroundColor: '#0F172A',
+            }}
+          />
+        </LinearGradient>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+function PickCardsActionButton({
+  color,
+  onPress,
+}: {
+  color: 'blue' | 'orange';
+  onPress: () => void;
+}) {
+  const { t } = useLocale();
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 680,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 680,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.delay(180),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      pulseAnim.setValue(0);
+    };
+  }, [pulseAnim]);
+
+  const btnScale = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.04],
+  });
+  const haloScale = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.98, 1.12],
+  });
+  const haloOpacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.5, 0.95],
+  });
+  const haloOpacitySoft = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.24, 0.5],
+  });
+
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: -16,
+          left: -18,
+          right: -18,
+          bottom: -20,
+          borderRadius: 42,
+          backgroundColor: 'rgba(250,204,21,0.18)',
+          borderWidth: 3,
+          borderColor: 'rgba(253,224,71,0.98)',
+          opacity: haloOpacity,
+          transform: [{ scale: haloScale }],
+          ...Platform.select({
+            ios: {
+              shadowColor: '#FACC15',
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: 0.98,
+              shadowRadius: 28,
+            },
+            android: { elevation: 22 },
+          }),
+        }}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: -24,
+          left: -28,
+          right: -28,
+          bottom: -28,
+          borderRadius: 52,
+          backgroundColor: 'rgba(251,191,36,0.16)',
+          opacity: haloOpacitySoft,
+          transform: [{ scale: haloScale }],
+        }}
+      />
+      <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+        <LulosButton
+          text={t('game.pickCards')}
+          color={color}
+          textColor="#FFFFFF"
+          width={200}
+          height={84}
+          fontSize={20}
+          onPress={onPress}
+        />
+      </Animated.View>
+    </View>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -5330,17 +5580,26 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
 
   // Which dice indices are placed
   const usedDice = new Set([dice1, dice2, dice3].filter(d => d !== null) as number[]);
+  const canUndoSolvedTutorialEquation =
+    state.isTutorial &&
+    tutorialBus.getL4Step3Mode() &&
+    state.phase === 'solved' &&
+    !state.hasPlayedCards;
 
   // Tap dice: place in next empty slot, or remove if already placed
   const hDice = (dIdx: number) => {
     if (!interactive) return;
-    if (isSolved) return;
     if (usedDice.has(dIdx)) {
+      if (isSolved && !canUndoSolvedTutorialEquation) return;
+      if (canUndoSolvedTutorialEquation) {
+        dispatch({ type: 'REVERT_TO_BUILDING' });
+      }
       if (dice1 === dIdx) setDice1(null);
       else if (dice2 === dIdx) setDice2(null);
       else if (dice3 === dIdx) setDice3(null);
       return;
     }
+    if (isSolved) return;
     // L4 step 3: block adding a 3rd die before the 2-die equation is valid.
     // Without this guard, tapping all 3 dice before setting op1 leaves
     // finalResult=null (d3 filled but no op2), so ok=false and the confirm
@@ -5463,7 +5722,10 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
   // Remove dice from a specific slot
   const removeDice = (slot: 1 | 2 | 3) => {
     if (!interactive) return;
-    if (isSolved) return;
+    if (isSolved && !canUndoSolvedTutorialEquation) return;
+    if (canUndoSolvedTutorialEquation) {
+      dispatch({ type: 'REVERT_TO_BUILDING' });
+    }
     // Lesson 5a: lock the pre-filled dice slots — only the op slots should
     // be interactive.
     if (state.isTutorial && tutorialBus.getL5aBlockFanTaps()) return;
@@ -5987,6 +6249,11 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
     const slotBinding = state.equationHandSlots[posIdx as 0 | 1];
     const isHandPlaced = slotBinding !== null;
     const isWaitingPlacement = state.equationHandPick !== null;
+    const isL5SecondaryPlacementAllowed =
+      state.isTutorial &&
+      tutorialBus.getL5aBlockFanTaps() &&
+      !tutorialBus.getTutorialPreserveHandOrder();
+    const suppressSecondaryTutorialGlow = isL5SecondaryPlacementAllowed && posIdx === 1;
     const isJoker = slotBinding?.card.type === 'joker';
     const handOp = getHandSlotOperation(slotBinding);
     const displayOp = isHandPlaced && handOp ? handOp : currentOp;
@@ -5996,9 +6263,14 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
       // L6 (possible-results): block operator taps on the pre-filled reference equation.
       // L7 (parens) and L9 (identical copy) are exempt — learner sets operators themselves.
       if (state.isTutorial && state.showPossibleResults && !tutorialBus.getL7GuidedMode() && !tutorialBus.getL9ParensFilter()) return;
-      // L5.1/5.2 (place-op + joker-place): only op slot 1 (position 0) is the
-      // teaching target. Block op2 entirely so the learner can't place there.
-      if (state.isTutorial && tutorialBus.getL5aBlockFanTaps() && posIdx === 1) return;
+      // L5.2 (joker-place): keep op2 blocked. In L5.1 we allow op2 as an
+      // optional extra placement, but it should not glow or complete the step.
+      if (
+        state.isTutorial &&
+        tutorialBus.getL5aBlockFanTaps() &&
+        tutorialBus.getTutorialPreserveHandOrder() &&
+        posIdx === 1
+      ) return;
       if (isHandPlaced && !isWaitingPlacement) {
         dispatch({ type: 'REMOVE_EQ_HAND_SLOT', position: posIdx as 0 | 1 });
         return;
@@ -6128,7 +6400,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             {normalizedDisplayOp || (tutorialBus.getL5aTargetResult() !== null ? '?' : '⬦')}
           </Text>
         )}
-        {opPulse > 0 && state.isTutorial ? (
+        {opPulse > 0 && state.isTutorial && !suppressSecondaryTutorialGlow ? (
           <Animated.View
             pointerEvents="none"
             style={{
@@ -6147,7 +6419,7 @@ const EquationBuilder = forwardRef<EquationBuilderRef, { onConfirmChange?: (data
             learner picks a sign in the joker modal and before they tap the
             slot to place it. Also adds an amber halo to the slot to draw
             the eye, since the hand card's dashed border is subtle. */}
-        {showJokerArrows && !isHandPlaced ? (
+        {showJokerArrows && !isHandPlaced && !suppressSecondaryTutorialGlow ? (
           <>
             <Animated.View
               pointerEvents="none"
@@ -6644,6 +6916,12 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
   botTeachingDifficulty?: BotDifficulty;
 }) {
   const count = cards.length;
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
+  const fanCardW = webGameLayout?.fanCardWidth ?? FAN_CARD_W;
+  const fanCardH = webGameLayout?.fanCardHeight ?? FAN_CARD_H;
+  const fanH = webGameLayout?.fanViewportHeight ?? HAND_INNER_HEIGHT;
+  const fanScreenWidth = webGameLayout?.viewportWidth ?? SCREEN_W;
   useEffect(() => {
     tutorialBus.setFanLength(count);
   }, [count]);
@@ -7057,7 +7335,7 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
         // ── Single finger scroll (FIXED: drag right = cards scroll right) ──
         if (isPinching.current) return;
-        const cardsDragged = gs.dx / (FAN_CARD_W * 0.8);
+        const cardsDragged = gs.dx / (fanCardW * 0.8);
         let next = dragStartVal.current + cardsDragged;
         const mx = maxIdxRef.current;
         if (next < 0) next = next * 0.3;
@@ -7093,11 +7371,10 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
   if (count === 0) return <View style={{ height: 80 }} />;
 
-  const fanH = HAND_INNER_HEIGHT;
   const sp = spacing; // pinch multiplier for translateX + angles
 
   return (
-    <View style={{ width: SCREEN_W, height: fanH, overflow: 'visible' }} {...panResponder.panHandlers}>
+    <View style={{ width: fanScreenWidth, height: fanH, overflow: 'visible' }} {...panResponder.panHandlers}>
       {cards.map((card, i) => {
         const isStaged = stagedCardIds.has(card.id);
         const isEqPending = equationHandPendingId === card.id;
@@ -7136,14 +7413,32 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
 
         const translateX = scanScrollX.interpolate({
           inputRange: ir,
-          outputRange: [-240*sp, -175*sp, -120*sp, -62*sp, 0, 62*sp, 120*sp, 175*sp, 240*sp],
+          outputRange: [
+            -fanCardW * 2.4 * sp,
+            -fanCardW * 1.75 * sp,
+            -fanCardW * 1.2 * sp,
+            -fanCardW * 0.62 * sp,
+            0,
+            fanCardW * 0.62 * sp,
+            fanCardW * 1.2 * sp,
+            fanCardW * 1.75 * sp,
+            fanCardW * 2.4 * sp,
+          ],
         });
         const candidateLift = isBotCandidate ? -8 : 0;
         const candidateScaleBoost = isBotCandidate ? 1.1 : 1;
 
         const arcY = scanScrollX.interpolate({
           inputRange: [i - 3, i - 2, i - 1, i, i + 1, i + 2, i + 3],
-          outputRange: [50, 28, 10, 0, 10, 28, 50],
+          outputRange: [
+            Math.round(fanCardH * 0.36),
+            Math.round(fanCardH * 0.2),
+            Math.round(fanCardH * 0.07),
+            0,
+            Math.round(fanCardH * 0.07),
+            Math.round(fanCardH * 0.2),
+            Math.round(fanCardH * 0.36),
+          ],
           extrapolate: 'clamp',
         });
 
@@ -7185,10 +7480,10 @@ function SimpleHand({ cards, stagedCardIds, equationHandPlacedIds, equationHandP
             key={card.id}
             style={{
               position: 'absolute',
-              left: SCREEN_W / 2 - FAN_CARD_W / 2,
-              top: isEqPending ? 30 : isStaged ? 35 : 20,
-              width: FAN_CARD_W,
-              height: FAN_CARD_H,
+              left: fanScreenWidth / 2 - fanCardW / 2,
+              top: isEqPending ? Math.round(fanCardH * 0.21) : isStaged ? Math.round(fanCardH * 0.25) : Math.round(fanCardH * 0.14),
+              width: fanCardW,
+              height: fanCardH,
               transform: [
                 { translateX },
                 { translateY: Animated.add(arcY, candidateLift + emphasisLift) },
@@ -7636,7 +7931,7 @@ function PlayerHand({ onCenterCard, onFractionTapForOnb }: { onCenterCard?: (car
         dispatch({ type: 'PLAY_FRACTION', card });
         return;
       }
-      if (card.type !== 'operation' && card.type !== 'joker' && state.consecutiveIdenticalPlays < 2 && validateIdenticalPlay(card,td)) {
+      if (!state.fractionAttackResolved && card.type !== 'operation' && card.type !== 'joker' && state.consecutiveIdenticalPlays < 2 && validateIdenticalPlay(card,td)) {
         if (state.isTutorial && tutorialBus.getBotDemoActive()) return;
         dispatch({ type: 'PLAY_IDENTICAL', card });
         if (state.isTutorial) tutorialBus.emitUserEvent({ kind: 'identicalPlayed' });
@@ -8004,15 +8299,7 @@ function BottomControlsBar() {
           </View>
         ) : (
           <View style={{ width: '100%', alignItems: 'center' }}>
-            <LulosButton
-              text={t('game.pickCards')}
-              color="blue"
-              textColor="#FFFFFF"
-              width={160}
-              height={44}
-              fontSize={17}
-              onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })}
-            />
+            <PickCardsActionButton color="blue" onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })} />
           </View>
         )
       ) : null}
@@ -8268,7 +8555,7 @@ const FUTURE_LAB_SPECS: { id: FutureLabId; detailCount: number }[] = [
   { id: 'steal', detailCount: 3 },
 ];
 
-function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; onShop?: () => void; onMyThemes?: () => void; preferredName?: string }) {
+function StartScreen({ onBackToChoice, onHowToPlay, onShop, preferredName }: { onBackToChoice?: () => void; onHowToPlay?: () => void; onShop?: () => void; preferredName?: string }) {
   const { t, isRTL } = useLocale();
   const { dispatch, state: gameState } = useGame();
   const safe = useGameSafeArea();
@@ -8284,6 +8571,8 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   const savedPlayerNameRef = useRef('');
   const storedProfilesRef = useRef<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
   const [, setSavedPlayerNameTrigger] = useState(0);
+  // Names for each player slot in pass-and-play mode (max 6)
+  const [playerNames, setPlayerNames] = useState<string[]>(() => Array(6).fill(''));
   useEffect(() => {
     loadStoredPlayerProfiles().then((store) => {
       storedProfilesRef.current = store;
@@ -8291,9 +8580,26 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
       if (activeName) {
         savedPlayerNameRef.current = activeName;
         setSavedPlayerNameTrigger((n) => n + 1);
+        setPlayerNames((prev) => {
+          if (prev[0].trim()) return prev;
+          const next = [...prev];
+          next[0] = activeName;
+          return next;
+        });
       }
     });
   }, []);
+  // Seed player 1 name from preferredName prop when it changes
+  useEffect(() => {
+    const n = sanitizeStoredPlayerName(preferredName?.trim() || '');
+    if (!n) return;
+    setPlayerNames((prev) => {
+      if (prev[0].trim()) return prev;
+      const next = [...prev];
+      next[0] = n;
+      return next;
+    });
+  }, [preferredName]);
   const difficultyStage: DifficultyStageId = 'H';
   const [enabledOperators, setEnabledOperators] = useState<Operation[]>(['+', '-', 'x', '÷']);
   const [allowNegativeTargets, setAllowNegativeTargets] = useState(false);
@@ -8519,18 +8825,15 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               isBot: true,
             },
           ]
-        : Array.from({ length: playerCount }, (_, i) => ({
-            name: i === 0 && effectiveSavedName
-              ? effectiveSavedName
-              : t('start.playerPlaceholder', { n: String(i + 1) }),
-            isBot: false,
-            progress: getStoredProgressForName(
-              storedProfiles,
-              i === 0 && effectiveSavedName
-                ? effectiveSavedName
-                : t('start.playerPlaceholder', { n: String(i + 1) })
-            ),
-          }));
+        : Array.from({ length: playerCount }, (_, i) => {
+            const typedName = playerNames[i]?.trim() || '';
+            const name = typedName || (i === 0 ? effectiveSavedName : '') || t('start.playerPlaceholder', { n: String(i + 1) });
+            return {
+              name,
+              isBot: false,
+              progress: getStoredProgressForName(storedProfiles, name),
+            };
+          });
     if (gameState.soundsEnabled !== false) {
       void playSfx('start', { cooldownMs: 250, volumeOverride: 0.4 });
     }
@@ -9011,20 +9314,21 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
   return (
     <View style={{ flex: 1, backgroundColor: 'transparent' }}>
       {/* כפתור חזרה + חוקים — בצד למעלה */}
-      <View style={{ position: 'absolute', top: TOP_ACTIONS_TOP, left: 16, right: 16, minHeight: TOP_ACTIONS_H, flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', zIndex: 20, flexWrap: 'wrap', gap: 5 }}>
-        {onBackToChoice && (
-          <LulosButton text={t('lobby.backToMode')} color="blue" width={120} height={32} fontSize={10} onPress={onBackToChoice} />
-        )}
-        {onHowToPlay && (
-          <LulosButton text={t('mode.howToPlay')} color="orange" width={100} height={32} fontSize={11} onPress={onHowToPlay} />
-        )}
-        {onShop && (
-          <LulosButton text={t('shop.openShop')} color="yellow" width={80} height={32} fontSize={11} onPress={onShop} />
-        )}
-        {onMyThemes && (
-          <LulosButton text={t('themes.openMyThemes')} color="yellow" width={80} height={32} fontSize={11} onPress={onMyThemes} />
-        )}
-        <LulosButton text={t('start.rulesButton')} color="blue" width={80} height={32} fontSize={11} onPress={() => setRulesOpen(true)} />
+      <View style={{ position: 'absolute', top: TOP_ACTIONS_TOP, left: 16, right: 16, minHeight: TOP_ACTIONS_H, zIndex: 20, alignItems: 'center' }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-start', gap: 8 }}>
+          {onBackToChoice && (
+            <LulosButton text={t('lobby.backToMode')} color="blue" width={104} height={30} fontSize={10} onPress={onBackToChoice} />
+          )}
+          {onHowToPlay && (
+            <LulosButton text={t('mode.howToPlay')} color="orange" width={132} height={34} fontSize={12} onPress={onHowToPlay} />
+          )}
+          <View style={{ alignItems: 'center', gap: 8 }}>
+            <LulosButton text={t('start.rulesButton')} color="blue" width={72} height={30} fontSize={10} onPress={() => setRulesOpen((prev) => !prev)} />
+            {onShop ? (
+              <LulosButton text={t('shop.openShop')} color="yellow" width={84} height={30} fontSize={11} onPress={onShop} />
+            ) : null}
+          </View>
+        </View>
       </View>
       <AppModal
         visible={rulesOpen}
@@ -9571,6 +9875,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
             width={220}
             height={48}
             fontSize={19}
+            testID="start-lets-play"
             onPress={() => {
               Keyboard.dismiss();
               startGame();
@@ -9583,7 +9888,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
       {/* קבלת פנים — רק כשההדרכה מופעלת */}
       {guidanceOn && (
         <View style={{ alignItems: 'center', paddingTop: 8, paddingHorizontal: 16 }}>
-          <Text style={{ color: '#4285F4', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{t('start.welcomeSalinda')}</Text>
+          <Text style={{ color: '#2DD4BF', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{t('start.welcomeSalinda')}</Text>
         </View>
       )}
       {/* סלינדה — מוצמדת מתחת לשורת הכפתורים העליונה (top + buttons + margin) */}
@@ -9671,12 +9976,43 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
               </TouchableOpacity>
             </View>
           </View>
+          {gameMode === 'pass-and-play' && (
+            <View style={{ paddingHorizontal: 14, paddingBottom: 14, gap: 7 }}>
+              {Array.from({ length: playerCount }, (_, i) => (
+                <TextInput
+                  key={i}
+                  placeholder={t('start.playerPlaceholder', { n: String(i + 1) })}
+                  placeholderTextColor="rgba(255,255,255,0.45)"
+                  value={playerNames[i] ?? ''}
+                  maxLength={7}
+                  onChangeText={(text) => {
+                    const next = [...playerNames];
+                    next[i] = text.slice(0, 7);
+                    setPlayerNames(next);
+                  }}
+                  style={{
+                    backgroundColor: 'rgba(0,0,0,0.25)',
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    color: '#FFF',
+                    fontSize: 14,
+                    fontWeight: '600',
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,255,255,0.2)',
+                    textAlign: isRTL ? 'right' : 'left',
+                    writingDirection: isRTL ? 'rtl' : 'ltr',
+                  }}
+                />
+              ))}
+            </View>
+          )}
           </LinearGradient>
           </WheelRow>
 
           {/* 3. טווח מספרים */}
           <WheelRow index={numberRangeWheelIndex}>
-          <LinearGradient colors={['#1a73e8', '#4285F4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+          <LinearGradient colors={['#B45309', '#F59E0B']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
           <View style={[hsS.row, hsS.rowRange]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.numberRange')}</Text>
             <View style={hsS.toggleGroup}>
@@ -9692,8 +10028,8 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
           </WheelRow>
 
           <WheelRow index={guidanceWheelIndex}>
-          <LinearGradient colors={['#7C3AED', '#A78BFA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
-          <View style={[hsS.row, hsS.rowRange]}>
+          <LinearGradient colors={['#0F766E', '#2DD4BF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hsS.rowGradientOuter}>
+          <View style={[hsS.row, hsS.rowGuidance]}>
             <Text style={hsS.rowLabel}>{t('start.wheel.guidanceRow')}</Text>
             <View style={hsS.toggleGroup}>
               {([
@@ -9757,7 +10093,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
 
         {/* Start button — למטה, ללא מסגרת/רקע נוסף סביב הכפתור */}
         <View style={{ marginTop: 40, marginBottom: 4, alignItems: 'center' }}>
-          <CasinoButton text={t('start.letsPlay')} width={220} height={48} fontSize={19} onPress={startGame} />
+          <CasinoButton text={t('start.letsPlay')} width={220} height={48} fontSize={19} testID="start-lets-play" onPress={startGame} />
         </View>
         <TouchableOpacity
           onLongPress={() => {
@@ -9774,7 +10110,7 @@ function StartScreen({ onBackToChoice, onHowToPlay, onShop, onMyThemes, preferre
       </View>
       <RNModal visible={guidancePromptOpen} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.68)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 }}>
-          <LinearGradient colors={['#7C3AED', '#2563EB', '#0EA5E9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ width: '100%', maxWidth: 360, borderRadius: 28, padding: 3 }}>
+          <LinearGradient colors={['#0F766E', '#14B8A6', '#99F6E4']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ width: '100%', maxWidth: 360, borderRadius: 28, padding: 3 }}>
             <View style={[alertBubbleStyle.box, { maxWidth: '100%', backgroundColor: 'rgba(15,23,42,0.96)', borderColor: 'rgba(255,255,255,0.18)', paddingVertical: 20, paddingHorizontal: 18 }]}>
               <Text style={[alertBubbleStyle.title, { color: '#FDE68A', fontSize: 22 }]}>{t('guidance.welcomeTitle')}</Text>
               <Text style={[alertBubbleStyle.body, { marginTop: 10, fontSize: 14, lineHeight: 22, color: '#E0F2FE' }]}>
@@ -9853,13 +10189,13 @@ const hsS = StyleSheet.create({
     backgroundColor: 'rgba(52,168,83,0.92)',
   },
   rowRange: {
-    backgroundColor: 'rgba(26,115,232,0.92)',
+    backgroundColor: 'rgba(180,83,9,0.92)',
   },
   rowFractions: { backgroundColor: 'rgba(66,133,244,0.92)' },
   rowPossibleResults: { backgroundColor: 'rgba(234,67,53,0.92)' },
   rowSolveExercise: { backgroundColor: 'rgba(52,168,83,0.92)' },
   rowTimer: { backgroundColor: 'rgba(234,67,53,0.92)' },
-  rowGuidance: { backgroundColor: 'rgba(26,115,232,0.92)' },
+  rowGuidance: { backgroundColor: 'rgba(15,118,110,0.92)' },
   /** מיכל לגלגלת טיימר — snapFocus=leading מצמיד את הצ'יפ הצהוב ליד התווית */
   timerWheelWrap: { flex: 1, minWidth: 0, marginStart: 4 },
   /** קטעים במודאל «מתקדמים» */
@@ -10164,60 +10500,42 @@ function BotDifficultySettingsBlock({
 //  TURN TRANSITION
 // ═══════════════════════════════════════════════════════════════
 
-// מוקאפ שם שחקן — מופיע פעם אחת, נשמר ב־AsyncStorage ולא מופיע שוב
-const PLAYER_NAME_MODAL_SEEN_KEY = 'lulos_player_name_modal_seen';
 /** שם השחקן האנושי — נשמר אחרי הזנה ראשונה, משמש ב-startGame כדי לא לחזור ל-"שחקן 1". */
 const PLAYER_SAVED_NAME_KEY = 'lulos_player_saved_name';
 const PLAYER_PROFILES_STORAGE_KEY = 'lulos_player_profiles_v1';
 
-/** האם השם הוא ברירת מחדל (שחקן N) — אם כן, תמיד להציג את המוקאפ גם אם המפתח נשמר (ועדת חקירה: מונע "הוא לא מופיע") */
+/** האם השם הוא ברירת מחדל (שחקן N). */
 function isDefaultPlayerName(name: string): boolean {
   const n = (name || '').trim();
   return /^שחקן \d+$/.test(n) || /^Player \d+$/i.test(n);
 }
 
-/** מוקאפ חדש להכנסת שם — מנהל visibility בעצמו מ־AsyncStorage, state מקומי לשם בלבד (לא סוגר בהקלדה). forceOpen = פתיחה מכפתור במסך השחקן */
+/** מודל עריכת שם שנפתח רק בפעולה מפורשת מה-UI. */
 function PlayerNameModal({
   initialName,
   playerSlot,
   onConfirm,
-  forceOpen,
   onClose,
 }: {
   initialName: string;
   /** 1-based — אם השדה ריק באישור, שם ברירת מחדל: "שחקן {playerSlot}" */
   playerSlot: number;
   onConfirm: (name: string) => void;
-  forceOpen?: boolean;
   onClose?: () => void;
 }) {
   const { t } = useLocale();
-  const [show, setShow] = useState<boolean>(true);
   const [name, setName] = useState(initialName);
 
   useEffect(() => {
     sendDebugLog('H5', 'index.tsx:PlayerNameModal.useEffect', 'PlayerNameModal state', {
-      show,
       initialName,
-      forceOpen: Boolean(forceOpen),
       playerSlot,
     });
-  }, [show, initialName, forceOpen, playerSlot]);
+  }, [initialName, playerSlot]);
 
   useEffect(() => {
-    if (forceOpen) {
-      setShow(true);
-      return;
-    }
-    AsyncStorage.getItem(PLAYER_NAME_MODAL_SEEN_KEY).then((v) => {
-      // אחרי אישור (גם בלי להקליד שם) לא חוזרים על המודל — מספיק "נראה" ב־AsyncStorage
-      setShow(v !== 'true');
-    });
-  }, [initialName, forceOpen]);
-
-  useEffect(() => {
-    if (show) setName(initialName);
-  }, [show, initialName]);
+    setName(initialName);
+  }, [initialName]);
 
   const handleConfirm = () => {
     const trimmed = name.trim();
@@ -10229,7 +10547,6 @@ function PlayerNameModal({
       fallback,
       finalName,
     });
-    AsyncStorage.setItem(PLAYER_NAME_MODAL_SEEN_KEY, 'true');
     // Persist the name for future games so startGame uses it instead of
     // reverting to "שחקן 1" every time.
     void AsyncStorage.setItem(PLAYER_SAVED_NAME_KEY, finalName);
@@ -10238,18 +10555,14 @@ function PlayerNameModal({
         { name: finalName, isBot: false, ...zeroStoredPlayerProgress() },
       ], finalName)))
       .catch(() => {});
-    setShow(false);
     onConfirm(finalName);
     onClose?.();
   };
 
   const handleRequestClose = () => {
-    setShow(false);
     onClose?.();
     Keyboard.dismiss();
   };
-
-  if (!show) return null;
 
   return (
     <RNModal transparent animationType="fade" onRequestClose={handleRequestClose} statusBarTranslucent visible={true}>
@@ -10383,8 +10696,27 @@ const playerTurnChipActiveRing = {
 } as const;
 
 const START_TURN_TIMER_SECONDS = 15;
+const SLINDA_SELECTION_TIMER_SECONDS = 10;
 
-function StartTurnCountdownCircle({ deadlineAt, size = 74, soundEnabled = true, containerStyle, labelStyle, showLabel = true }: { deadlineAt: number | null; size?: number; soundEnabled?: boolean; containerStyle?: any; labelStyle?: any; showLabel?: boolean }) {
+function StartTurnCountdownCircle({
+  deadlineAt,
+  size = 74,
+  soundEnabled = true,
+  containerStyle,
+  labelStyle,
+  showLabel = true,
+  totalSeconds = START_TURN_TIMER_SECONDS,
+  labelText,
+}: {
+  deadlineAt: number | null;
+  size?: number;
+  soundEnabled?: boolean;
+  containerStyle?: any;
+  labelStyle?: any;
+  showLabel?: boolean;
+  totalSeconds?: number;
+  labelText?: string;
+}) {
   const { t } = useLocale();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const tickLastSecondRef = useRef<number | null>(null);
@@ -10402,7 +10734,7 @@ function StartTurnCountdownCircle({ deadlineAt, size = 74, soundEnabled = true, 
     return () => clearInterval(id);
   }, [deadlineAt]);
 
-  const totalMs = START_TURN_TIMER_SECONDS * 1000;
+  const totalMs = totalSeconds * 1000;
   const remainingMs = deadlineAt == null ? 0 : Math.max(0, deadlineAt - nowMs);
   const progress = Math.max(0, Math.min(1, remainingMs / totalMs));
   const sec = Math.ceil(remainingMs / 1000);
@@ -10456,7 +10788,7 @@ function StartTurnCountdownCircle({ deadlineAt, size = 74, soundEnabled = true, 
         </View>
       </View>
       {showLabel && (
-        <Text style={[{ color: '#FDE68A', fontSize: 11, fontWeight: '700', marginTop: 4 }, labelStyle]}>{t('ui.turnTimerLabel')}</Text>
+        <Text style={[{ color: '#FDE68A', fontSize: 11, fontWeight: '700', marginTop: 4 }, labelStyle]}>{labelText ?? t('ui.turnTimerLabel')}</Text>
       )}
     </View>
   );
@@ -10518,9 +10850,34 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { t, isRTL } = useLocale();
   const ta = isRTL ? 'right' : 'left';
   const { state, dispatch } = useGame();
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
+  const turnScreenWidth = webGameLayout?.viewportWidth ?? SCREEN_W;
+  const turnHeaderLift = Platform.OS === 'web' ? 0 : -65;
+  const handBottomOffset = webGameLayout?.handBottom ?? HAND_BOTTOM_OFFSET;
+  const handInnerHeight = webGameLayout?.fanViewportHeight ?? HAND_INNER_HEIGHT;
+  const handStripHeight = webGameLayout?.handStripHeight ?? HAND_STRIP_HEIGHT;
+  const goldActionButtonTop = webGameLayout?.goldActionButtonTop ?? GOLD_ACTION_BUTTON_TOP;
+  const compactWebHud = Platform.OS === 'web';
+  const hudButtonWidth = compactWebHud ? clamp(Math.round(turnScreenWidth * 0.05), 64, 70) : 72;
+  const hudButtonHeight = compactWebHud ? 30 : 32;
+  const hudButtonFontSize = compactWebHud ? 10 : 11;
+  const hudSoundButtonWidth = compactWebHud ? 52 : 56;
+  const hudSoundFontSize = compactWebHud ? 13 : 14;
+  const hudCoinWidth = compactWebHud ? clamp(Math.round(turnScreenWidth * 0.056), 72, 78) : 78;
+  const hudCoinHeight = compactWebHud ? 38 : 42;
+  const hudCoinRadius = hudCoinHeight / 2;
+  const hudCoinInnerRadius = Math.max(0, hudCoinRadius - 2);
+  const hudCoinGap = compactWebHud ? 4 : 6;
+  const hudCoinIconSize = compactWebHud ? 16 : 18;
+  const hudCoinFontSize = compactWebHud ? 15 : 16;
+  const turnPlayerChipWidth = compactWebHud ? clamp(Math.round(turnScreenWidth * 0.08), 102, 114) : 124;
+  const turnPlayerChipHeight = compactWebHud ? 58 : 64;
+  const turnPlayerChipFontSize = compactWebHud ? 13 : 14;
+  const turnMoreButtonSize = compactWebHud ? 48 : 56;
   const soundOn = state.soundsEnabled !== false;
   const mp = useMultiplayerOptional();
-  const { profile } = useAuth();
+  const { profile, consumeSlinda } = useAuth();
   const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
   const [storedPlayerProfiles, setStoredPlayerProfiles] = useState<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
   const cp = state.players[state.currentPlayerIndex];
@@ -10549,6 +10906,12 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const lastPlayerBubbleColor = PLAYER_BUBBLE_COLORS[lastPlayerIndex % PLAYER_BUBBLE_COLORS.length];
   const lastPlayerBorderColor = PLAYER_BUBBLE_BORDER_COLORS[lastPlayerIndex % PLAYER_BUBBLE_BORDER_COLORS.length];
   const [tooltipCard, setTooltipCard] = useState<Card | null>(null);
+  const [slindaModalOpen, setSlindaModalOpen] = useState(false);
+  const [slindaSelectedCardId, setSlindaSelectedCardId] = useState<string | null>(null);
+  const [slindaBusy, setSlindaBusy] = useState(false);
+  const [slindaError, setSlindaError] = useState<string | null>(null);
+  const [slindaDeadlineAt, setSlindaDeadlineAt] = useState<number | null>(null);
+  const [pausedStartTurnRemainingMs, setPausedStartTurnRemainingMs] = useState<number | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [onlineBotDiffOpen, setOnlineBotDiffOpen] = useState(false);
   const [cardsCatalogOpen, setCardsCatalogOpen] = useState(false);
@@ -10660,29 +11023,26 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
     turnPlayerIdxRef.current = state.currentPlayerIndex;
   }, [state.phase, state.currentPlayerIndex]);
   useEffect(() => {
-    if (state.phase !== 'turn-transition') {
+    const canRunLocalStartTurnTimer =
+      state.phase === 'turn-transition' &&
+      !isOnlineSpectator &&
+      !isLocalBotTurn &&
+      !mp?.gameOverride;
+    if (!canRunLocalStartTurnTimer) {
       setLocalStartTurnDeadlineAt(null);
+      setPausedStartTurnRemainingMs(null);
       startTurnTimeoutFiredRef.current = false;
       return;
     }
-    if (isOnlineSpectator) {
-      setLocalStartTurnDeadlineAt(null);
-      startTurnTimeoutFiredRef.current = false;
+    if (slindaModalOpen) {
       return;
     }
-    if (isLocalBotTurn) {
-      setLocalStartTurnDeadlineAt(null);
+    if (localStartTurnDeadlineAt == null) {
       startTurnTimeoutFiredRef.current = false;
+      setLocalStartTurnDeadlineAt(Date.now() + START_TURN_TIMER_SECONDS * 1000);
       return;
     }
-    if (mp?.gameOverride) {
-      setLocalStartTurnDeadlineAt(null);
-      startTurnTimeoutFiredRef.current = false;
-      return;
-    }
-    const deadline = Date.now() + START_TURN_TIMER_SECONDS * 1000;
-    setLocalStartTurnDeadlineAt(deadline);
-    startTurnTimeoutFiredRef.current = false;
+    const deadline = localStartTurnDeadlineAt;
     const id = setInterval(() => {
       if (startTurnTimeoutFiredRef.current) return;
       if (Date.now() < deadline) return;
@@ -10691,7 +11051,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       setLocalStartTurnDeadlineAt(null);
     }, 180);
     return () => clearInterval(id);
-  }, [state.phase, state.currentPlayerIndex, state.roundsPlayed, isOnlineSpectator, isLocalBotTurn, mp?.gameOverride, dispatch]);
+  }, [state.phase, state.currentPlayerIndex, isOnlineSpectator, isLocalBotTurn, mp?.gameOverride, slindaModalOpen, localStartTurnDeadlineAt, dispatch]);
   const startTurnDeadlineAt = state.isTutorial ? null : (isLocalBotTurn ? null : (isMyTurnOnline ? (state.turnDeadlineAt ?? null) : localStartTurnDeadlineAt));
   const showSmallTurnTimerHint = !state.isTutorial && state.roundsPlayed < TURN_TIMER_HINT_UNTIL_ROUNDS_PLAYED;
   useEffect(() => {
@@ -10830,11 +11190,95 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           ? '1:30'
           : null;
   const compactPlayerScreen = state.roundsPlayed > 0;
+  const slindaOwned = profile?.slinda_owned === true;
+  const showSlindaSlot = slindaOwned && !state.isTutorial && !isOnlineSpectator && !isLocalBotTurn && !mp?.gameOverride;
+  const sorted = useMemo(() => (cp ? sortHandCards(cp.hand) : []), [cp]);
+  const slindaModalLocked = slindaModalOpen || slindaBusy;
+  const slindaSelectedCard = slindaSelectedCardId
+    ? sorted.find((card) => card.id === slindaSelectedCardId) ?? null
+    : null;
+
+  const resumePausedStartTurnTimer = useCallback(() => {
+    if (pausedStartTurnRemainingMs == null) return;
+    const remainingMs = pausedStartTurnRemainingMs;
+    setPausedStartTurnRemainingMs(null);
+    if (
+      state.phase === 'turn-transition' &&
+      !isOnlineSpectator &&
+      !isLocalBotTurn &&
+      !mp?.gameOverride &&
+      remainingMs > 0
+    ) {
+      startTurnTimeoutFiredRef.current = false;
+      setStartTurnNowMs(Date.now());
+      setLocalStartTurnDeadlineAt(Date.now() + remainingMs);
+    }
+  }, [pausedStartTurnRemainingMs, state.phase, isOnlineSpectator, isLocalBotTurn, mp?.gameOverride]);
+
+  const openSlindaModal = useCallback(() => {
+    if (!showSlindaSlot || slindaBusy) return;
+    if (localStartTurnDeadlineAt != null) {
+      setPausedStartTurnRemainingMs(Math.max(0, localStartTurnDeadlineAt - Date.now()));
+      setLocalStartTurnDeadlineAt(null);
+    }
+    setTooltipCard(null);
+    setSlindaSelectedCardId(null);
+    setSlindaError(null);
+    setSlindaDeadlineAt(Date.now() + SLINDA_SELECTION_TIMER_SECONDS * 1000);
+    setSlindaModalOpen(true);
+  }, [localStartTurnDeadlineAt, showSlindaSlot, slindaBusy]);
+
+  const closeSlindaModal = useCallback(() => {
+    if (slindaBusy) return;
+    setSlindaModalOpen(false);
+    setSlindaSelectedCardId(null);
+    setSlindaError(null);
+    setSlindaDeadlineAt(null);
+    resumePausedStartTurnTimer();
+  }, [resumePausedStartTurnTimer, slindaBusy]);
+
+  const handleConfirmSlinda = useCallback(async () => {
+    if (!slindaSelectedCardId || slindaBusy) return;
+    setSlindaBusy(true);
+    setSlindaError(null);
+    const result = await consumeSlinda();
+    if (result === 'ok') {
+      if (tooltipCard?.id === slindaSelectedCardId) setTooltipCard(null);
+      dispatch({ type: 'REPLACE_CARD_WITH_SLINDA', cardId: slindaSelectedCardId });
+      setSlindaModalOpen(false);
+      setSlindaSelectedCardId(null);
+      setSlindaDeadlineAt(null);
+      resumePausedStartTurnTimer();
+    } else {
+      setSlindaError(t(result === 'not_owned' ? 'slindaBank.notOwned' : 'slindaBank.consumeError'));
+    }
+    setSlindaBusy(false);
+  }, [consumeSlinda, dispatch, resumePausedStartTurnTimer, slindaBusy, slindaSelectedCardId, t, tooltipCard]);
+
+  useEffect(() => {
+    if (!slindaModalOpen) return;
+    if (state.phase === 'turn-transition' && showSlindaSlot) return;
+    setSlindaModalOpen(false);
+    setSlindaSelectedCardId(null);
+    setSlindaError(null);
+    setSlindaDeadlineAt(null);
+    setPausedStartTurnRemainingMs(null);
+  }, [slindaModalOpen, showSlindaSlot, state.phase]);
+
+  useEffect(() => {
+    if (!slindaModalOpen || slindaDeadlineAt == null || slindaBusy) return;
+    const id = setInterval(() => {
+      if (Date.now() < slindaDeadlineAt) return;
+      setSlindaModalOpen(false);
+      setSlindaSelectedCardId(null);
+      setSlindaError(null);
+      setSlindaDeadlineAt(null);
+      resumePausedStartTurnTimer();
+    }, 180);
+    return () => clearInterval(id);
+  }, [resumePausedStartTurnTimer, slindaBusy, slindaDeadlineAt, slindaModalOpen]);
 
   if (!cp) return null;
-
-  // Sort cards identically to PlayerHand
-  const sorted = sortHandCards(cp.hand);
 
   const getCardTooltip = (card: Card): string => {
     switch (card.type) {
@@ -10864,9 +11308,9 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   // בדיקת פריסת יד (פיתוח בלבד)
   devCheckHandLayout();
   const HEADER_PAD = 0;
-  const BTN_STRIP_H = HAND_BOTTOM_OFFSET;
+  const BTN_STRIP_H = handBottomOffset;
   return (
-    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }} collapsable={false}>
+    <View style={{ flex: 1, width: turnScreenWidth, minHeight: 0, overflow: 'visible' }} collapsable={false}>
       {/* רקע נפרד ממסך המשחק — מסך המשחק משתמש ב־bg.jpg; כאן מעבר כחול כדי שלא ייראה כמו אותו מסך.
           בטוטוריאל אנחנו מחליפים לכהה אטום כדי שלא יציץ כחול שקוף סביב המניפה. */}
       {state.isTutorial ? (
@@ -10880,24 +11324,27 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           style={[StyleSheet.absoluteFillObject, { zIndex: 300, backgroundColor: 'transparent' }]}
         />
       ) : null}
-      <View style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}>
+      <View
+        pointerEvents={slindaModalLocked ? 'none' : 'auto'}
+        style={{ flex: 1, paddingTop: HEADER_PAD, paddingBottom: Math.max(safeBottom, 20), overflow: 'visible' }}
+      >
       {/* ── Header — מצב נקי אחרי תור ראשון: רק יציאה/טורניר/מד ושחקנים ── */}
       <View pointerEvents="box-none" style={{flexDirection:'row',alignItems:'flex-start',justifyContent:'space-between',paddingHorizontal:12,paddingTop: safe.top || 6,paddingBottom:6}}>
         {!state.isTutorial ? (
-        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:-65}}>
-          <LulosButton text={t('ui.exitGame')} color="red" width={72} height={32} fontSize={11} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
+        <View style={{flexShrink:0,flexDirection:'column',alignItems:'center',gap:0,marginTop:turnHeaderLift}}>
+          <LulosButton text={t('ui.exitGame')} color="red" width={hudButtonWidth} height={hudButtonHeight} fontSize={hudButtonFontSize} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
           {!state.isTutorial && (
-            <LulosButton text={t('ui.tournament')} color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
+            <LulosButton text={t('ui.tournament')} color="orange" width={hudButtonWidth} height={hudButtonHeight} fontSize={hudButtonFontSize} onPress={() => setTournamentInfoOpen((prev) => !prev)} style={{ marginBottom: -8 }} />
           )}
           {!state.isTutorial && onOpenShop ? (
             <TouchableOpacity
               activeOpacity={0.9}
               onPress={onOpenShop}
               style={{
-                width: 78,
-                height: 42,
+                width: hudCoinWidth,
+                height: hudCoinHeight,
                 marginBottom: -6,
-                borderRadius: 21,
+                borderRadius: hudCoinRadius,
                 borderWidth: 2,
                 borderColor: '#FDE68A',
                 overflow: 'hidden',
@@ -10914,26 +11361,37 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                 end={{ x: 0.92, y: 1 }}
                 style={{
                   flex: 1,
-                  borderRadius: 19,
+                  borderRadius: hudCoinInnerRadius,
                   flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 6,
+                  gap: hudCoinGap,
                 }}
               >
-                <SlindaCoin size={18} />
-                <Text style={{ color: '#5B2D00', fontSize: 16, fontWeight: '900' }}>{totalCoins}</Text>
+                <SlindaCoin size={hudCoinIconSize} />
+                <Text style={{ color: '#5B2D00', fontSize: hudCoinFontSize, fontWeight: '900' }}>{totalCoins}</Text>
               </LinearGradient>
             </TouchableOpacity>
           ) : null}
-          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={() => dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: !soundOn })} />
+          <LulosButton
+            text={soundOn ? '🔊' : '🔇'}
+            color="blue"
+            width={hudSoundButtonWidth}
+            height={hudButtonHeight}
+            fontSize={hudSoundFontSize}
+            onPress={() => {
+              const next = !soundOn;
+              dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: next });
+              AsyncStorage.setItem('lulos_sounds_enabled', next ? 'true' : 'false');
+            }}
+          />
           {!state.isTutorial && (() => {
             const meterPlayer =
               (cp && !cp.isBot ? cp : null) ??
               state.players.find(p => !p.isBot) ??
               (state.players.length === 1 ? state.players[0] : null);
             return meterPlayer ? (
-              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -11 }}>
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: compactWebHud ? -6 : -11 }}>
                 <ExcellenceMeter
                   value={meterPlayer.courageMeterPercent ?? 0}
                   pulseKey={meterPlayer.courageRewardPulseId ?? 0}
@@ -10945,7 +11403,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           })()}
         </View>
         ) : null}
-        <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-end',gap:2,flex:1,minWidth:0,marginTop:-65,marginLeft:8}}>
+        <View pointerEvents="box-none" style={{flexDirection:'column',alignItems:'flex-end',gap:2,flex:1,minWidth:0,marginTop:turnHeaderLift,marginLeft:8}}>
           {/* תגי מידע (שברים/טיימר/פתרון תרגיל) הועברו לטורניר — שורות 446, 458, 461 ב-TournamentInfoModal */}
           <View style={{flexDirection:'row-reverse',alignItems:'center',gap:4,flexWrap:'wrap',justifyContent:'flex-end',alignSelf:'flex-end',marginTop:2,marginRight:4}}>
             {!state.isTutorial && displayPlayers.map((p) => {
@@ -10956,9 +11414,9 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                 <LulosButton
                   text={btnText}
                   color={isCurrent ? 'green' : 'blue'}
-                  width={124}
-                  height={64}
-                  fontSize={14}
+                  width={turnPlayerChipWidth}
+                  height={turnPlayerChipHeight}
+                  fontSize={turnPlayerChipFontSize}
                   onPress={() => {
                     if (!p.isBot) return;
                     if (!isDefaultPlayerName(p.name)) return;
@@ -10983,11 +11441,16 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
               );
             })}
             {hasMorePlayers && (
-              <TouchableOpacity onPress={() => setShowAllPlayers(true)} style={{marginLeft:4,width:56,height:56,borderRadius:28,backgroundColor:'rgba(255,255,255,0.2)',alignItems:'center',justifyContent:'center'}}>
-                <Text style={{fontSize:28,fontWeight:'700',color:'#FFF'}}>+</Text>
+              <TouchableOpacity onPress={() => setShowAllPlayers(true)} style={{marginLeft:4,width:turnMoreButtonSize,height:turnMoreButtonSize,borderRadius:turnMoreButtonSize / 2,backgroundColor:'rgba(255,255,255,0.2)',alignItems:'center',justifyContent:'center'}}>
+                <Text style={{fontSize:compactWebHud ? 24 : 28,fontWeight:'700',color:'#FFF'}}>+</Text>
               </TouchableOpacity>
             )}
           </View>
+          {showSlindaSlot ? (
+            <View style={{ alignSelf: 'flex-end', marginTop: 9, marginRight: 4 }}>
+              <SlindaMiniCardButton onPress={openSlindaModal} disabled={slindaModalLocked} testID="turn-slinda-open" />
+            </View>
+          ) : null}
         </View>
       </View>
       {!compactPlayerScreen && turnTimerBannerValue && (
@@ -11010,7 +11473,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           playersCount: state.players.length,
           diceModeLabel: state.diceMode === '2' ? '2 קוביות' : '3 קוביות',
         }}
-        onOpenRules={() => setRulesOpen(true)}
+        onOpenRules={() => setRulesOpen((prev) => !prev)}
         settings={{
           mathRangeMax: state.mathRangeMax,
           showFractions: state.showFractions,
@@ -11024,7 +11487,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         }}
       />
 
-      <View style={{flex:1,paddingBottom:BTN_STRIP_H + HAND_STRIP_HEIGHT}}>
+      <View style={{flex:1,paddingBottom:BTN_STRIP_H + handStripHeight}}>
       {/* ── מידע — הודעות וטולטיפ (תגיות הועברו ל־Header) ── */}
       <View style={{flex:1,minHeight:60,paddingHorizontal:24,alignItems:'center',justifyContent:'center'}}>
         {(!compactPlayerScreen || !!state.lastMoveMessage || state.lastDiscardCount === 1) ? (
@@ -11291,8 +11754,11 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       </View>
 
       {/* מניפה: AppShell ללא paddingBottom — התחתית היא כבר פיזית; בלי bottom שלילי (הוא היה מיועד לשילוב עם AppShell מרופד) */}
-      <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT, zIndex: 5 }} pointerEvents="box-none">
-        <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12 }}>
+      <View
+        style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: handBottomOffset + handStripHeight, zIndex: 5 }}
+        pointerEvents={slindaModalLocked ? 'none' : 'box-none'}
+      >
+        <View style={{ position: 'absolute', bottom: handBottomOffset, left: 0, right: 0, height: handStripHeight, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12 }}>
           {isOnlineSpectator ? (
             <Text style={{ color: '#93C5FD', fontSize: 15, fontWeight: '700', textAlign: 'center', lineHeight: 24, paddingHorizontal: 16 }}>
               תור של {cp?.name ?? 'שחקן'} — בהמשך המשחק הקלפים מוצגים רק אצל השחקן בתור. מעבר לשלב הבא יתבצע אחרי שהשחקן יאשר.
@@ -11304,7 +11770,7 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                   👇
                 </Text>
               )}
-              <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
+              <View style={{ height: handInnerHeight, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
                 <SimpleHand
                   cards={sorted}
                   stagedCardIds={emptySet}
@@ -11338,13 +11804,13 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           pointerEvents="box-none"
           style={{
             position: 'absolute',
-            top: GOLD_ACTION_BUTTON_TOP,
+            top: goldActionButtonTop,
             left: 0,
             right: 0,
             // Must sit above NotificationZone (zIndex 9999) so notifications
             // never block the "I'm ready" button.
             zIndex: 10001,
-            ...(Platform.OS === 'android' ? { elevation: 10001 } : {}),
+            ...(Platform.OS === 'android' ? { elevation: 24 } : {}),
             alignItems: 'center',
           }}
         >
@@ -11355,7 +11821,8 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                 width={220}
                 height={48}
                 fontSize={17}
-                disabled={false}
+                disabled={slindaModalLocked}
+                testID="turn-im-ready"
                 leadingContent={
                   startTurnDeadlineAt != null && !state.isTutorial ? (
                     <View style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -11389,6 +11856,83 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           </View>
         </View>
       )}
+
+      <AppModal visible={slindaModalOpen} onClose={closeSlindaModal} title={t('slindaBank.modalTitle')} testID="slinda-modal">
+        <View style={{ flex: 1, minHeight: 0 }}>
+          <View style={{ alignItems: 'center', marginBottom: 12 }}>
+            <HappyBubble
+              tone="welcome"
+              title={t('slindaBank.bubbleTitle')}
+              text={t('slindaBank.bubbleBody')}
+              withTail={false}
+              maxWidth={340}
+            />
+          </View>
+          <View style={{ alignItems: 'center', marginBottom: 6 }}>
+            <StartTurnCountdownCircle
+              deadlineAt={slindaDeadlineAt}
+              size={64}
+              soundEnabled={soundOn}
+              totalSeconds={SLINDA_SELECTION_TIMER_SECONDS}
+              labelText={t('slindaBank.timerLabel')}
+              containerStyle={{ marginBottom: 0 }}
+            />
+          </View>
+          <Text style={{ color: '#FDE68A', fontSize: 12, fontWeight: '800', textAlign: 'center', marginBottom: 14 }}>
+            {slindaSelectedCard ? t('slindaBank.confirm') : t('slindaBank.pickCard')}
+          </Text>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, paddingBottom: 8 }}
+          >
+            {sorted.map((card) => {
+              const selected = slindaSelectedCardId === card.id;
+              return (
+                <View key={card.id} style={{ width: 112, alignItems: 'center', marginBottom: 10 }}>
+                  <GameCard
+                    card={card}
+                    small
+                    selected={selected}
+                    testID={`slinda-option-${card.id}`}
+                    onPress={() => {
+                      if (slindaBusy) return;
+                      setSlindaSelectedCardId((prev) => (prev === card.id ? null : card.id));
+                      setSlindaError(null);
+                    }}
+                  />
+                </View>
+              );
+            })}
+          </ScrollView>
+          {slindaError ? (
+            <View style={{ marginTop: 8, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(248,113,113,0.6)', backgroundColor: 'rgba(127,29,29,0.32)' }}>
+              <Text style={{ color: '#FECACA', fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{slindaError}</Text>
+            </View>
+          ) : null}
+          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginTop: 14 }}>
+            <LulosButton
+              text={t('ui.cancel')}
+              color="blue"
+              width={112}
+              height={38}
+              fontSize={12}
+              disabled={slindaBusy}
+              testID="slinda-cancel"
+              onPress={closeSlindaModal}
+            />
+            <LulosButton
+              text={slindaBusy ? '...' : t('slindaBank.confirm')}
+              color="yellow"
+              width={162}
+              height={38}
+              fontSize={12}
+              disabled={!slindaSelectedCardId || slindaBusy}
+              testID="slinda-confirm"
+              onPress={() => { void handleConfirmSlinda(); }}
+            />
+          </View>
+        </View>
+      </AppModal>
 
       <AppModal
         visible={rulesOpen}
@@ -11430,17 +11974,12 @@ function TurnTransition({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         }}
       />
 
-      {/* Name modal suppressed in vs-bot AND online — users enter their name once
-          in ChoiceScreen/Lobby. Pass-and-play still auto-prompts each player.
-          The chip in the header still opens the modal manually via nameModalOpen. */}
-      {cp && !state.isTutorial && (
-        (!state.botConfig && !mp?.gameOverride) || nameModalOpen
-      ) && (
+      {/* Name modal opens only from an explicit UI action, not during turn transitions. */}
+      {cp && !state.isTutorial && nameModalOpen && (
         <PlayerNameModal
           initialName={(editingPlayerIndex != null ? state.players[editingPlayerIndex]?.name : cp.name) ?? cp.name}
           playerSlot={(editingPlayerIndex ?? currentIdx) + 1}
           onConfirm={handlePlayerNameConfirm}
-          forceOpen={nameModalOpen}
           onClose={() => {
             setNameModalOpen(false);
             setEditingPlayerIndex(null);
@@ -11497,8 +12036,9 @@ function PlayerSidebar({
   setCardsCatalogOpen: (v: boolean) => void;
   showRulesButtonInSidebar?: boolean;
 }) {
-  const { t } = useLocale();
+  const { t, isRTL } = useLocale();
   const { state } = useGame();
+  const androidStableDirection = Platform.OS === 'android' && isRTL ? ('ltr' as const) : undefined;
   const [showAll, setShowAll] = useState(false);
   const [historyPlayerId, setHistoryPlayerId] = useState<number | null>(null);
   const cp = state.players[state.currentPlayerIndex];
@@ -11507,6 +12047,15 @@ function PlayerSidebar({
     [state.players, state.currentPlayerIndex, showAll]
   );
   const hasMore = state.players.length > COLLAPSED_PLAYER_CHIP_COUNT && !showAll;
+  const compactWebHud = Platform.OS === 'web';
+  const playerChipWidth = compactWebHud ? 68 : 72;
+  const playerChipHeight = compactWebHud ? 30 : 32;
+  const playerChipFontSize = compactWebHud ? 9 : 10;
+  const meterWidth = compactWebHud ? 60 : 66;
+  const rulesButtonWidth = compactWebHud ? 82 : 90;
+  const rulesButtonHeight = compactWebHud ? 34 : 38;
+  const rulesButtonFontSize = compactWebHud ? 11 : 13;
+  const moreButtonSize = compactWebHud ? 26 : 28;
 
   const historyPlayerIndex = historyPlayerId != null
     ? state.players.findIndex((p) => p.id === historyPlayerId)
@@ -11516,10 +12065,10 @@ function PlayerSidebar({
   const totalDiscarded = playerMoves.reduce((s, e) => s + e.cardsDiscarded, 0);
 
   return (
-    <View style={{ flex: 1, minWidth: 0, alignItems: 'flex-end' }}>
+    <View style={{ flex: 1, minWidth: 0, alignItems: 'flex-end', ...(androidStableDirection ? { direction: androidStableDirection } : null) }}>
       {/* שורה אחת: שבבי שחקנים + חוקים — כדי שלא ישתלבו כמה ילדים ב־space-between מול יציאה (בעיה שנראית במולטיפלייר) */}
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', minWidth: 0 }}>
-        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 0, flexWrap: 'nowrap', minWidth: 0 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-end', minWidth: 0, ...(androidStableDirection ? { direction: androidStableDirection } : null) }}>
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 0, flexWrap: 'nowrap', minWidth: 0, ...(androidStableDirection ? { direction: androidStableDirection } : null) }}>
           {visible.map((p) => {
             const isCurrent = cp?.id === p.id;
             const shortName = p.name.length > 5 ? p.name.slice(0, 4) + '…' : p.name;
@@ -11529,14 +12078,14 @@ function PlayerSidebar({
                 <LulosButton
                   text={`${shortName} ${p.hand.length}`}
                   color={isCurrent ? 'green' : 'blue'}
-                  width={72}
-                  height={32}
-                  fontSize={10}
+                  width={playerChipWidth}
+                  height={playerChipHeight}
+                  fontSize={playerChipFontSize}
                   onPress={() => {}}
                 />
                 {/* מד היצטיינות: בר אופקי + מטבע סלינדה */}
-                <View style={{ width: 66, gap: 2 }}>
-                  <View style={{ width: 66, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
+                <View style={{ width: meterWidth, gap: 2 }}>
+                  <View style={{ width: meterWidth, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
                     <View style={{ width: `${meterPct}%`, height: 4, borderRadius: 2, backgroundColor: meterPct >= 66 ? '#F59E0B' : meterPct >= 33 ? '#34D399' : '#60A5FA' }} />
                   </View>
                 </View>
@@ -11548,14 +12097,14 @@ function PlayerSidebar({
             return <View key={p.id} style={{ opacity: 0.45 }}>{chip}</View>;
           })}
           {hasMore && (
-            <TouchableOpacity onPress={() => setShowAll(true)} style={{ marginRight: 4, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+            <TouchableOpacity onPress={() => setShowAll(true)} style={{ marginRight: 4, width: moreButtonSize, height: moreButtonSize, borderRadius: moreButtonSize / 2, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#FFF' }}>+</Text>
             </TouchableOpacity>
           )}
         </View>
         {showRulesButtonInSidebar ? (
           <View style={{ flexShrink: 0 }}>
-            <LulosButton text={t('start.rulesButton')} color="blue" width={90} height={38} fontSize={13} onPress={() => setRulesOpen(true)} />
+            <LulosButton text={t('start.rulesButton')} color="blue" width={rulesButtonWidth} height={rulesButtonHeight} fontSize={rulesButtonFontSize} onPress={() => setRulesOpen(!rulesOpen)} />
           </View>
         ) : null}
       </View>
@@ -11641,9 +12190,9 @@ async function clearAllLulosOnboardingKeys(): Promise<void> {
     'lulos_guidance_notifications',
     CARD_HINT_JOKER_SEEN_KEY,
     CARD_HINT_OP_SEEN_KEY,
-    // NOTE: PLAYER_NAME_MODAL_SEEN_KEY and PLAYER_SAVED_NAME_KEY are
-    // deliberately excluded — player's name is personal data, not guidance
-    // state. Resetting guidance shouldn't erase the entered name.
+    // NOTE: PLAYER_SAVED_NAME_KEY is deliberately excluded — player's name
+    // is personal data, not guidance state. Resetting guidance shouldn't
+    // erase the entered name.
   ];
   await AsyncStorage.multiRemove(keys);
 }
@@ -11653,22 +12202,82 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const { t, isRTL } = useLocale();
   const { profile, awardCoins } = useAuth();
   const { table, background, activeTableSkin } = useActiveTheme();
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
+  const gameScreenWidth = webGameLayout?.viewportWidth ?? SCREEN_W;
+  const handBottomOffset = webGameLayout?.handBottom ?? HAND_BOTTOM_OFFSET;
+  const handInnerHeight = webGameLayout?.fanViewportHeight ?? HAND_INNER_HEIGHT;
+  const handStripHeight = webGameLayout?.handStripHeight ?? HAND_STRIP_HEIGHT;
+  const tableTop = webGameLayout?.tableTop ?? EQUATION_TABLE_TOP;
+  const tableHeight = webGameLayout?.tableHeight ?? 240;
+  const tableWidth = webGameLayout?.tableWidth ?? Math.max(320, gameScreenWidth - 24);
+  const tableBottomPadding = webGameLayout?.tableBottomPadding ?? 75;
+  const resultsTop = webGameLayout?.resultsTop ?? 84;
+  const resultsRight = webGameLayout?.resultsRight ?? 128;
+  const parensTop = webGameLayout?.parensTop ?? 170;
+  const timerTop = webGameLayout?.timerTop ?? 400;
+  const goldActionButtonTop = webGameLayout?.goldActionButtonTop ?? GOLD_ACTION_BUTTON_TOP;
+  const compactWebHud = Platform.OS === 'web';
+  const hudButtonWidth = compactWebHud ? clamp(Math.round(gameScreenWidth * 0.05), 64, 70) : 72;
+  const hudButtonHeight = compactWebHud ? 30 : 32;
+  const hudButtonFontSize = compactWebHud ? 10 : 11;
+  const hudTimerFontSize = compactWebHud ? 12 : 13;
+  const hudSoundButtonWidth = compactWebHud ? 52 : 56;
+  const hudSoundFontSize = compactWebHud ? 13 : 14;
+  const hudCoinWidth = compactWebHud ? clamp(Math.round(gameScreenWidth * 0.056), 72, 78) : 78;
+  const hudCoinHeight = compactWebHud ? 38 : 42;
+  const hudCoinRadius = hudCoinHeight / 2;
+  const hudCoinInnerRadius = Math.max(0, hudCoinRadius - 2);
+  const hudCoinGap = compactWebHud ? 4 : 6;
+  const hudCoinIconSize = compactWebHud ? 16 : 18;
+  const hudCoinFontSize = compactWebHud ? 15 : 16;
   const gameTableSurface = activeTableSkin
-    ? resolveGameTableSurface(activeTableSkin, pokerTableImg)
+    ? resolveGameTableSurface(activeTableSkin, pokerTableImg, { platform: Platform.OS })
     : null;
+  const fallbackTableSurface = resolveGameTableSurface(null, pokerTableImg, { platform: Platform.OS });
   const safe = useGameSafeArea();
+  const isAndroid = Platform.OS === 'android';
+  const androidStableDirection = isAndroid && isRTL ? ('ltr' as const) : undefined;
   const soundOn = state.soundsEnabled !== false;
   const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
   const [storedPlayerProfiles, setStoredPlayerProfiles] = useState<StoredPlayerProfilesState>(EMPTY_STORED_PLAYER_PROFILES);
+
+  useEffect(() => {
+    if (!isAndroid) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (state.isTutorial) {
+        tutorialBus.emitRequestExit();
+      } else if (state.phase !== 'setup') {
+        dispatch({ type: 'RESET_GAME' });
+      }
+      return true;
+    });
+    return () => subscription.remove();
+  }, [dispatch, isAndroid, state.isTutorial, state.phase]);
   // Parens-right טוגל — מצב גלובלי לבנאי המשוואה (מוצג כטוגל חיצוני מעל השולחן)
   const [parensRight, setParensRight] = useState<boolean>(false);
+  const [parensToggleTouched, setParensToggleTouched] = useState(false);
+  const [parensToggleNeedsAttention, setParensToggleNeedsAttention] = useState(false);
+  const showParensToggle =
+    state.phase === 'building' &&
+    !state.hasPlayedCards &&
+    state.dice !== null &&
+    !tutorialBus.getFracGuidedMode();
   // אתחול בכל שלב building חדש
   useEffect(() => { if (state.phase === 'building') setParensRight(false); }, [state.diceRollSeq, state.phase]);
+  useEffect(() => {
+    setParensToggleTouched(false);
+    setParensToggleNeedsAttention(false);
+  }, [state.diceRollSeq, state.phase]);
   // Sync parensRight to tutorialBus so InteractiveTutorialScreen can read it.
   useEffect(() => { tutorialBus.setParensRightValue(parensRight); }, [parensRight]);
-  // Tutorial L7 stage-0: scale-pulse the parens button to draw the learner's eye.
+  // Pulse the entire parens button until the player interacts with it or the turn ends.
   const parensTogglePulseAnim = useRef(new Animated.Value(1)).current;
-  const parensButtonPulseActive = state.isTutorial && tutorialBus.getParensButtonPulse();
+  const parensColorCycleAnim = useRef(new Animated.Value(0)).current;
+  const parensButtonPulseActive =
+    showParensToggle &&
+    parensToggleNeedsAttention &&
+    !parensToggleTouched;
   useEffect(() => {
     if (!parensButtonPulseActive) {
       parensTogglePulseAnim.stopAnimation();
@@ -11677,14 +12286,32 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
     }
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(parensTogglePulseAnim, { toValue: 1.12, duration: 230, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
-        Animated.timing(parensTogglePulseAnim, { toValue: 1.0, duration: 260, useNativeDriver: true, easing: Easing.in(Easing.quad) }),
-        Animated.delay(600),
+        Animated.timing(parensTogglePulseAnim, { toValue: 1.08, duration: 420, useNativeDriver: true, easing: Easing.out(Easing.quad) }),
+        Animated.timing(parensTogglePulseAnim, { toValue: 1.0, duration: 420, useNativeDriver: true, easing: Easing.in(Easing.quad) }),
+        Animated.delay(220),
       ])
     );
     loop.start();
     return () => { loop.stop(); parensTogglePulseAnim.setValue(1); };
   }, [parensButtonPulseActive, parensTogglePulseAnim]);
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(parensColorCycleAnim, { toValue: 0.33, duration: 1400, useNativeDriver: false, easing: Easing.inOut(Easing.quad) }),
+        Animated.timing(parensColorCycleAnim, { toValue: 0.66, duration: 1400, useNativeDriver: false, easing: Easing.inOut(Easing.quad) }),
+        Animated.timing(parensColorCycleAnim, { toValue: 1, duration: 1400, useNativeDriver: false, easing: Easing.inOut(Easing.quad) }),
+      ])
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      parensColorCycleAnim.setValue(0);
+    };
+  }, [parensColorCycleAnim]);
+  const parensToggleBg = parensColorCycleAnim.interpolate({
+    inputRange: [0, 0.33, 0.66, 1],
+    outputRange: ['#F97316', '#FB7185', '#F59E0B', '#F97316'],
+  });
   const toggleSoundsInGame = useCallback(() => {
     const next = !soundOn;
     dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: next });
@@ -12169,9 +12796,11 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         setResultsChipBoostedPulse(false);
       } else if (cmd.kind === 'clearSolveExerciseChip') {
         setSelectedEquationForDisplay(null);
+        setParensToggleNeedsAttention(false);
         setSolveExerciseHidden(false);
       } else if (cmd.kind === 'setSolveChip') {
         setSelectedEquationForDisplay({ equation: cmd.equation, result: cmd.result });
+        setParensToggleNeedsAttention(false);
         setSolveExerciseHidden(false);
         setSolveChipPulseKey((prev) => prev + 1);
       }
@@ -12726,22 +13355,24 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         // and show the red solve-exercise chip with the equation.
         const nextPending = state.botPendingDemoActions?.[0];
         if (nextPending && nextPending.kind === 'confirmEquation') {
-          const targetEq = state.validTargets.find((t) => t.result === nextPending.target);
-          if (targetEq) {
-            const tapDelay = setTimeout(() => {
-              playMiniResultTapSound();
-              setSelectedEquationForDisplay(targetEq);
-              setSolveExerciseHidden(false);
-              setSolveChipPulseKey((prev) => prev + 1);
-            }, 500);
-            return () => clearTimeout(tapDelay);
-          }
+            const targetEq = state.validTargets.find((t) => t.result === nextPending.target);
+            if (targetEq) {
+              const tapDelay = setTimeout(() => {
+                playMiniResultTapSound();
+                setSelectedEquationForDisplay(targetEq);
+                setParensToggleNeedsAttention(false);
+                setSolveExerciseHidden(false);
+                setSolveChipPulseKey((prev) => prev + 1);
+              }, 500);
+              return () => clearTimeout(tapDelay);
+            }
         }
       }
     } else if (botDemoOpenedResultsRef.current && !state.isTutorial) {
       botDemoOpenedResultsRef.current = false;
       setResultsOpenState(false);
       setSelectedEquationForDisplay(null);
+      setParensToggleNeedsAttention(false);
       setSolveExerciseHidden(false);
       resultsStripArrowLoopRef.current?.stop();
       resultsStripArrowLoopRef.current = null;
@@ -12754,6 +13385,8 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
   const [selectedEquationForDisplay, setSelectedEquationForDisplay] = useState<EquationOption | null>(null);
   const [solveExerciseHidden, setSolveExerciseHidden] = useState(false);
   const [solveChipPulseKey, setSolveChipPulseKey] = useState(0);
+  const parensToggleShouldAnimateColor = parensToggleNeedsAttention && !parensToggleTouched;
+  const parensToggleBackgroundColor = parensToggleShouldAnimateColor ? parensToggleBg : '#F97316';
 
   // ── Bot: always open the red "solve exercise" chip with the bot's
   //    equation when the bot reaches the solved phase. Built directly from
@@ -12765,17 +13398,18 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
     // Open strip + red chip as early as possible during bot's turn:
     // - building phase: show first valid target as a preview
     // - solved phase: show the actual equation the bot confirmed
-    if (state.phase === 'building' && state.validTargets.length > 0) {
-      const buildKey = `build-${state.roundsPlayed}-${state.currentPlayerIndex}`;
-      if (botEquationShownRef.current === buildKey) return;
-      botEquationShownRef.current = buildKey;
-      const first = state.validTargets[0];
-      setSelectedEquationForDisplay({ result: first.result, equation: first.equation });
-      setSolveExerciseHidden(false);
-      setSolveChipPulseKey((prev) => prev + 1);
-      if (!resultsOpen) {
-        botDemoOpenedResultsRef.current = true;
-        setResultsOpenState(true);
+      if (state.phase === 'building' && state.validTargets.length > 0) {
+        const buildKey = `build-${state.roundsPlayed}-${state.currentPlayerIndex}`;
+        if (botEquationShownRef.current === buildKey) return;
+        botEquationShownRef.current = buildKey;
+        const first = state.validTargets[0];
+        setSelectedEquationForDisplay({ result: first.result, equation: first.equation });
+        setParensToggleNeedsAttention(false);
+        setSolveExerciseHidden(false);
+        setSolveChipPulseKey((prev) => prev + 1);
+        if (!resultsOpen) {
+          botDemoOpenedResultsRef.current = true;
+          setResultsOpenState(true);
       }
     } else if (state.phase === 'solved' && state.lastEquationDisplay) {
       const solvedKey = `solved-${state.roundsPlayed}-${state.currentPlayerIndex}-${state.lastEquationDisplay}`;
@@ -12785,14 +13419,18 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         result: state.equationResult ?? 0,
         equation: state.lastEquationDisplay,
       });
+      setParensToggleNeedsAttention(false);
       setSolveExerciseHidden(false);
       setSolveChipPulseKey((prev) => prev + 1);
     }
   }, [isBotTurnAny, state.phase, state.hasPlayedCards, state.lastEquationDisplay, state.equationResult, state.validTargets, state.roundsPlayed, state.currentPlayerIndex, resultsOpen]);
 
   const handleMiniResultSelect = useCallback((eq: EquationOption) => {
+    const requiresParensMove = parseEquationDisplayForUi(eq.equation)?.parensRight ?? false;
     playMiniResultTapSound();
     setSelectedEquationForDisplay(eq);
+    setParensToggleNeedsAttention(requiresParensMove);
+    setParensToggleTouched(false);
     setSolveExerciseHidden(false);
     setSolveChipPulseKey(prev => prev + 1);
     // Tutorial (lesson 6 step 6.2) watches for this event as the outcome
@@ -12928,7 +13566,6 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
 
   // ── Contextual onboarding triggers ──
   const onbBlocked = !!state.identicalAlert || state.pendingFractionTarget !== null;
-  if (__DEV__) console.log('[ONB] onbBlocked:', onbBlocked, 'hasOnbNotif:', (state.notifications ?? []).some(n => n.id.startsWith('onb-')), 'identAlert:', !!state.identicalAlert, 'fracTarget:', state.pendingFractionTarget);
 
   // בנה תרגיל — רק אחרי הטלת קוביות (שלב building עם קוביות)
   useEffect(() => {
@@ -13095,13 +13732,16 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
     [placeNowChipsDisplay, PLACE_NOW_ORBIT_W, placeNowAnchorLeft, placeOrbitH],
   );
   // AppShell לא מוסיף safe-bottom במובייל — כאן שומרים רווח עבור המניפה + אזור המחוות
-  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.SAFE_BOTTOM_PAD;
+  const bottomPad = handBottomOffset + handStripHeight + safe.SAFE_BOTTOM_PAD;
   const topControlsTop = safe.insets.top || 6;
   const botOverlayTopOffset = topControlsTop + 86;
+  const topControlsLift = Platform.OS === 'web' ? 0 : isAndroid ? -28 : -65;
+  const discardPileTop = isAndroid ? Math.max((safe.insets.top || 6) + 56, 86) : 50;
+  const discardPileRight = isAndroid ? 8 : 12;
   useEffect(() => {
   }, [bottomPad, state.phase, state.players.length]);
   return (
-    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'visible' }}>
+    <View style={{ flex: 1, width: gameScreenWidth, minHeight: 0, overflow: 'visible' }}>
       {/* רקע מסך — ערכת הנושא של האווירה הכללית. בטוטוריאל תמיד כהה אטום. */}
       {state.isTutorial ? (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: '#0a1628' }]} />
@@ -13165,28 +13805,29 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           left: 10,
           right: 10,
           zIndex: 400,
-          ...(Platform.OS === 'android' ? { elevation: 400 } : {}),
+          ...(Platform.OS === 'android' ? { elevation: 24 } : {}),
           flexDirection: 'row',
           alignItems: 'flex-start',
           justifyContent: 'space-between',
           paddingBottom: 4,
+          ...(androidStableDirection ? { direction: androidStableDirection } : null),
         }}
       >
         {!state.isTutorial ? (
-        <View style={{ flexShrink: 0, gap: 0, marginTop: -65 }}>
-          <LulosButton text={t('ui.exitGame')} color="red" width={72} height={32} fontSize={11} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
+        <View style={{ flexShrink: 0, gap: 0, marginTop: topControlsLift, ...(androidStableDirection ? { direction: androidStableDirection } : null) }}>
+          <LulosButton text={t('ui.exitGame')} color="red" width={hudButtonWidth} height={hudButtonHeight} fontSize={hudButtonFontSize} onPress={()=>{ if (state.isTutorial) tutorialBus.emitRequestExit(); else dispatch({type:'RESET_GAME'}); }} style={{ marginBottom: -8 }} />
           {!state.isTutorial && (
-            <LulosButton text={t('start.rulesButton')} color="blue" width={72} height={32} fontSize={11} onPress={() => setGameRulesOpen(true)} style={{ marginBottom: -8 }} />
+            <LulosButton text={t('start.rulesButton')} color="blue" width={hudButtonWidth} height={hudButtonHeight} fontSize={hudButtonFontSize} onPress={() => setGameRulesOpen((prev) => !prev)} style={{ marginBottom: -8 }} />
           )}
           {!state.isTutorial && (
             <TouchableOpacity
               activeOpacity={0.9}
               onPress={() => onOpenShop?.()}
               style={{
-                width: 78,
-                height: 42,
+                width: hudCoinWidth,
+                height: hudCoinHeight,
                 marginBottom: -6,
-                borderRadius: 21,
+                borderRadius: hudCoinRadius,
                 borderWidth: 2,
                 borderColor: '#FDE68A',
                 overflow: 'hidden',
@@ -13203,40 +13844,40 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
                 end={{ x: 0.92, y: 1 }}
                 style={{
                   flex: 1,
-                  borderRadius: 19,
+                  borderRadius: hudCoinInnerRadius,
                   flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 6,
+                  gap: hudCoinGap,
                 }}
               >
-                <SlindaCoin size={18} />
-                <Text style={{ color: '#5B2D00', fontSize: 16, fontWeight: '900' }}>{totalCoins}</Text>
+                <SlindaCoin size={hudCoinIconSize} />
+                <Text style={{ color: '#5B2D00', fontSize: hudCoinFontSize, fontWeight: '900' }}>{totalCoins}</Text>
               </LinearGradient>
             </TouchableOpacity>
           )}
           {!state.isTutorial && (
-            <LulosButton text={t('ui.tournament')} color="orange" width={72} height={32} fontSize={11} onPress={() => setTournamentInfoOpen(true)} style={{ marginBottom: -8 }} />
+            <LulosButton text={t('ui.tournament')} color="orange" width={hudButtonWidth} height={hudButtonHeight} fontSize={hudButtonFontSize} onPress={() => setTournamentInfoOpen((prev) => !prev)} style={{ marginBottom: -8 }} />
           )}
           {!state.isTutorial && state.timerSetting !== 'off' && (
             <LulosButton
               text={`⏱ ${secsLeft ?? 0}`}
               color={secsLeft <= 5 && timerRunning ? 'red' : 'blue'}
-              width={72}
-              height={32}
-              fontSize={13}
-              onPress={() => setTimerOpen(true)}
+              width={hudButtonWidth}
+              height={hudButtonHeight}
+              fontSize={hudTimerFontSize}
+              onPress={() => setTimerOpen((prev) => !prev)}
               style={{ marginBottom: -8 }}
             />
           )}
-          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={56} height={32} fontSize={14} onPress={toggleSoundsInGame} />
+          <LulosButton text={soundOn ? '🔊' : '🔇'} color="blue" width={hudSoundButtonWidth} height={hudButtonHeight} fontSize={hudSoundFontSize} onPress={toggleSoundsInGame} />
           {!state.isTutorial && (() => {
             const meterPlayer =
               (cp && !cp.isBot ? cp : null) ??
               state.players.find(p => !p.isBot) ??
               (state.players.length === 1 ? state.players[0] : null);
             return meterPlayer ? (
-              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: -11 }}>
+              <View style={{ marginTop: 10, alignItems: 'center', gap: 4, marginLeft: compactWebHud ? -6 : -11 }}>
                 <ExcellenceMeter
                   value={meterPlayer.courageMeterPercent ?? 0}
                   pulseKey={meterPlayer.courageRewardPulseId ?? 0}
@@ -13249,7 +13890,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         </View>
         ) : null}
         {!state.isTutorial && (
-          <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, marginLeft: 8, marginTop: -65 }}>
+          <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, marginLeft: 8, marginTop: topControlsLift, ...(androidStableDirection ? { direction: androidStableDirection } : null) }}>
             <PlayerSidebar
               rulesOpen={gameRulesOpen}
               setRulesOpen={setGameRulesOpen}
@@ -13267,7 +13908,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           (שם המשתמש חייב לראות את הקלף שבראש הערימה כדי להבין מתי אפשר
           להניח קלף שבר). showFractions מסומן ל־true רק ב־TUTORIAL_FRACTION_SETUP. */}
       {(!state.isTutorial || state.showFractions) && (
-      <View style={{ position:'absolute', top:50, right:12, zIndex:3, alignItems:'center', gap:4 }}>
+      <View style={{ position:'absolute', top:discardPileTop, right:discardPileRight, zIndex:3, alignItems:'center', gap:4 }}>
         <View style={{ alignItems:'center', gap:4, position:'relative', minWidth:96 }}>
           <DiscardPile />
           {identArrowVisible && (
@@ -13303,87 +13944,119 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         </View>
       </View>
       )}
-      {/* כפתור תוצאות אפשריות + כפתור אדום — לצד הערימה */}
-      {state.showPossibleResults && state.validTargets.length > 0 && (state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (
-        <View style={{ position: 'absolute', top: 84, right: 128, zIndex: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <ResultsSlot
-            onToggle={toggleResultsBadges}
-            filteredResults={filteredResultsForHand}
-            matchCount={matchCountForHand}
-            boostedPulse={resultsChipBoostedPulse}
-            noPulse={state.isTutorial && tutorialBus.getL7GuidedMode()}
-          />
+      {/* כפתור תוצאות אפשריות + כפתור אדום — צמודים זה לזה ליד הערימה */}
+      {((state.showPossibleResults && state.validTargets.length > 0) ||
+        (selectedEquationForDisplay !== null && !solveExerciseHidden)) &&
+        (state.phase === 'building' || state.phase === 'solved') &&
+        !state.hasPlayedCards &&
+        (!state.isTutorial || state.showPossibleResults) &&
+        (isBotTurnAny || isBotDemoBeat || state.showSolveExercise || state.showPossibleResults) && (
+        <View
+          style={{
+            position: 'absolute',
+            top: resultsTop,
+            right: resultsRight,
+            zIndex: 8,
+            flexDirection: 'row-reverse',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          pointerEvents="box-none"
+        >
+          {state.showPossibleResults && state.validTargets.length > 0 ? (
+            <ResultsSlot
+              onToggle={toggleResultsBadges}
+              filteredResults={filteredResultsForHand}
+              matchCount={matchCountForHand}
+              boostedPulse={resultsChipBoostedPulse}
+              noPulse={state.isTutorial && tutorialBus.getL7GuidedMode()}
+            />
+          ) : null}
+          {selectedEquationForDisplay !== null && !solveExerciseHidden ? (
+            <SolveExerciseChip
+              equation={selectedEquationForDisplay.equation}
+              pulseKey={solveChipPulseKey}
+              loopPulse={state.isTutorial && tutorialBus.getL7SolveChipLoopPulse()}
+              onPress={state.isTutorial ? () => {} : () => setSolveExerciseHidden(true)}
+            />
+          ) : null}
         </View>
       )}
       {/* טוגל סוגריים — מחוץ לשולחן, בין תוצאות אפשריות לבין השולחן הירוק */}
-      {state.phase === 'building' && !state.hasPlayedCards && state.dice !== null && !tutorialBus.getFracGuidedMode() && (
-        <Animated.View style={{ position: 'absolute', top: 170, left: 0, right: 0, zIndex: 100, flexDirection: 'row', justifyContent: 'center', transform: [{ scale: parensTogglePulseAnim }] }}>
+      {showParensToggle && (
+        <Animated.View style={{ position: 'absolute', top: parensTop, left: 0, right: 0, zIndex: 100, flexDirection: 'row', justifyContent: 'center', transform: [{ scale: parensTogglePulseAnim }] }}>
           <TouchableOpacity
             onPress={() => {
+              setParensToggleTouched(true);
               const next = !parensRight;
               setParensRight(next);
               tutorialBus.setParensRightValue(next);
               tutorialBus.emitUserEvent({ kind: 'parensToggled', parensRight: next });
             }}
+            activeOpacity={0.9}
             accessibilityLabel="שינוי מיקום הסוגריים"
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: 10,
-              borderWidth: 2,
-              borderColor: '#B45309',
-              backgroundColor: '#F97316',
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 8,
-              ...Platform.select({
-                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4 },
-                android: { elevation: 5 },
-              }),
-            }}
           >
-            {/* איקון מיקום הסוגריים */}
-            <Text allowFontScaling={false} style={{ fontSize: 14, fontWeight: '900', letterSpacing: 0.5 }}>
-              {parensRight ? (
-                <>
-                  <Text style={{ color: '#FFF' }}>□ </Text>
-                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>(</Text>
-                  <Text style={{ color: '#FFF' }}>□□</Text>
-                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>)</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>(</Text>
-                  <Text style={{ color: '#FFF' }}>□□</Text>
-                  <Text style={{ color: '#FED7AA', fontSize: 18 }}>)</Text>
-                  <Text style={{ color: '#FFF' }}> □</Text>
-                </>
-              )}
-            </Text>
-            <Text allowFontScaling={false} style={{ fontSize: 11, fontWeight: '800', color: '#FFF' }}>
-              {'שינוי מיקום הסוגריים'}
-            </Text>
+            <Animated.View
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 10,
+                borderWidth: 2,
+                borderColor: '#B45309',
+                backgroundColor: parensToggleBackgroundColor,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                overflow: 'hidden',
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4 },
+                  android: { elevation: 5 },
+                }),
+              }}
+            >
+              {/* איקון מיקום הסוגריים */}
+              <Text allowFontScaling={false} style={{ fontSize: 14, fontWeight: '900', letterSpacing: 0.5 }}>
+                {parensRight ? (
+                  <>
+                    <Text style={{ color: '#FFF' }}>□ </Text>
+                    <Text style={{ color: '#FED7AA', fontSize: 18 }}>(</Text>
+                    <Text style={{ color: '#FFF' }}>□□</Text>
+                    <Text style={{ color: '#FED7AA', fontSize: 18 }}>)</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={{ color: '#FED7AA', fontSize: 18 }}>(</Text>
+                    <Text style={{ color: '#FFF' }}>□□</Text>
+                    <Text style={{ color: '#FED7AA', fontSize: 18 }}>)</Text>
+                    <Text style={{ color: '#FFF' }}> □</Text>
+                  </>
+                )}
+              </Text>
+              <Text allowFontScaling={false} style={{ fontSize: 11, fontWeight: '800', color: '#FFF' }}>
+                {'שינוי מיקום הסוגריים'}
+              </Text>
+            </Animated.View>
           </TouchableOpacity>
         </Animated.View>
       )}
 
       {/* ── SLOT 3: שולחן ירוק + תרגיל + טיימר (מוקאפ תרגיל הועבר ליד תוצאות אפשריות) ── */}
-      <View style={{position:'absolute',top:EQUATION_TABLE_TOP,left:17,right:7,zIndex:2,flexDirection:'row',alignItems:'stretch',gap:0,transform:[{translateX:EQUATION_TABLE_SHIFT_X}]}}>
-        <View style={{flex:1,minWidth:0,justifyContent:'flex-end',paddingBottom:75}}>
+      <View style={{position:'absolute',top:tableTop,left:0,right:0,zIndex:2,flexDirection:'row',justifyContent:'center',alignItems:'stretch',gap:0}}>
+        <View style={{width:tableWidth,maxWidth:'100%',minWidth:0,justifyContent:'flex-end',paddingBottom:tableBottomPadding}}>
           {gameTableSurface ? (
             <ImageBackground
               source={gameTableSurface.source as any}
               style={{
                 alignSelf:'center',
                 width:'100%',
-                height:240,
+                height:tableHeight,
                 justifyContent:'center',
                 alignItems:'center',
                 paddingVertical:10,
                 paddingHorizontal:8,
                 overflow:'hidden',
+                borderRadius: tableHeight / 2,
               }}
-              imageStyle={gameTableSurface.imageStyle}
               resizeMode={gameTableSurface.resizeMode}
             >
               <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
@@ -13394,7 +14067,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
               style={{
                 alignSelf:'center',
                 width:'100%',
-                height:240,
+                height:tableHeight,
                 justifyContent:'center',
                 alignItems:'center',
                 paddingVertical:10,
@@ -13407,18 +14080,18 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
             </LinearGradient>
           ) : (
             <ImageBackground
-              source={pokerTableImg as any}
+              source={fallbackTableSurface.source as any}
               style={{
                 alignSelf:'center',
                 width:'100%',
-                height:240,
+                height:tableHeight,
                 justifyContent:'center',
                 alignItems:'center',
                 paddingVertical:10,
                 paddingHorizontal:8,
                 overflow:'hidden',
               }}
-              resizeMode="stretch"
+              resizeMode={fallbackTableSurface.resizeMode}
             >
               <EquationBuilder ref={eqBuilderRef} onConfirmChange={setEqConfirm} timerProgress={equationTimerProgress} interactive={!isOnlineWaiting} parensRight={parensRight} onParensRightChange={setParensRight} />
             </ImageBackground>
@@ -13434,8 +14107,8 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
       {/* מניפה: מלא את המסך; ללא bottom שלילי — תואם AppShell בלי paddingBottom תחתון.
           ללא שכבת הכהיה במצב הדרכה כדי שהשחקן יראה תמיד את הקלפים במניפה. */}
       <View style={[StyleSheet.absoluteFillObject, { zIndex: isLocalBotTurn ? 52 : 4, opacity: 1 }]} pointerEvents="box-none">
-        <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
-          <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
+        <View style={{ position: 'absolute', bottom: handBottomOffset, left: 0, right: 0, height: handStripHeight, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
+          <View style={{ height: handInnerHeight, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
             {!l5HideFanStrip ? <PlayerHand onCenterCard={setCenterCard} onFractionTapForOnb={onFractionTapForOnb} /> : null}
           </View>
         </View>
@@ -13449,7 +14122,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         <View
           style={{
             position: 'absolute',
-            top: 400,
+            top: timerTop,
             left: 0,
             right: 0,
             zIndex: 4,
@@ -13718,18 +14391,6 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
         </View>
       )}
 
-      {/* כפתור פתרון תרגיל — ליד כפתור תוצאות אפשריות, ממורכז לגובה הערימה וברווח 20px */}
-      {(state.phase === 'building' || state.phase === 'solved') && !state.hasPlayedCards && (!state.isTutorial || state.showPossibleResults) && (isBotTurnAny || isBotDemoBeat || state.showSolveExercise || state.showPossibleResults) && selectedEquationForDisplay !== null && !solveExerciseHidden && (
-        <View style={{ position: 'absolute', top: 84, right: 224, zIndex: 8 }} pointerEvents="box-none">
-          <SolveExerciseChip
-            equation={selectedEquationForDisplay.equation}
-            pulseKey={solveChipPulseKey}
-            loopPulse={state.isTutorial && tutorialBus.getL7SolveChipLoopPulse()}
-            onPress={state.isTutorial ? () => {} : () => setSolveExerciseHidden(true)}
-          />
-        </View>
-      )}
-
       {/* ── איזור תחתון מאוחד: כפתורי תור + שלוף קלף ויתור + חזרה לתרגיל (נסדר כפתורים אחר כך) ── */}
       {(() => {
         const pr=state.phase==='pre-roll', bl=state.phase==='building', so=state.phase==='solved';
@@ -13790,7 +14451,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
 
       {/* כפתור זהב במיקום אבסולוטי למסך: Y מדויק לפי רשת (עם clamp לגובה המסך כדי לא להיעלם) */}
       {canRoll && (!state.isTutorial || state.showFractions) && (
-        <View style={{ position: 'absolute', top: GOLD_ACTION_BUTTON_TOP, left: 0, right: 0, zIndex: 25, alignItems: 'center' }} pointerEvents="box-none">
+        <View style={{ position: 'absolute', top: goldActionButtonTop, left: 0, right: 0, zIndex: 25, alignItems: 'center' }} pointerEvents="box-none">
           <View style={{ position: 'relative', alignItems: 'center', overflow: 'visible' }}>
             {showDicePulse && (
               <Animated.View
@@ -13965,15 +14626,28 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
             style={{ position: 'absolute', bottom: 40, left: 0, right: 0, alignItems: 'center', gap: 10 }}
             pointerEvents="box-none"
           >
-            <LulosButton
-              text={t('game.pickCards')}
+            <PickCardsActionButton
               color={state.isTutorial ? 'orange' : 'blue'}
-              textColor="#FFFFFF"
-              width={160}
-              height={44}
-              fontSize={17}
               onPress={() => { if (!state.isTutorial) dispatch({ type: 'REVERT_TO_BUILDING' }); }}
             />
+            {!state.isTutorial && (
+              <TouchableOpacity
+                pointerEvents="auto"
+                onPress={() => dispatch({ type: 'REVERT_TO_BUILDING' })}
+                style={{
+                  paddingHorizontal: 18,
+                  paddingVertical: 8,
+                  borderRadius: 20,
+                  backgroundColor: 'rgba(255,255,255,0.08)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.18)',
+                }}
+              >
+                <Text style={{ color: '#D1D5DB', fontSize: 13, fontWeight: '600' }}>
+                  {t('game.pickCards_revert')}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}
@@ -14001,7 +14675,7 @@ function GameScreen({ onOpenShop }: { onOpenShop?: () => void } = {}) {
           playersCount: state.players.length,
           diceModeLabel: state.diceMode === '2' ? '2 קוביות' : '3 קוביות',
         }}
-        onOpenRules={() => setGameRulesOpen(true)}
+        onOpenRules={() => setGameRulesOpen((prev) => !prev)}
         settings={{
           mathRangeMax: state.mathRangeMax,
           showFractions: state.showFractions,
@@ -14434,6 +15108,8 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
   const { state, dispatch } = useGame();
   const { t, isRTL } = useLocale();
   const insets = useSafeAreaInsets();
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
   if (!state.botConfig) return null;
   // In the tutorial, the lesson speech bubble already narrates the bot's
   // actions in learner-friendly copy. The "thinking / coach" overlay is
@@ -14445,7 +15121,9 @@ function BotThinkingOverlay({ topOffset }: { topOffset: number }) {
   /** כפתור זירוז — מדלג על ההמתנה של שעון הבוט ומפעיל מיידית את הצעד הבא */
   const onSpeedUp = () => dispatch({ type: 'BOT_STEP' });
   const handReserve =
-    HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + Math.max(insets.bottom, 12);
+    (webGameLayout?.handBottom ?? HAND_BOTTOM_OFFSET) +
+    (webGameLayout?.handStripHeight ?? HAND_STRIP_HEIGHT) +
+    Math.max(insets.bottom, 12);
   // Hide mission mockup so the actual EquationBuilder remains the only focus.
   const showMission = false;
   const teaching = getBotTurnTeachingState(state);
@@ -14777,7 +15455,8 @@ function isWelcomeNotification(_n: Notification): boolean {
 function NotificationZone() {
   const { state, dispatch } = useGame();
   const insets = useSafeAreaInsets();
-  if (__DEV__) console.log('[NZ] render, phase:', state.phase, 'queue length:', state.notifications?.length, 'notifications:', JSON.stringify(state.notifications?.map(n => ({id:n.id,title:n.title,msg:n.message?.slice(0,30)}))));
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
   const gamePhasesForToasts = new Set<GamePhase>(['pre-roll', 'building', 'solved', 'roll-dice']);
   const fracChallengeVisiblePhase: GamePhase = 'turn-transition';
   const hasBlockingSheet = !!state.identicalAlert;
@@ -14808,7 +15487,10 @@ function NotificationZone() {
   const needsAck = notif ? isWelcomeNotification(notif) || !!notif.requireAck : false;
   /** AppShell כבר מוסיף paddingBottom: insets.bottom — לא מחסרים שוב; ack מרימים מעט כדי שלא ייחתך כפתור "הבנתי!". */
   const ACK_BOTTOM_EXTRA = 36;
-  const baseAboveHand = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + 12;
+  const baseAboveHand =
+    (webGameLayout?.handBottom ?? HAND_BOTTOM_OFFSET) +
+    (webGameLayout?.handStripHeight ?? HAND_STRIP_HEIGHT) +
+    12;
   const notifBottom = Math.max(20, baseAboveHand + (needsAck ? ACK_BOTTOM_EXTRA : 0));
   const fadeOpacity = useRef(new Animated.Value(1)).current;
   const entryTranslateY = useRef(new Animated.Value(0)).current;
@@ -15000,13 +15682,19 @@ function PlayerWaitingScreen({
   lastMoveBubbleBorder: string;
 }) {
   const { profile } = useAuth();
+  const viewport = useWebViewportSize();
+  const webGameLayout = Platform.OS === 'web' ? getWebGameLayout(viewport) : null;
+  const handBottomOffset = webGameLayout?.handBottom ?? HAND_BOTTOM_OFFSET;
+  const handInnerHeight = webGameLayout?.fanViewportHeight ?? HAND_INNER_HEIGHT;
+  const handStripHeight = webGameLayout?.handStripHeight ?? HAND_STRIP_HEIGHT;
+  const waitingScreenWidth = webGameLayout?.viewportWidth ?? SCREEN_W;
   const safe = useGameSafeArea();
-  const bottomPad = HAND_BOTTOM_OFFSET + HAND_STRIP_HEIGHT + safe.insets.bottom;
+  const bottomPad = handBottomOffset + handStripHeight + safe.insets.bottom;
   const sorted = useMemo(() => sortHandCards(myHand), [myHand]);
   const emptySet = useMemo(() => new Set<string>(), []);
   const totalCoins = Math.max(0, Math.floor(Number(profile?.total_coins ?? 0) || 0));
   return (
-    <View style={{ flex: 1, width: SCREEN_W, minHeight: 0, overflow: 'hidden' }}>
+    <View style={{ flex: 1, width: waitingScreenWidth, minHeight: 0, overflow: 'hidden' }}>
       <LinearGradient colors={[...playerScreensGradientColors]} start={{ x: 0, y: 0 }} end={{ x: 0.85, y: 1 }} style={StyleSheet.absoluteFill} />
       <View style={{ flex: 1, paddingTop: 8, paddingBottom: bottomPad }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingTop: 4, paddingBottom: 4 }}>
@@ -15073,8 +15761,8 @@ function PlayerWaitingScreen({
         </View>
       </View>
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]} pointerEvents="box-none">
-        <View style={{ position: 'absolute', bottom: HAND_BOTTOM_OFFSET, left: 0, right: 0, height: HAND_STRIP_HEIGHT, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
-          <View style={{ height: HAND_INNER_HEIGHT, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
+        <View style={{ position: 'absolute', bottom: handBottomOffset, left: 0, right: 0, height: handStripHeight, alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 12, width: '100%' }}>
+          <View style={{ height: handInnerHeight, width: '100%', alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' }}>
             <SimpleHand
               cards={sorted}
               stagedCardIds={emptySet}
@@ -15307,7 +15995,6 @@ function PlayModeChoiceScreen({
   onOnline,
   onHowToPlay,
   onShop,
-  onMyThemes,
   preferredName,
   onPreferredNameChange,
 }: {
@@ -15315,14 +16002,19 @@ function PlayModeChoiceScreen({
   onOnline: () => void;
   onHowToPlay: () => void;
   onShop: () => void;
-  onMyThemes: () => void;
   preferredName: string;
   onPreferredNameChange: (name: string) => void;
 }) {
   const { t, locale, setLocale } = useLocale();
   const { profile } = useAuth();
+  const insets = useSafeAreaInsets();
   const [storedProfiles, setStoredProfiles] = useState<StoredPlayerProfile[]>([]);
   const preferredNameSeededRef = useRef(false);
+  const compactMainMenu = SCREEN_H < 760;
+  const sectionGap = compactMainMenu ? 14 : 20;
+  const buttonGap = compactMainMenu ? 12 : 16;
+  const menuTopPadding = Math.max(insets.top, compactMainMenu ? 18 : 30);
+  const menuBottomPadding = Math.max(insets.bottom + 24, compactMainMenu ? 28 : 40);
 
   useEffect(() => {
     let cancelled = false;
@@ -15348,20 +16040,34 @@ function PlayModeChoiceScreen({
   }, [onPreferredNameChange, preferredName]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
-      <View style={{ alignItems: 'center', marginBottom: 20 }}>
+    <ScrollView
+      style={{ flex: 1, width: '100%' }}
+      contentContainerStyle={{
+        flexGrow: 1,
+        alignItems: 'center',
+        justifyContent: compactMainMenu ? 'flex-start' : 'center',
+        paddingHorizontal: 24,
+        paddingTop: menuTopPadding,
+        paddingBottom: menuBottomPadding,
+      }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+      contentInsetAdjustmentBehavior="always"
+    >
+      <View style={{ width: '100%', maxWidth: 320, alignItems: 'center' }}>
+      <View style={{ alignItems: 'center', marginBottom: sectionGap }}>
         <Text style={{ color: '#9CA3AF', fontSize: 12, fontWeight: '600', marginBottom: 6 }}>שפה</Text>
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <TouchableOpacity onPress={() => void setLocale('he')} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: locale === 'he' ? '#D97706' : '#1F2937' }}>
+        <View testID="lobby-language-toggle" style={{ flexDirection: 'row', gap: 10 }}>
+          <TouchableOpacity testID="lobby-language-he" onPress={() => void setLocale('he')} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: locale === 'he' ? '#D97706' : '#1F2937' }}>
             <Text style={{ color: locale === 'he' ? '#111827' : '#fff', fontWeight: '700', fontSize: 13 }}>עברית</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => void setLocale('en')} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: locale === 'en' ? '#D97706' : '#1F2937' }}>
+          <TouchableOpacity testID="lobby-language-en" onPress={() => void setLocale('en')} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: locale === 'en' ? '#D97706' : '#1F2937' }}>
             <Text style={{ color: locale === 'en' ? '#111827' : '#fff', fontWeight: '700', fontSize: 13 }}>English</Text>
           </TouchableOpacity>
         </View>
       </View>
       {profile && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: sectionGap }}>
           <SlindaCoin size={18} />
           <Text style={{ color: '#FDE68A', fontSize: 14, fontWeight: '700' }}>{profile.total_coins}</Text>
         </View>
@@ -15421,8 +16127,26 @@ function PlayModeChoiceScreen({
           />
         </LinearGradient>
       </LinearGradient>
-      <LulosButton text={t('mode.local')} color="green" width={280} height={52} fontSize={15} onPress={onLocal} style={{ marginBottom: 16 }} />
-      <LulosButton text={t('mode.online')} color="blue" width={280} height={52} fontSize={15} onPress={onOnline} style={{ marginBottom: 16 }} />
+      <LulosButton
+        text={t('mode.local')}
+        color="green"
+        width={280}
+        height={52}
+        fontSize={15}
+        testID="lobby-single-player"
+        onPress={onLocal}
+        style={{ marginBottom: buttonGap }}
+      />
+      <LulosButton
+        text={t('mode.online')}
+        color="blue"
+        width={280}
+        height={52}
+        fontSize={15}
+        testID="lobby-join-room"
+        onPress={onOnline}
+        style={{ marginBottom: buttonGap }}
+      />
       <LulosButton
         text={t('tutorial.howToPlay')}
         color="orange"
@@ -15430,6 +16154,7 @@ function PlayModeChoiceScreen({
         width={280}
         height={56}
         fontSize={16}
+        testID="lobby-tutorial"
         onPress={onHowToPlay}
         style={{
           marginTop: 2,
@@ -15442,11 +16167,11 @@ function PlayModeChoiceScreen({
           backgroundColor: 'rgba(255,90,180,0.16)',
         }}
       />
-      <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-        <LulosButton text={t('shop.openShop')} color="yellow" width={136} height={48} fontSize={14} onPress={onShop} />
-        <LulosButton text={t('themes.openMyThemes')} color="yellow" width={136} height={48} fontSize={14} onPress={onMyThemes} />
+      <View style={{ marginTop: compactMainMenu ? 10 : 12 }}>
+        <LulosButton text={t('shop.openShop')} color="yellow" width={280} height={48} fontSize={14} testID="lobby-shop" onPress={onShop} />
       </View>
-    </View>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -15462,12 +16187,11 @@ function GameRouter() {
   const [playMode, setPlayMode] = useState<'choose' | 'local' | 'online' | 'tutorial' | 'mockup-room'>('choose');
   const [mockupReturnMode, setMockupReturnMode] = useState<'choose' | 'online'>('choose');
   const [showShop, setShowShop] = useState(false);
-  const [showMyThemes, setShowMyThemes] = useState(false);
   // showTutorial removed — replaced by playMode === 'tutorial'
   const welcomeMusicRef = useRef<Audio.Sound | null>(null);
   const soundOn = state.soundsEnabled !== false;
-  const [salindaVolume, setSalindaVolume] = useState(0.14);
-  const salindaVolumeRef = useRef(0.14);
+  const [salindaVolume, setSalindaVolume] = useState(0);
+  const salindaVolumeRef = useRef(0);
   const salindaPrevVolumeRef = useRef(0.14);
   const [showSalindaPanel, setShowSalindaPanel] = useState(false);
   const [preferredName, setPreferredName] = useState('');
@@ -15693,11 +16417,23 @@ function GameRouter() {
     };
   }, []);
 
+  const stopWelcomeMusicImmediate = useCallback(() => {
+    const sound = welcomeMusicRef.current;
+    welcomeMusicRef.current = null;
+    if (!sound) return;
+    sound.stopAsync().catch(() => {});
+    sound.unloadAsync().catch(() => {});
+  }, []);
+
   const toggleSounds = useCallback(() => {
     const next = !soundOn;
     dispatch({ type: 'SET_SOUNDS_ENABLED', enabled: next });
+    if (!next) {
+      setShowSalindaPanel(false);
+      stopWelcomeMusicImmediate();
+    }
     AsyncStorage.setItem('lulos_sounds_enabled', next ? 'true' : 'false');
-  }, [dispatch, soundOn]);
+  }, [dispatch, soundOn, stopWelcomeMusicImmediate]);
   const applySalindaRatio = useCallback((ratio: number) => {
     const normalized = Math.max(0, Math.min(1, ratio));
     const next = Math.round((0.4 * normalized) * 100) / 100;
@@ -15715,6 +16451,7 @@ function GameRouter() {
       salindaVolumeRef.current = 0;
       setSalindaVolume(0);
       setShowSalindaPanel(false);
+      stopWelcomeMusicImmediate();
       void AsyncStorage.setItem(SALINDA_VOLUME_KEY, '0');
       return;
     }
@@ -15723,7 +16460,7 @@ function GameRouter() {
     salindaPrevVolumeRef.current = restored;
     setSalindaVolume(restored);
     void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(restored));
-  }, []);
+  }, [stopWelcomeMusicImmediate]);
 
   const persistSalindaVolume = useCallback(() => {
     void AsyncStorage.setItem(SALINDA_VOLUME_KEY, String(salindaVolumeRef.current));
@@ -15761,7 +16498,7 @@ function GameRouter() {
         right: 0,
         bottom: 0,
         zIndex: 12050,
-        ...(Platform.OS === 'android' ? { elevation: 12050 } : {}),
+        ...(Platform.OS === 'android' ? { elevation: 24 } : {}),
       }}
     >
       <View
@@ -15806,18 +16543,17 @@ function GameRouter() {
     screen = <CelebrationMockupRoom onBack={closeCelebrationMockupRoom} />;
   } else if (playMode === 'choose') {
     screen = (
-      <PlayModeChoiceScreen
-        onLocal={() => setPlayMode('local')}
-        onOnline={() => setPlayMode('online')}
-        onHowToPlay={() => setPlayMode('tutorial')}
-        onShop={() => setShowShop(true)}
-        onMyThemes={() => setShowMyThemes(true)}
-        preferredName={preferredName}
-        onPreferredNameChange={setPreferredName}
-      />
-    );
-  } else if (playMode === 'local') {
-    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} onMyThemes={() => setShowMyThemes(true)} preferredName={preferredName} />;
+        <PlayModeChoiceScreen
+          onLocal={() => setPlayMode('local')}
+          onOnline={() => setPlayMode('online')}
+          onHowToPlay={() => setPlayMode('tutorial')}
+          onShop={() => setShowShop(true)}
+          preferredName={preferredName}
+          onPreferredNameChange={setPreferredName}
+        />
+      );
+    } else if (playMode === 'local') {
+    if (state.phase === 'setup') screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
     else {
       switch (state.phase) {
         case 'turn-transition': screen = <TurnTransition onOpenShop={() => setShowShop(true)} />; break;
@@ -15831,7 +16567,7 @@ function GameRouter() {
           screen = <GameOver />;
           break;
         default:
-          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} onMyThemes={() => setShowMyThemes(true)} preferredName={preferredName} />;
+          screen = <StartScreen onBackToChoice={() => setPlayMode('choose')} onHowToPlay={() => setPlayMode('tutorial')} onShop={() => setShowShop(true)} preferredName={preferredName} />;
       }
     }
   } else if (playMode === 'tutorial') {
@@ -15878,11 +16614,11 @@ function GameRouter() {
     }
   } else {
     // playMode === 'online' — משחק ברשת (צפייה + מסך שחקן, מעבר אוטומטי בתורי)
-    if (!mp?.inRoom) screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />;
+    if (!mp?.inRoom) screen = <OnlineTablesEntryScreen onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />;
     else if (!mp.serverState) screen = <LobbyScreen onOpenCelebrationMockup={openCelebrationMockupRoom} />;
     else {
       switch (state.phase) {
-        case 'setup': screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />; break;
+        case 'setup': screen = <OnlineTablesEntryScreen onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />; break;
         case 'turn-transition': screen = <TurnTransition onOpenShop={() => setShowShop(true)} />; break;
         case 'pre-roll':
         case 'roll-dice':
@@ -15894,7 +16630,7 @@ function GameRouter() {
           screen = <GameOver />;
           break;
         default:
-          screen = <LobbyEntry onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} onOpenCelebrationMockup={openCelebrationMockupRoom} />;
+          screen = <OnlineTablesEntryScreen onBackToChoice={() => setPlayMode('choose')} defaultPlayerName={preferredName} />;
       }
     }
   }
@@ -15917,7 +16653,6 @@ function GameRouter() {
       {screen}
       {tutorialHudOverlay}
       <ShopScreen visible={showShop} onClose={() => setShowShop(false)} />
-      <MyThemesScreen visible={showMyThemes} onClose={() => setShowMyThemes(false)} />
       {showGlobalMute && (
         <>
           {showSalindaPanel && (
@@ -16122,6 +16857,7 @@ function SplashScreen({ onFinish }: { onFinish: () => void }) {
     { sym: '✖', color: '#43A047', style: { bottom: '38%', left: '12%' } as any },
     { sym: '━', color: '#FFA000', style: { bottom: '35%', right: '12%' } as any },
   ];
+  const splashHebrewWordmarkColor = Platform.OS === 'ios' && !Platform.isPad ? '#000000' : '#F59E0B';
 
   return (
     <Animated.View style={{
@@ -16179,7 +16915,7 @@ function SplashScreen({ onFinish }: { onFinish: () => void }) {
             Salinda
           </Text>
           <Text
-            style={{ color: '#F59E0B', fontSize: 16, fontWeight: '800', marginTop: 2, textAlign: 'center', writingDirection: 'rtl' }}
+            style={{ color: splashHebrewWordmarkColor, fontSize: 16, fontWeight: '800', marginTop: 2, textAlign: 'center', writingDirection: 'rtl' }}
           >
             סלינדה
           </Text>
@@ -16222,25 +16958,12 @@ function AppShell({ showSplash, setShowSplash }: { showSplash: boolean; setShowS
       showSplash,
     });
   }, []);
-  // הסתרת פס "Downloading" של Metro — שכבת native שמצוירת מעל האפליקציה
-  useEffect(() => {
-    if (!__DEV__) return;
-    const hideDevBar = () => {
-      const DevLoadingView = NativeModules.NativeDevLoadingView ?? NativeModules.DevLoadingView;
-      if (DevLoadingView && typeof DevLoadingView.hide === 'function') {
-        DevLoadingView.hide();
-      }
-    };
-    hideDevBar();
-    const t = setTimeout(hideDevBar, 150);
-    return () => clearTimeout(t);
-  }, []);
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const applyNavBarTheme = () => {
       // ב-SDK 54 מצב edge-to-edge גורם ל-isEdgeToEdge() === true; setBackgroundColorAsync של סרגל הניווט לא רץ.
       // setBackgroundColorAsync של SystemUI צובע את רקע חלון האפליקציה מאחורי סרגלי המערכת (פותר פס לבן בתחתית).
-      void SystemUI.setBackgroundColorAsync('#0a1628');
+      void SystemUI.setBackgroundColorAsync('#0a1628').catch(() => {});
       NavigationBar.setBackgroundColorAsync('#0a1628').catch(() => {});
       NavigationBar.setButtonStyleAsync('light').catch(() => {});
       NavigationBar.setBorderColorAsync('#0a1628').catch(() => {});
@@ -16287,7 +17010,6 @@ function App() {
     sendDebugLog('H2', 'index.tsx:App.useEffect', 'App lifecycle', { fontsLoaded });
   }, [fontsLoaded]);
   if (!fontsLoaded) return null;
-  sendDebugLog('H2', 'index.tsx:App.render', 'App render after fonts loaded', { showSplash });
   return (
     <AuthProvider>
       <LocaleProvider>
@@ -16310,6 +17032,11 @@ registerRootComponent(function Root() {
   useEffect(() => {
     sendDebugLog('H2', 'index.tsx:Root.useEffect', 'Root mounted', { rootKey });
   }, [rootKey]);
+  // מסתיר את פס "Downloading" של Metro פעם אחת בעלייה.
+  useEffect(() => {
+    if (!__DEV__) return;
+    try { (NativeModules.NativeDevLoadingView ?? NativeModules.DevLoadingView)?.hide?.(); } catch {}
+  }, []);
   return (
     <SafeAreaProvider key={rootKey}>
       <App />

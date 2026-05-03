@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
   Platform, ActivityIndicator, ScrollView, ImageBackground, Image,
@@ -13,96 +13,169 @@ import { TABLE_SKINS, TABLE_SKIN_IDS, type TableSkinId } from '../theme/tableSki
 import { useAuth } from '../hooks/useAuth';
 import { useLocale } from '../i18n/LocaleContext';
 import { useActiveTheme } from '../theme/ThemeContext';
+import { useWebViewportSize } from '../hooks/useWebViewportSize';
+import { getWebContentWidth } from '../theme/webLayout';
 
 const SALINDA_IMAGE = require('../../assets/salinda.jpg');
-const SLINDA_PRICE = 150;
-const THEME_PRICE = 80;
-const TABLE_SKIN_PRICE = 80;
+const CLASSIC_TABLE_IMAGE = require('../../assets/table_green_nobg.png');
+const SLINDA_PRICE = 100;
+
+type FeedbackTone = 'success' | 'error';
 
 type Props = {
   visible: boolean;
   onClose: () => void;
 };
 
+function isThemeId(value: string | null | undefined): value is ThemeId {
+  return !!value && THEME_IDS.includes(value as ThemeId);
+}
+
+function isTableSkinId(value: string | null | undefined): value is TableSkinId {
+  return !!value && TABLE_SKIN_IDS.includes(value as TableSkinId);
+}
+
 export function ShopScreen({ visible, onClose }: Props) {
   const { t, locale } = useLocale();
   const { profile, purchaseSlinda, purchaseTheme, purchaseTableSkin, setActiveSkin } = useAuth();
   const { background } = useActiveTheme();
   const { width, height } = useWindowDimensions();
+  const viewport = useWebViewportSize();
+  const viewportWidth = Platform.OS === 'web' ? viewport.width : width;
+  const contentWidth = Platform.OS === 'web'
+    ? getWebContentWidth(viewportWidth, { maxWidth: 1120, sidePadding: 40 })
+    : width;
   const [slindaLoading, setSlindaLoading] = useState(false);
   const [themeLoading, setThemeLoading] = useState<ThemeId | null>(null);
   const [tableSkinLoading, setTableSkinLoading] = useState<TableSkinId | null>(null);
+  const [activationLoading, setActivationLoading] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedbackTone, setFeedbackTone] = useState<FeedbackTone | null>(null);
   const [previewTheme, setPreviewTheme] = useState<ThemeId | null>(null);
   const [previewTableSkin, setPreviewTableSkin] = useState<TableSkinId | null>(null);
   const [scrolledToBottom, setScrolledToBottom] = useState(false);
 
   const slindaOwned = profile?.slinda_owned ?? false;
-  const ownedThemes = (profile?.themes_owned ?? ['classic']) as ThemeId[];
-  const ownedTableSkins = (profile?.table_skins_owned ?? []) as string[];
+  const rawOwnedThemes = profile?.themes_owned ?? ['classic'];
+  const ownedThemes = THEME_IDS.filter((themeId) => themeId === 'classic' || rawOwnedThemes.includes(themeId));
+  const rawOwnedTableSkins = profile?.table_skins_owned ?? [];
+  const ownedTableSkins = TABLE_SKIN_IDS.filter((skinId) => rawOwnedTableSkins.includes(skinId));
   const coins = profile?.total_coins ?? 0;
-  const activeTableSkinId = profile?.active_table_skin as TableSkinId | null | undefined;
-
-  async function handleBuySlinda() {
-    if (slindaOwned || slindaLoading || coins < SLINDA_PRICE) return;
-    setSlindaLoading(true);
-    setFeedback(null);
-    const result = await purchaseSlinda();
-    setSlindaLoading(false);
-    if (result === 'ok') {
-      setFeedback(t('shop.purchaseSuccess'));
-    } else if (result === 'insufficient_coins') {
-      setFeedback(t('shop.insufficientCoins'));
-    } else if (result !== 'already_owned') {
-      setFeedback(t('shop.purchaseError'));
-    }
-  }
-
-  async function handleBuyTheme(themeId: ThemeId) {
-    if (ownedThemes.includes(themeId) || themeLoading || coins < THEME_PRICE) return;
-    setThemeLoading(themeId);
-    setFeedback(null);
-    const result = await purchaseTheme(themeId);
-    setThemeLoading(null);
-    if (result === 'ok') {
-      await setActiveSkin('table_theme', themeId);
-      setFeedback(t('shop.themePurchaseSuccess'));
-      setPreviewTheme(null);
-    } else if (result === 'insufficient_coins') {
-      setFeedback(t('shop.insufficientCoins'));
-    } else if (result !== 'already_owned') {
-      setFeedback(t('shop.purchaseError'));
-    }
-  }
-
-  async function handleBuyTableSkin(skinId: TableSkinId) {
-    if (ownedTableSkins.includes(skinId) || tableSkinLoading || coins < TABLE_SKIN_PRICE) return;
-    setTableSkinLoading(skinId);
-    setFeedback(null);
-    const result = await purchaseTableSkin(skinId);
-    setTableSkinLoading(null);
-    if (result === 'ok') {
-      await setActiveSkin('table_skin', skinId);
-      setFeedback(t('shop.themePurchaseSuccess'));
-      setPreviewTableSkin(null);
-    } else if (result === 'insufficient_coins') {
-      setFeedback(t('shop.insufficientCoins'));
-    } else if (result !== 'already_owned') {
-      setFeedback(t('shop.purchaseError'));
-    }
-  }
-
-  async function handleActivateTableSkin(skinId: TableSkinId) {
-    await setActiveSkin('table_skin', skinId);
-  }
-
-  const slindaBtnDisabled = slindaOwned || slindaLoading || coins < SLINDA_PRICE;
-  const slindaBtnStyle = slindaOwned ? styles.btnOwned : coins < SLINDA_PRICE ? styles.btnLocked : styles.btnBuy;
-  const purchasableThemes = THEME_IDS.filter(id => id !== 'classic');
+  const activeBackgroundThemeId = isThemeId(profile?.active_card_back) ? profile.active_card_back : 'classic';
+  const activeTableThemeId = isThemeId(profile?.active_table_theme) ? profile.active_table_theme : 'classic';
+  const activeTableSkinId = isTableSkinId(profile?.active_table_skin) ? profile.active_table_skin : null;
 
   const previewData = previewTheme ? THEMES[previewTheme] : null;
   const previewTableSkinData = previewTableSkin ? TABLE_SKINS[previewTableSkin] : null;
   const isPreviewOpen = !!previewTheme || !!previewTableSkin;
+
+  function clearFeedback() {
+    setFeedback(null);
+    setFeedbackTone(null);
+  }
+
+  function showSuccess(message: string) {
+    setFeedback(message);
+    setFeedbackTone('success');
+  }
+
+  function showError(message: string) {
+    setFeedback(message);
+    setFeedbackTone('error');
+  }
+
+  function isThemeFullyActive(themeId: ThemeId) {
+    return activeBackgroundThemeId === themeId && activeTableThemeId === themeId;
+  }
+
+  async function handleBuySlinda() {
+    if (slindaOwned || slindaLoading || coins < SLINDA_PRICE) return;
+    setSlindaLoading(true);
+    clearFeedback();
+    try {
+      const result = await purchaseSlinda();
+      if (result === 'ok') showSuccess(t('shop.purchaseSuccess'));
+      else if (result === 'insufficient_coins') showError(t('shop.insufficientCoins'));
+      else if (result !== 'already_owned') showError(t('shop.purchaseError'));
+    } finally {
+      setSlindaLoading(false);
+    }
+  }
+
+  async function handleBuyTheme(themeId: ThemeId) {
+    const theme = THEMES[themeId];
+    if (ownedThemes.includes(themeId) || themeLoading || coins < theme.price) return;
+    setThemeLoading(themeId);
+    clearFeedback();
+    try {
+      const result = await purchaseTheme(themeId);
+      if (result === 'ok') showSuccess(t('shop.themePurchaseSuccess'));
+      else if (result === 'insufficient_coins') showError(t('shop.insufficientCoins'));
+      else if (result !== 'already_owned') showError(t('shop.purchaseError'));
+    } finally {
+      setThemeLoading(null);
+    }
+  }
+
+  async function handleBuyTableSkin(skinId: TableSkinId) {
+    const skin = TABLE_SKINS[skinId];
+    if (ownedTableSkins.includes(skinId) || tableSkinLoading || coins < skin.price) return;
+    setTableSkinLoading(skinId);
+    clearFeedback();
+    try {
+      const result = await purchaseTableSkin(skinId);
+      if (result === 'ok') showSuccess(t('shop.tableSkinPurchaseSuccess'));
+      else if (result === 'insufficient_coins') showError(t('shop.insufficientCoins'));
+      else if (result !== 'already_owned') showError(t('shop.purchaseError'));
+    } finally {
+      setTableSkinLoading(null);
+    }
+  }
+
+  async function handleActivateTheme(themeId: ThemeId) {
+    const key = `theme:${themeId}`;
+    if (activationLoading === key || isThemeFullyActive(themeId)) return;
+    setActivationLoading(key);
+    clearFeedback();
+    try {
+      const backgroundResult = await setActiveSkin('card_back', themeId);
+      const tableResult = backgroundResult === 'ok'
+        ? await setActiveSkin('table_theme', themeId)
+        : backgroundResult;
+      if (backgroundResult === 'ok' && tableResult === 'ok') showSuccess(t('shop.activationSuccess'));
+      else if (backgroundResult === 'not_owned' || tableResult === 'not_owned') showError(t('shop.notOwnedError'));
+      else showError(t('shop.activationError'));
+    } finally {
+      setActivationLoading(null);
+    }
+  }
+
+  async function handleActivateTableSkin(skinId: TableSkinId | 'none') {
+    const key = `table_skin:${skinId}`;
+    if (activationLoading === key) return;
+    if (skinId !== 'none' && activeTableSkinId === skinId) return;
+    setActivationLoading(key);
+    clearFeedback();
+    try {
+      const result = await setActiveSkin('table_skin', skinId);
+      if (result === 'ok' && skinId === 'none') {
+        await setActiveSkin('table_theme', 'classic');
+        await setActiveSkin('card_back', 'classic');
+      }
+      if (result === 'ok') {
+        showSuccess(skinId === 'none' ? t('shop.tableSkinRemovedSuccess') : t('shop.activationSuccess'));
+      } else if (result === 'not_owned') {
+        showError(t('shop.notOwnedError'));
+      } else {
+        showError(t('shop.activationError'));
+      }
+    } finally {
+      setActivationLoading(null);
+    }
+  }
+
+  const slindaBtnDisabled = slindaOwned || slindaLoading || coins < SLINDA_PRICE;
+  const slindaBtnStyle = slindaOwned ? styles.btnOwned : coins < SLINDA_PRICE ? styles.btnLocked : styles.btnBuy;
 
   function handleClose() {
     if (previewTheme) { setPreviewTheme(null); return; }
@@ -116,14 +189,107 @@ export function ShopScreen({ visible, onClose }: Props) {
     setScrolledToBottom(isNearBottom);
   }
 
+  function renderStatusPill(label: string) {
+    return (
+      <View key={label} style={styles.statusPill}>
+        <Text style={styles.statusPillText}>{label}</Text>
+      </View>
+    );
+  }
+
+  function renderThemeAction(themeId: ThemeId, previewMode: boolean) {
+    const active = isThemeFullyActive(themeId);
+    const busy = activationLoading === `theme:${themeId}`;
+    const containerStyle = previewMode ? styles.previewActionBtn : styles.productBtn;
+    const textStyle = previewMode ? styles.previewActionBtnText : styles.productBtnText;
+    return (
+      <TouchableOpacity
+        style={[containerStyle, active ? styles.productBtnActive : styles.productBtnSelect]}
+        onPress={() => void handleActivateTheme(themeId)}
+        disabled={active || busy}
+        activeOpacity={0.8}
+      >
+        {busy
+          ? <ActivityIndicator color="#FFF" size="small" />
+          : <Text style={textStyle}>{active ? t('shop.activeBadge') : t('shop.activateButton')}</Text>
+        }
+      </TouchableOpacity>
+    );
+  }
+
+  function renderThemeActions(themeId: ThemeId, previewMode: boolean) {
+    const theme = THEMES[themeId];
+    const owned = ownedThemes.includes(themeId);
+    const busy = themeLoading === themeId;
+    const canAfford = coins >= theme.price;
+    if (!owned) {
+      return (
+        <TouchableOpacity
+          style={[
+            previewMode ? styles.previewActionBtn : styles.productBtn,
+            !canAfford ? styles.productBtnLocked : styles.productBtnBuy,
+          ]}
+          onPress={() => void handleBuyTheme(themeId)}
+          disabled={busy || !canAfford}
+          activeOpacity={0.8}
+        >
+          {busy
+            ? <ActivityIndicator color="#FFF" size="small" />
+            : <Text style={previewMode ? styles.previewActionBtnText : styles.productBtnText}>
+                {!canAfford ? `🔒 ${t('shop.buyButton')}` : t('shop.buyButton')}
+              </Text>
+          }
+        </TouchableOpacity>
+      );
+    }
+
+    return renderThemeAction(themeId, previewMode);
+  }
+
+  function renderTableSkinAction(skinId: TableSkinId, previewMode: boolean) {
+    const owned = ownedTableSkins.includes(skinId);
+    const active = activeTableSkinId === skinId;
+    const busy = tableSkinLoading === skinId || activationLoading === `table_skin:${skinId}`;
+    const skin = TABLE_SKINS[skinId];
+    const canAfford = coins >= skin.price;
+    const containerStyle = previewMode ? styles.previewActionBtn : styles.productBtn;
+    const textStyle = previewMode ? styles.previewActionBtnText : styles.productBtnText;
+
+    if (owned) {
+      return (
+        <TouchableOpacity
+          style={[containerStyle, active ? styles.productBtnActive : styles.productBtnSelect]}
+          onPress={() => void handleActivateTableSkin(skinId)}
+          disabled={active || busy}
+          activeOpacity={0.8}
+        >
+          {busy
+          ? <ActivityIndicator color="#FFF" size="small" />
+          : <Text style={textStyle}>{active ? t('shop.activeBadge') : t('shop.activateButton')}</Text>
+          }
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        style={[containerStyle, !canAfford ? styles.productBtnLocked : styles.productBtnBuy]}
+        onPress={() => void handleBuyTableSkin(skinId)}
+        disabled={busy || !canAfford}
+        activeOpacity={0.8}
+      >
+        {busy
+          ? <ActivityIndicator color="#FFF" size="small" />
+          : <Text style={textStyle}>{!canAfford ? `🔒 ${t('shop.buyButton')}` : t('shop.buyButton')}</Text>
+        }
+      </TouchableOpacity>
+    );
+  }
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
-
-        {/* ── Shop content ── */}
         <View style={[styles.container, { width, height }, isPreviewOpen ? styles.containerHidden : null]}>
-
-          {/* Background gradient */}
           <LinearGradient
             colors={['#0a0f1e', '#0d1f35', '#0a1628']}
             start={{ x: 0, y: 0 }}
@@ -131,7 +297,6 @@ export function ShopScreen({ visible, onClose }: Props) {
             style={StyleSheet.absoluteFill}
           />
 
-          {/* Gold shimmer line at top */}
           <LinearGradient
             colors={['transparent', GOLD, 'transparent']}
             start={{ x: 0, y: 0.5 }}
@@ -139,37 +304,33 @@ export function ShopScreen({ visible, onClose }: Props) {
             style={styles.topShimmer}
           />
 
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.coinBadge}>
-              <SlindaCoin size={20} spin />
-              <Text style={styles.coinCount}>{coins}</Text>
+          <View style={[styles.contentFrame, { width: contentWidth }]}>
+            <View style={styles.header}>
+              <View style={styles.coinBadge}>
+                <SlindaCoin size={20} spin />
+                <Text style={styles.coinCount}>{coins}</Text>
+              </View>
+              <View style={styles.titleWrap}>
+                <Text style={styles.titleSmall}>{t('shop.title')}</Text>
+              </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
+                <Text style={styles.closeX}>X</Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.titleWrap}>
-              <Text style={styles.titleSmall}>✦ {t('shop.title')} ✦</Text>
-            </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-              <Text style={styles.closeX}>✕</Text>
-            </TouchableOpacity>
-          </View>
 
-          {/* Divider */}
-          <LinearGradient
-            colors={['transparent', 'rgba(252,211,77,0.35)', 'transparent']}
-            start={{ x: 0, y: 0.5 }}
-            end={{ x: 1, y: 0.5 }}
-            style={styles.dividerGradient}
-          />
+            <LinearGradient
+              colors={['transparent', 'rgba(252,211,77,0.35)', 'transparent']}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={styles.dividerGradient}
+            />
 
-          {/* Scrollable body */}
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-            contentContainerStyle={styles.scrollBody}
-          >
-
-            {/* ── Slinda section ── */}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              contentContainerStyle={styles.scrollBody}
+            >
             <View style={styles.slindaCard}>
               <LinearGradient
                 colors={['rgba(252,211,77,0.08)', 'rgba(252,211,77,0.03)', 'transparent']}
@@ -206,7 +367,7 @@ export function ShopScreen({ visible, onClose }: Props) {
                     {slindaLoading
                       ? <ActivityIndicator color="#FFF" size="small" />
                       : <Text style={styles.btnText}>
-                          {slindaOwned ? '✓ ' + t('shop.ownedButton') : coins < SLINDA_PRICE ? '🔒 ' + t('shop.buyButton') : t('shop.buyButton')}
+                          {slindaOwned ? `✓ ${t('shop.ownedButton')}` : coins < SLINDA_PRICE ? `🔒 ${t('shop.buyButton')}` : t('shop.buyButton')}
                         </Text>
                     }
                   </TouchableOpacity>
@@ -214,7 +375,6 @@ export function ShopScreen({ visible, onClose }: Props) {
               </View>
             </View>
 
-            {/* ── Themes section ── */}
             <SectionHeader title={t('shop.themesSection')} />
 
             <ScrollView
@@ -222,14 +382,12 @@ export function ShopScreen({ visible, onClose }: Props) {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.horizontalList}
             >
-              {purchasableThemes.map(themeId => {
+              {THEME_IDS.map((themeId) => {
                 const theme = THEMES[themeId];
                 const owned = ownedThemes.includes(themeId);
-                const canAfford = coins >= THEME_PRICE;
-                const busy = themeLoading === themeId;
                 const hasPreview = !!theme.background.image;
                 return (
-                  <View key={themeId} style={[styles.productCard, owned && styles.productCardOwned]}>
+                  <View key={themeId} style={[styles.productCard, styles.themeProductCard, owned && styles.productCardOwned]}>
                     {owned && (
                       <LinearGradient
                         colors={['rgba(252,211,77,0.12)', 'transparent']}
@@ -250,31 +408,18 @@ export function ShopScreen({ visible, onClose }: Props) {
                       </View>
                     </TouchableOpacity>
                     <Text style={styles.productName}>{locale === 'he' ? theme.name_he : theme.name_en}</Text>
-                    {!owned && (
+                    {!owned && theme.price > 0 && (
                       <View style={styles.productPriceRow}>
                         <SlindaCoin size={13} />
-                        <Text style={styles.productPriceText}>{THEME_PRICE}</Text>
+                        <Text style={styles.productPriceText}>{theme.price}</Text>
                       </View>
                     )}
-                    <TouchableOpacity
-                      style={[styles.productBtn, owned ? styles.productBtnOwned : !canAfford ? styles.productBtnLocked : styles.productBtnBuy]}
-                      onPress={() => handleBuyTheme(themeId)}
-                      disabled={owned || busy || !canAfford}
-                      activeOpacity={0.8}
-                    >
-                      {busy
-                        ? <ActivityIndicator color="#FFF" size="small" />
-                        : <Text style={styles.productBtnText}>
-                            {owned ? '✓ ' + t('shop.ownedButton') : !canAfford ? '🔒 ' + t('shop.buyButton') : t('shop.buyButton')}
-                          </Text>
-                      }
-                    </TouchableOpacity>
+                    {renderThemeActions(themeId, false)}
                   </View>
                 );
               })}
             </ScrollView>
 
-            {/* ── Tables section ── */}
             <SectionHeader title={t('shop.tablesSection')} />
 
             <ScrollView
@@ -282,12 +427,40 @@ export function ShopScreen({ visible, onClose }: Props) {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.horizontalList}
             >
-              {TABLE_SKIN_IDS.map(skinId => {
+              <View style={[styles.productCard, !activeTableSkinId && styles.productCardOwned]}>
+                {!activeTableSkinId && (
+                  <LinearGradient
+                    colors={['rgba(252,211,77,0.12)', 'transparent']}
+                    style={StyleSheet.absoluteFill}
+                  />
+                )}
+                <ImageBackground
+                  source={CLASSIC_TABLE_IMAGE as any}
+                  style={[styles.tableSkinThumb, styles.noneSkinThumb]}
+                  resizeMode="contain"
+                />
+                <Text style={styles.productName}>{t('shop.noTableSkinName')}</Text>
+                    {!activeTableSkinId ? (
+                  <View style={[styles.productBtn, styles.productBtnActive]}>
+                    <Text style={styles.productBtnText}>{t('shop.activeBadge')}</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.productBtn, styles.productBtnSelect]}
+                    onPress={() => void handleActivateTableSkin('none')}
+                    disabled={activationLoading === 'table_skin:none'}
+                    activeOpacity={0.8}
+                  >
+                    {activationLoading === 'table_skin:none'
+                      ? <ActivityIndicator color="#FFF" size="small" />
+                      : <Text style={styles.productBtnText}>{t('shop.removeTableSkinButton')}</Text>
+                    }
+                  </TouchableOpacity>
+                )}
+              </View>
+              {TABLE_SKIN_IDS.map((skinId) => {
                 const skin = TABLE_SKINS[skinId];
                 const owned = ownedTableSkins.includes(skinId);
-                const isActive = activeTableSkinId === skinId;
-                const canAfford = coins >= TABLE_SKIN_PRICE;
-                const busy = tableSkinLoading === skinId;
                 return (
                   <View key={skinId} style={[styles.productCard, owned && styles.productCardOwned]}>
                     {owned && (
@@ -296,10 +469,7 @@ export function ShopScreen({ visible, onClose }: Props) {
                         style={StyleSheet.absoluteFill}
                       />
                     )}
-                    <TouchableOpacity
-                      onPress={() => setPreviewTableSkin(skinId)}
-                      activeOpacity={0.8}
-                    >
+                    <TouchableOpacity onPress={() => setPreviewTableSkin(skinId)} activeOpacity={0.8}>
                       <View style={styles.tableSkinThumb}>
                         <Image
                           source={skin.image}
@@ -315,38 +485,10 @@ export function ShopScreen({ visible, onClose }: Props) {
                     {!owned && (
                       <View style={styles.productPriceRow}>
                         <SlindaCoin size={13} />
-                        <Text style={styles.productPriceText}>{TABLE_SKIN_PRICE}</Text>
+                        <Text style={styles.productPriceText}>{skin.price}</Text>
                       </View>
                     )}
-                    {owned && !isActive && (
-                      <TouchableOpacity
-                        style={[styles.productBtn, styles.productBtnSelect]}
-                        onPress={() => void handleActivateTableSkin(skinId)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.productBtnText}>{t('shop.activateButton')}</Text>
-                      </TouchableOpacity>
-                    )}
-                    {owned && isActive && (
-                      <View style={[styles.productBtn, styles.productBtnActive]}>
-                        <Text style={styles.productBtnText}>✓ {t('shop.activeBadge')}</Text>
-                      </View>
-                    )}
-                    {!owned && (
-                      <TouchableOpacity
-                        style={[styles.productBtn, !canAfford ? styles.productBtnLocked : styles.productBtnBuy]}
-                        onPress={() => void handleBuyTableSkin(skinId)}
-                        disabled={busy || !canAfford}
-                        activeOpacity={0.8}
-                      >
-                        {busy
-                          ? <ActivityIndicator color="#FFF" size="small" />
-                          : <Text style={styles.productBtnText}>
-                              {!canAfford ? '🔒 ' + t('shop.buyButton') : t('shop.buyButton')}
-                            </Text>
-                        }
-                      </TouchableOpacity>
-                    )}
+                    {renderTableSkinAction(skinId, false)}
                   </View>
                 );
               })}
@@ -356,33 +498,29 @@ export function ShopScreen({ visible, onClose }: Props) {
               <View style={styles.feedbackWrap}>
                 <Text style={[
                   styles.feedbackText,
-                  feedback === t('shop.purchaseSuccess') || feedback === t('shop.themePurchaseSuccess')
-                    ? styles.feedbackSuccess : null,
+                  feedbackTone === 'success' ? styles.feedbackSuccess : null,
                 ]}>
                   {feedback}
                 </Text>
               </View>
             )}
 
-            {/* Bottom spacer */}
-            <View style={{ height: 40 }} />
-          </ScrollView>
+              <View style={{ height: 40 }} />
+            </ScrollView>
 
-          {/* Scroll hint fade - shown when not at bottom */}
-          {!scrolledToBottom && (
-            <LinearGradient
-              colors={['transparent', 'rgba(10,15,30,0.92)']}
-              style={styles.bottomFade}
-              pointerEvents="none"
-            >
-              <Text style={styles.scrollHintText}>▾</Text>
-            </LinearGradient>
-          )}
-
+            {!scrolledToBottom && (
+              <LinearGradient
+                colors={['transparent', 'rgba(10,15,30,0.92)']}
+                style={styles.bottomFade}
+                pointerEvents="none"
+              >
+                <Text style={styles.scrollHintText}>v</Text>
+              </LinearGradient>
+            )}
+          </View>
         </View>
 
-        {/* ── Full-screen theme preview overlay ── */}
-        {previewData && (
+        {previewTheme && previewData && (
           <View style={[StyleSheet.absoluteFill, { width, height }]} pointerEvents="auto">
             {previewData.background.image ? (
               <ImageBackground source={previewData.background.image} resizeMode="cover" style={StyleSheet.absoluteFill} />
@@ -392,51 +530,27 @@ export function ShopScreen({ visible, onClose }: Props) {
 
             <LinearGradient
               colors={['transparent', 'rgba(0,0,0,0.85)']}
-              style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 280 }}
+              style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 320 }}
             />
 
             <TouchableOpacity style={styles.previewClose} onPress={() => setPreviewTheme(null)}>
-              <Text style={styles.previewCloseText}>✕</Text>
+              <Text style={styles.previewCloseText}>X</Text>
             </TouchableOpacity>
 
             <View style={styles.previewBar}>
               <Text style={styles.previewThemeName}>{locale === 'he' ? previewData.name_he : previewData.name_en}</Text>
-              {previewTheme && !ownedThemes.includes(previewTheme) && (
+              {!ownedThemes.includes(previewTheme) && (
                 <View style={styles.previewPriceRow}>
                   <SlindaCoin size={18} />
-                  <Text style={styles.previewPriceText}>{THEME_PRICE} {t('shop.coinsUnit')}</Text>
+                  <Text style={styles.previewPriceText}>{previewData.price} {t('shop.coinsUnit')}</Text>
                 </View>
               )}
-              {previewTheme && (
-                <TouchableOpacity
-                  style={[
-                    styles.previewBuyBtn,
-                    ownedThemes.includes(previewTheme) ? styles.productBtnOwned
-                      : coins < THEME_PRICE ? styles.productBtnLocked
-                      : styles.productBtnBuy,
-                  ]}
-                  onPress={() => { if (previewTheme) void handleBuyTheme(previewTheme); }}
-                  disabled={ownedThemes.includes(previewTheme) || themeLoading === previewTheme || coins < THEME_PRICE}
-                  activeOpacity={0.85}
-                >
-                  {themeLoading === previewTheme
-                    ? <ActivityIndicator color="#FFF" size="small" />
-                    : <Text style={styles.previewBuyBtnText}>
-                        {ownedThemes.includes(previewTheme)
-                          ? '✓ ' + t('shop.ownedButton')
-                          : coins < THEME_PRICE
-                          ? '🔒 ' + t('shop.buyButton')
-                          : t('shop.buyButton')}
-                      </Text>
-                  }
-                </TouchableOpacity>
-              )}
+              {renderThemeActions(previewTheme, true)}
             </View>
           </View>
         )}
 
-        {/* ── Full-screen table skin preview overlay ── */}
-        {previewTableSkinData && (
+        {previewTableSkin && previewTableSkinData && (
           <View style={[StyleSheet.absoluteFill, { width, height }]} pointerEvents="auto">
             {background.image ? (
               <ImageBackground source={background.image} resizeMode="cover" style={StyleSheet.absoluteFill} />
@@ -460,45 +574,26 @@ export function ShopScreen({ visible, onClose }: Props) {
             />
 
             <TouchableOpacity style={styles.previewClose} onPress={() => setPreviewTableSkin(null)}>
-              <Text style={styles.previewCloseText}>✕</Text>
+              <Text style={styles.previewCloseText}>X</Text>
             </TouchableOpacity>
 
             <View style={styles.previewBar}>
               <Text style={styles.previewThemeName}>{locale === 'he' ? previewTableSkinData.name_he : previewTableSkinData.name_en}</Text>
-              {previewTableSkin && !ownedTableSkins.includes(previewTableSkin) && (
+              {!ownedTableSkins.includes(previewTableSkin) && (
                 <View style={styles.previewPriceRow}>
                   <SlindaCoin size={18} />
-                  <Text style={styles.previewPriceText}>{TABLE_SKIN_PRICE} {t('shop.coinsUnit')}</Text>
+                  <Text style={styles.previewPriceText}>{previewTableSkinData.price} {t('shop.coinsUnit')}</Text>
                 </View>
               )}
-              {previewTableSkin && (
-                <TouchableOpacity
-                  style={[
-                    styles.previewBuyBtn,
-                    ownedTableSkins.includes(previewTableSkin) ? styles.productBtnOwned
-                      : coins < TABLE_SKIN_PRICE ? styles.productBtnLocked
-                      : styles.productBtnBuy,
-                  ]}
-                  onPress={() => { if (previewTableSkin) void handleBuyTableSkin(previewTableSkin); }}
-                  disabled={ownedTableSkins.includes(previewTableSkin) || tableSkinLoading === previewTableSkin || coins < TABLE_SKIN_PRICE}
-                  activeOpacity={0.85}
-                >
-                  {tableSkinLoading === previewTableSkin
-                    ? <ActivityIndicator color="#FFF" size="small" />
-                    : <Text style={styles.previewBuyBtnText}>
-                        {ownedTableSkins.includes(previewTableSkin)
-                          ? '✓ ' + t('shop.ownedButton')
-                          : coins < TABLE_SKIN_PRICE
-                          ? '🔒 ' + t('shop.buyButton')
-                          : t('shop.buyButton')}
-                      </Text>
-                  }
-                </TouchableOpacity>
+              {ownedTableSkins.includes(previewTableSkin) && activeTableSkinId === previewTableSkin && (
+                <View style={styles.statusPillsRow}>
+                  {renderStatusPill(t('shop.activeBadge'))}
+                </View>
               )}
+              {renderTableSkinAction(previewTableSkin, true)}
             </View>
           </View>
         )}
-
       </View>
     </Modal>
   );
@@ -543,12 +638,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
+    right: 0,
     overflow: 'hidden',
+    alignItems: 'center',
     ...(Platform.OS === 'web'
       ? { boxShadow: 'inset 0 0 120px rgba(252,211,77,0.04)' } as any
       : {}),
   },
   containerHidden: { opacity: 0 },
+  contentFrame: {
+    flex: 1,
+    maxWidth: '100%',
+  },
 
   topShimmer: {
     height: 1,
@@ -592,10 +693,8 @@ const styles = StyleSheet.create({
   closeX: { color: 'rgba(255,255,255,0.5)', fontSize: 16, fontWeight: '700' },
 
   dividerGradient: { height: 1, width: '100%', marginBottom: 4 },
-
   scrollBody: { paddingBottom: 10 },
 
-  /* ── Slinda hero card ── */
   slindaCard: {
     marginHorizontal: 16,
     marginTop: 20,
@@ -640,7 +739,6 @@ const styles = StyleSheet.create({
   btnLocked: { backgroundColor: 'rgba(255,255,255,0.06)', opacity: 0.7 },
   btnText: { color: '#FFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
 
-  /* ── Horizontal product cards ── */
   horizontalList: { paddingHorizontal: 16, paddingBottom: 4, gap: 10 },
   productCard: {
     alignItems: 'center',
@@ -652,6 +750,9 @@ const styles = StyleSheet.create({
     minWidth: 120,
     overflow: 'hidden',
     backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  themeProductCard: {
+    minWidth: 150,
   },
   productCardOwned: {
     borderColor: 'rgba(252,211,77,0.35)',
@@ -672,11 +773,26 @@ const styles = StyleSheet.create({
   productPriceText: { color: GOLD, fontWeight: '800', fontSize: 12 },
   productBtn: { borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14, alignItems: 'center', width: '100%' },
   productBtnBuy: { backgroundColor: '#15803D' },
-  productBtnOwned: { backgroundColor: 'rgba(255,255,255,0.08)' },
   productBtnLocked: { backgroundColor: 'rgba(255,255,255,0.06)', opacity: 0.65 },
   productBtnSelect: { backgroundColor: '#0369A1' },
-  productBtnActive: { backgroundColor: 'rgba(252,211,77,0.15)', borderWidth: 1, borderColor: 'rgba(252,211,77,0.3)' },
-  productBtnText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
+  productBtnActive: { backgroundColor: '#15803D', borderWidth: 1, borderColor: '#4ADE80' },
+  productBtnText: { color: '#FFF', fontSize: 10.5, fontWeight: '800', textAlign: 'center' },
+  statusPillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 24,
+  },
+  statusPill: {
+    backgroundColor: 'rgba(252,211,77,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(252,211,77,0.28)',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusPillText: { color: GOLD_LIGHT, fontSize: 10, fontWeight: '800' },
 
   tableSkinThumb: {
     width: 120,
@@ -688,12 +804,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.3)',
   },
   tableSkinThumbImg: { width: 120, height: 46 },
+  noneSkinThumb: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    overflow: 'hidden',
+  },
 
   feedbackWrap: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4, alignItems: 'center' },
   feedbackText: { color: '#F87171', fontSize: 13, textAlign: 'center', fontWeight: '600' },
   feedbackSuccess: { color: '#4ADE80' },
 
-  /* ── Bottom fade scroll hint ── */
   bottomFade: {
     position: 'absolute',
     left: 0,
@@ -710,7 +829,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  /* ── Preview overlays ── */
   previewClose: {
     position: 'absolute', top: 52, right: 20,
     backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 20,
@@ -723,9 +841,10 @@ const styles = StyleSheet.create({
   previewThemeName: {
     color: '#FFF', fontSize: 30, fontWeight: '900', letterSpacing: 1,
     textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10,
+    textAlign: 'center',
   },
   previewPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   previewPriceText: { color: GOLD, fontSize: 18, fontWeight: '800' },
-  previewBuyBtn: { borderRadius: 14, paddingVertical: 16, paddingHorizontal: 40, alignItems: 'center', width: '100%' },
-  previewBuyBtnText: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
+  previewActionBtn: { borderRadius: 14, paddingVertical: 14, paddingHorizontal: 24, alignItems: 'center', width: '100%' },
+  previewActionBtnText: { color: '#FFF', fontSize: 14, fontWeight: '900', letterSpacing: 0.4, textAlign: 'center' },
 });

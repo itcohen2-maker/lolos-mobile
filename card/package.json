@@ -15,7 +15,8 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "capsules:match-red-layout": "node scripts/normalize-green-capsule-to-red-bbox.js"
   },
   "dependencies": {
     "@expo-google-fonts/fredoka": "^0.4.1",

@@ -9,12 +9,13 @@ export interface CasinoButtonProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  testID?: string;
   /** Optional row before label (e.g. compact turn countdown inside the felt area) */
   leadingContent?: React.ReactNode;
   style?: any;
 }
 
-export function CasinoButton({ text, onPress, disabled, width = 300, height = 62, fontSize = 26, leadingContent, style }: CasinoButtonProps) {
+export function CasinoButton({ text, onPress, disabled, width = 300, height = 62, fontSize = 26, testID, leadingContent, style }: CasinoButtonProps) {
   const pressAnim = useRef(new Animated.Value(0)).current;
   const twinkleAnim = useRef(new Animated.Value(0)).current;
 
@@ -51,9 +52,13 @@ export function CasinoButton({ text, onPress, disabled, width = 300, height = 62
     <View style={[{ width, height: height + 6, opacity: disabled ? 0.3 : 1 }, style]}>
       <TouchableOpacity
         activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !!disabled }}
+        disabled={!!disabled}
         onPress={disabled ? undefined : onPress}
         onPressIn={disabled ? undefined : handlePressIn}
         onPressOut={disabled ? undefined : handlePressOut}
+        testID={testID}
       >
         <Animated.View style={{
           width,

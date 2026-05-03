@@ -1,48 +1,56 @@
 // ============================================================
-// TableBrowserScreen.tsx — Scrollable list of open tables
-// (rooms with waiting players). Polls the game server every
-// 5 seconds via Socket.io `list_rooms` event. Tap a table to
-// join; pull-to-refresh for immediate update.
+// TableBrowserScreen.tsx - Scrollable list of joinable tables.
+// Polls the game server via `list_tables` and listens for
+// `tables_updated` pushes. Pull-to-refresh triggers an immediate
+// update request.
 // ============================================================
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
   ActivityIndicator,
+  FlatList,
+  Platform,
   RefreshControl,
   StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { useLocale } from '../i18n/LocaleContext';
+import type { LobbyTableSummary } from '../../shared/types';
 import { useAuth } from '../hooks/useAuth';
+import { useWebViewportSize } from '../hooks/useWebViewportSize';
+import { useLocale } from '../i18n/LocaleContext';
+import { getWebContentWidth } from '../theme/webLayout';
 
-export interface OpenRoom {
-  code: string;
-  hostName: string;
-  playerCount: number;
-  maxPlayers: number;
-  difficulty: 'easy' | 'full';
-  hostRating: number;
-}
+export type OpenRoom = LobbyTableSummary;
 
 interface Props {
-  /** Socket.io instance (from useMultiplayer or passed in). */
   socket: any;
-  /** Called when the player taps "Join" on a table. */
   onJoin: (roomCode: string) => void;
-  /** Called when the player taps "Create Table". */
   onCreate: () => void;
-  /** Called when the player taps the back button. */
   onBack: () => void;
 }
 
 const POLL_INTERVAL = 5000;
 
+function isJoinableTable(table: OpenRoom): boolean {
+  return table.visibility === 'public' && table.status === 'waiting';
+}
+
+function formatDifficulty(table: OpenRoom): string {
+  if (table.configuredDifficulty === 'easy') return '0-12';
+  if (table.configuredDifficulty === 'full') return '0-25';
+  return '--';
+}
+
 export function TableBrowserScreen({ socket, onJoin, onCreate, onBack }: Props) {
   const { t } = useLocale();
   const { profile } = useAuth();
+  const viewport = useWebViewportSize();
+  const contentWidth =
+    Platform.OS === 'web'
+      ? getWebContentWidth(viewport.width, { maxWidth: 960, sidePadding: 40 })
+      : undefined;
   const [rooms, setRooms] = useState<OpenRoom[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -50,30 +58,34 @@ export function TableBrowserScreen({ socket, onJoin, onCreate, onBack }: Props) 
 
   const fetchRooms = useCallback(() => {
     if (!socket?.connected) return;
-    socket.emit('list_rooms', {}, (response: { rooms: OpenRoom[] }) => {
-      setRooms(response?.rooms ?? []);
-      setLoading(false);
-      setRefreshing(false);
-    });
+    socket.emit('list_tables');
   }, [socket]);
 
-  // Initial fetch + polling
   useEffect(() => {
+    if (!socket) return undefined;
+    const handleConnect = () => {
+      fetchRooms();
+    };
+    socket.on('connect', handleConnect);
     fetchRooms();
     pollRef.current = setInterval(fetchRooms, POLL_INTERVAL);
     return () => {
+      socket.off('connect', handleConnect);
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [fetchRooms]);
+  }, [fetchRooms, socket]);
 
-  // Listen for real-time room updates if the server pushes them
   useEffect(() => {
-    if (!socket) return;
-    const handler = (data: { rooms: OpenRoom[] }) => {
-      setRooms(data.rooms ?? []);
+    if (!socket) return undefined;
+    const handler = (data: { tables: OpenRoom[] }) => {
+      setRooms((data.tables ?? []).filter(isJoinableTable));
+      setLoading(false);
+      setRefreshing(false);
     };
-    socket.on('room_list', handler);
-    return () => { socket.off('room_list', handler); };
+    socket.on('tables_updated', handler);
+    return () => {
+      socket.off('tables_updated', handler);
+    };
   }, [socket]);
 
   const onRefresh = () => {
@@ -84,19 +96,15 @@ export function TableBrowserScreen({ socket, onJoin, onCreate, onBack }: Props) 
   const renderRoom = ({ item }: { item: OpenRoom }) => (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text style={styles.roomCode}>🎯 {t('browse.table')} {item.code}</Text>
+        <Text style={styles.roomCode}>{t('browse.table')} {item.roomCode}</Text>
       </View>
       <View style={styles.cardBody}>
-        <Text style={styles.hostName}>{t('browse.host')}: {item.hostName}  ⭐{item.hostRating}</Text>
+        <Text style={styles.hostName}>{t('browse.host')}: {item.hostName}</Text>
         <Text style={styles.info}>
-          {item.playerCount}/{item.maxPlayers} {t('browse.players')}  │  {item.difficulty === 'easy' ? '0-12' : '0-25'}
+          {item.currentParticipants}/{item.maxParticipants} {t('browse.players')} | {formatDifficulty(item)}
         </Text>
       </View>
-      <TouchableOpacity
-        style={styles.joinBtn}
-        onPress={() => onJoin(item.code)}
-        activeOpacity={0.85}
-      >
+      <TouchableOpacity style={styles.joinBtn} onPress={() => onJoin(item.roomCode)} activeOpacity={0.85}>
         <Text style={styles.joinText}>{t('browse.join')}</Text>
       </TouchableOpacity>
     </View>
@@ -104,45 +112,40 @@ export function TableBrowserScreen({ socket, onJoin, onCreate, onBack }: Props) 
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-          <Text style={styles.backText}>← {t('browse.back')}</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>{t('browse.title')}</Text>
-        {profile && (
-          <Text style={styles.myRating}>⭐{profile.rating}</Text>
-        )}
-      </View>
-
-      {/* Room list */}
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color="#FCD34D" />
+      <View style={[styles.contentFrame, contentWidth ? { width: contentWidth } : null]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+            <Text style={styles.backText}>{t('browse.back')}</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>{t('browse.title')}</Text>
+          {profile ? <Text style={styles.myRating}>{profile.rating}</Text> : <View style={styles.ratingSpacer} />}
         </View>
-      ) : (
-        <FlatList
-          data={rooms}
-          keyExtractor={(r) => r.code}
-          renderItem={renderRoom}
-          contentContainerStyle={rooms.length === 0 ? styles.emptyContainer : styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FCD34D" />
-          }
-          ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.emptyText}>{t('browse.noTables')}</Text>
-              <Text style={styles.emptyHint}>{t('browse.noTablesHint')}</Text>
-            </View>
-          }
-        />
-      )}
 
-      {/* Create table button */}
-      <View style={styles.footer}>
-        <TouchableOpacity style={styles.createBtn} onPress={onCreate} activeOpacity={0.85}>
-          <Text style={styles.createText}>{t('browse.createTable')}</Text>
-        </TouchableOpacity>
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color="#FCD34D" />
+          </View>
+        ) : (
+          <FlatList
+            data={rooms}
+            keyExtractor={(room) => room.roomCode}
+            renderItem={renderRoom}
+            contentContainerStyle={rooms.length === 0 ? styles.emptyContainer : styles.list}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FCD34D" />}
+            ListEmptyComponent={
+              <View style={styles.center}>
+                <Text style={styles.emptyText}>{t('browse.noTables')}</Text>
+                <Text style={styles.emptyHint}>{t('browse.noTablesHint')}</Text>
+              </View>
+            }
+          />
+        )}
+
+        <View style={styles.footer}>
+          <TouchableOpacity style={styles.createBtn} onPress={onCreate} activeOpacity={0.85}>
+            <Text style={styles.createText}>{t('browse.createTable')}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -152,6 +155,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0a1628',
+    alignItems: 'center',
+  },
+  contentFrame: {
+    flex: 1,
+    width: '100%',
+    maxWidth: '100%',
   },
   header: {
     flexDirection: 'row',
@@ -179,6 +188,9 @@ const styles = StyleSheet.create({
     color: '#FDE68A',
     fontSize: 14,
     fontWeight: '800',
+  },
+  ratingSpacer: {
+    width: 40,
   },
   list: {
     paddingHorizontal: 16,
@@ -250,10 +262,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     paddingHorizontal: 16,
     paddingBottom: 32,
     paddingTop: 12,
