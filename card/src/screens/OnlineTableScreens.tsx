@@ -716,7 +716,7 @@ export function LobbyScreen({ onOpenCelebrationMockup: _onOpenCelebrationMockup 
         <>
           <View style={styles.codeBox}>
             <Text style={styles.codeLabel}>{t('lobby.roomCodeLabel')}</Text>
-            <Text style={styles.codeValue}>{roomCode}</Text>
+            <Text testID="room-code" style={styles.codeValue}>{roomCode}</Text>
             <Text style={[styles.codeHint, { textAlign: ta }]}>{t('lobby.shareCodeHint')}</Text>
             <View style={styles.inviteActionsRow}>
               <TouchableOpacity style={[styles.inviteBtn, !shareRoomMessage && styles.inviteBtnDisabled]} onPress={handleShareRoomCode} disabled={!shareRoomMessage}>
@@ -775,7 +775,7 @@ export function LobbyScreen({ onOpenCelebrationMockup: _onOpenCelebrationMockup 
           <Text style={styles.label}>{t('lobby.playersInRoom', { count: players.length })}</Text>
           {players.map((player) => (
             <View key={player.id} style={styles.playerRow}>
-              <Text style={styles.playerName}>{player.name}</Text>
+              <Text testID={player.isHost !== isHost ? 'opponent-name' : 'player-name'} style={styles.playerName}>{player.name}</Text>
               {player.isHost && <Text style={styles.hostBadge}>{t('lobby.host')}</Text>}
               {!player.isConnected && <Text style={styles.disconnectedBadge}>{t('lobby.disconnected')}</Text>}
             </View>

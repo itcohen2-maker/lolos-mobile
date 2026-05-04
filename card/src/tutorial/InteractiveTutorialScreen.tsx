@@ -3484,19 +3484,7 @@ const [l5FlowHintPhase, setL5FlowHintPhase] = useState<'tapJoker' | 'pickModal' 
       })() : null}
 
       {/* Skip + Back buttons — top-right row. */}
-      <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 9600, flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-        <View pointerEvents="none" style={{
-          backgroundColor: 'rgba(15,23,42,0.82)',
-          borderRadius: 20,
-          paddingHorizontal: 12,
-          paddingVertical: 5,
-          borderWidth: 1.5,
-          borderColor: 'rgba(250,204,21,0.72)',
-        }}>
-          <Text style={{ color: '#FDE68A', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
-            {`#${tutorialLayerNumber}`}
-          </Text>
-        </View>
+      <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 9600, flexDirection: 'row', direction: 'ltr', gap: 8, alignItems: 'center' }}>
         <TouchableOpacity
           onPress={() => {
             if (showWelcomeBubble) return;

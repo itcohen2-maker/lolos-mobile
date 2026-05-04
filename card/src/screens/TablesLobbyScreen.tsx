@@ -246,7 +246,12 @@ function TableCard({
   const countdownRemaining = countdownSeconds(table.countdownEndsAt) ?? 0;
 
   return (
-    <Pressable style={[styles.card, disabled && styles.cardDisabled]} onPress={() => onPress(table)} disabled={disabled}>
+    <Pressable
+      testID={`table-card-${table.roomCode}`}
+      style={[styles.card, disabled && styles.cardDisabled]}
+      onPress={() => onPress(table)}
+      disabled={disabled}
+    >
       <Felt table={table} />
 
       <View style={styles.cardBody}>
@@ -360,11 +365,12 @@ export default function TablesLobbyScreen({
         <View style={styles.controlCard}>
           {headerAccessory ? <View style={styles.headerAccessoryWrap}>{headerAccessory}</View> : null}
           <View style={styles.controlRow}>
-            <TouchableOpacity style={[styles.createBtn, !canAct && styles.disabledButton]} disabled={!canAct} onPress={onCreateTable}>
+            <TouchableOpacity testID="lobby-create-room" style={[styles.createBtn, !canAct && styles.disabledButton]} disabled={!canAct} onPress={onCreateTable}>
               <Text style={styles.createBtnText}>צור שולחן</Text>
             </TouchableOpacity>
             <View style={styles.inputWrap}>
               <TextInput
+                testID="lobby-player-name"
                 style={styles.nameInput}
                 value={playerName}
                 onChangeText={(value) => onPlayerNameChange(value.slice(0, 7))}

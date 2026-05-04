@@ -6,12 +6,14 @@ type Props = {
   value: number;
   pulseKey?: number;
   isCelebrating?: boolean;
+  testID?: string;
 };
 
 export default function TutorialProgressMeter({
   value,
   pulseKey,
   isCelebrating = false,
+  testID,
 }: Props) {
   const width = 34;
   const height = 104;
@@ -97,7 +99,7 @@ export default function TutorialProgressMeter({
   });
 
   return (
-    <Animated.View style={[styles.wrap, { transform: [{ scale }] }]}>
+    <Animated.View testID={testID} style={[styles.wrap, { transform: [{ scale }] }]}>
       <Animated.View style={[styles.glow, { opacity: glowOpacity }]} />
       <View style={[styles.shell, { width, height }]}>
         <View style={styles.inner}>

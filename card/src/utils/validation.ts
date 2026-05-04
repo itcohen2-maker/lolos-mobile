@@ -21,6 +21,9 @@ export function validateIdenticalPlay(
   topDiscard: Card | undefined
 ): boolean {
   if (!topDiscard) return false
+  if (card.type === 'wild') {
+    return topDiscard.type === 'number' || topDiscard.type === 'wild'
+  }
   if (card.type !== topDiscard.type) return false
 
   switch (card.type) {
@@ -32,6 +35,8 @@ export function validateIdenticalPlay(
       return card.operation === topDiscard.operation
     case 'joker':
       return topDiscard.type === 'joker'
+    case 'wild':
+      return topDiscard.type === 'number' || topDiscard.type === 'wild'
     default:
       return false
   }

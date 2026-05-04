@@ -10,6 +10,7 @@ interface GoldDiceButtonProps {
   size?: number;
   width?: number;
   style?: any;
+  testID?: string;
 }
 
 function buildDiceHTML(w: number, h: number): string {
@@ -199,7 +200,7 @@ setTimeout(loop,100);
 const BTN_W = 160;
 const BTN_H = 58;
 
-export function GoldDiceButton({ onPress, disabled = false, width, size, style }: GoldDiceButtonProps) {
+export function GoldDiceButton({ onPress, disabled = false, width, size, style, testID }: GoldDiceButtonProps) {
   const w = width ?? BTN_W;
   const h = size ?? BTN_H;
   const [webViewReady, setWebViewReady] = useState(false);
@@ -227,6 +228,7 @@ export function GoldDiceButton({ onPress, disabled = false, width, size, style }
         }),
       }} />
       <Pressable
+        testID={testID}
         onPress={disabled ? undefined : onPress}
         onPressIn={disabled ? undefined : handlePressIn}
         onPressOut={disabled ? undefined : handlePressOut}

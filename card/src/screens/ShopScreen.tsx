@@ -307,7 +307,10 @@ export function ShopScreen({ visible, onClose }: Props) {
           <View style={[styles.contentFrame, { width: contentWidth }]}>
             <View style={styles.header}>
               <View style={styles.coinBadge}>
-                <SlindaCoin size={20} spin />
+                <View style={styles.coinHeroWrap}>
+                  <View style={styles.coinHeroGlow} />
+                  <SlindaCoin size={34} spin />
+                </View>
                 <Text style={styles.coinCount}>{coins}</Text>
               </View>
               <View style={styles.titleWrap}>
@@ -376,6 +379,7 @@ export function ShopScreen({ visible, onClose }: Props) {
             </View>
 
             <SectionHeader title={t('shop.themesSection')} />
+            <Text style={styles.subsectionTitle}>{t('shop.backgroundsTitle')}</Text>
 
             <ScrollView
               horizontal
@@ -666,18 +670,36 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   coinBadge: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
+    gap: 3,
     backgroundColor: 'rgba(252,211,77,0.1)',
     borderWidth: 1,
     borderColor: 'rgba(252,211,77,0.25)',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    minWidth: 80,
+    borderRadius: 24,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 7,
+    minWidth: 84,
   },
-  coinCount: { color: GOLD_LIGHT, fontSize: 15, fontWeight: '800' },
+  coinHeroWrap: {
+    width: 42,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coinHeroGlow: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 0 20px 8px rgba(252,211,77,0.18)' }
+      : { shadowColor: '#FCD34D', shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 0 }, elevation: 6 }),
+  },
+  coinCount: { color: GOLD_LIGHT, fontSize: 14, fontWeight: '800', lineHeight: 16 },
   titleWrap: { flex: 1, alignItems: 'center' },
   titleSmall: { color: GOLD, fontSize: 16, fontWeight: '900', letterSpacing: 3 },
   closeBtn: {
@@ -740,6 +762,14 @@ const styles = StyleSheet.create({
   btnText: { color: '#FFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
 
   horizontalList: { paddingHorizontal: 16, paddingBottom: 4, gap: 10 },
+  subsectionTitle: {
+    color: GOLD_LIGHT,
+    fontSize: 13,
+    fontWeight: '800',
+    paddingHorizontal: 16,
+    marginTop: -4,
+    marginBottom: 10,
+  },
   productCard: {
     alignItems: 'center',
     padding: 12,
