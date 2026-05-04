@@ -17070,12 +17070,13 @@ function AppShell({ showSplash, setShowSplash }: { showSplash: boolean; setShowS
 }
 
 function App() {
-  const [fontsLoaded] = useFonts({ Fredoka_700Bold });
+  const [fontsLoaded, fontError] = useFonts({ Fredoka_700Bold });
   const [showSplash, setShowSplash] = useState(true);
   useEffect(() => {
-    sendDebugLog('H2', 'index.tsx:App.useEffect', 'App lifecycle', { fontsLoaded });
-  }, [fontsLoaded]);
-  if (!fontsLoaded) return null;
+    sendDebugLog('H2', 'index.tsx:App.useEffect', 'App lifecycle', { fontsLoaded, fontError: fontError?.message });
+  }, [fontsLoaded, fontError]);
+  // fontError: render without custom font rather than showing blank screen forever
+  if (!fontsLoaded && !fontError) return null;
   return (
     <AuthProvider>
       <LocaleProvider>
