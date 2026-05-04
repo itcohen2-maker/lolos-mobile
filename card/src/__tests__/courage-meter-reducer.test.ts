@@ -81,6 +81,93 @@ function solvedConfirmState(overrides: Partial<GameState> = {}): GameState {
   return next;
 }
 
+// ── rolledTripleThisTurn ──────────────────────────────────────────────────
+
+describe('rolledTripleThisTurn flag', () => {
+  it('is set to true when ROLL_DICE produces a triple', () => {
+    const st: GameState = {
+      ...initialState,
+      phase: 'pre-roll',
+      players: [basePlayer([])],
+      currentPlayerIndex: 0,
+    };
+    const next = gameReducer(st, { type: 'ROLL_DICE', values: { die1: 4, die2: 4, die3: 4 } }, tf);
+    expect(next.rolledTripleThisTurn).toBe(true);
+  });
+
+  it('is false when ROLL_DICE produces a non-triple', () => {
+    const st: GameState = {
+      ...initialState,
+      phase: 'pre-roll',
+      players: [basePlayer([])],
+      currentPlayerIndex: 0,
+    };
+    const next = gameReducer(st, { type: 'ROLL_DICE', values: { die1: 1, die2: 2, die3: 3 } }, tf);
+    expect(next.rolledTripleThisTurn).toBe(false);
+  });
+
+  it('is cleared to false by endTurnLogic (via CONFIRM_STAGED path)', () => {
+    const staged = { id: 'n5', type: 'number' as const, value: 5 };
+    // Give the player enough cards so checkWin does not trigger (need > 2 remaining after play)
+    const extras = [
+      { id: 'ex1', type: 'number' as const, value: 1 },
+      { id: 'ex2', type: 'number' as const, value: 2 },
+      { id: 'ex3', type: 'number' as const, value: 3 },
+    ];
+    const st: GameState = {
+      ...initialState,
+      phase: 'solved',
+      players: [basePlayer([staged, ...extras])],
+      currentPlayerIndex: 0,
+      discardPile: [{ id: 'top3', type: 'number', value: 3 }],
+      stagedCards: [staged],
+      equationResult: 5,
+      lastEquationDisplay: '5=5',
+      rolledTripleThisTurn: true,
+    };
+    const next = gameReducer(st, { type: 'CONFIRM_STAGED' }, tf);
+    expect(next.rolledTripleThisTurn).toBe(false);
+  });
+});
+
+// ── double bonus ──────────────────────────────────────────────────────────
+
+describe('double bonus (triple + all-three-dice)', () => {
+  it('sets lastCourageRewardReason to doubleBonus when triple was rolled and all dice used', () => {
+    const staged = { id: 'n5', type: 'number' as const, value: 5 };
+    const st: GameState = {
+      ...initialState,
+      phase: 'solved',
+      players: [basePlayer([staged])],
+      currentPlayerIndex: 0,
+      discardPile: [{ id: 'top3', type: 'number', value: 3 }],
+      stagedCards: [staged],
+      equationResult: 5,
+      lastEquationDisplay: '2+2+1=5',   // two operators → usedAllDice
+      rolledTripleThisTurn: true,
+    };
+    const next = gameReducer(st, { type: 'CONFIRM_STAGED' }, tf);
+    expect(next.lastCourageRewardReason).toBe('courage.reason.doubleBonus');
+  });
+
+  it('does NOT set doubleBonus when triple was rolled but only one die was used', () => {
+    const staged = { id: 'n5', type: 'number' as const, value: 5 };
+    const st: GameState = {
+      ...initialState,
+      phase: 'solved',
+      players: [basePlayer([staged])],
+      currentPlayerIndex: 0,
+      discardPile: [{ id: 'top3', type: 'number', value: 3 }],
+      stagedCards: [staged],
+      equationResult: 5,
+      lastEquationDisplay: '5=5',   // zero operators → usedAllDice false
+      rolledTripleThisTurn: true,
+    };
+    const next = gameReducer(st, { type: 'CONFIRM_STAGED' }, tf);
+    expect(next.lastCourageRewardReason).not.toBe('courage.reason.doubleBonus');
+  });
+});
+
 describe('courage meter reducer rules', () => {
   it('progresses on PLAY_IDENTICAL', () => {
     const st = preRollIdenticalState({ courageMeterStep: 1, courageMeterPercent: 33, courageCoins: 0 });

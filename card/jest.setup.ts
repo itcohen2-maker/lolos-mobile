@@ -39,3 +39,15 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 jest.mock('react-native-webview', () => ({
   WebView: 'WebView',
 }));
+
+jest.mock('@supabase/supabase-js', () => ({
+  createClient: jest.fn(() => ({
+    auth: {
+      getSession: jest.fn().mockResolvedValue({ data: { session: null }, error: null }),
+      onAuthStateChange: jest.fn().mockReturnValue({ data: { subscription: { unsubscribe: jest.fn() } } }),
+      signInWithPassword: jest.fn(),
+      signOut: jest.fn(),
+    },
+    from: jest.fn(() => ({ select: jest.fn(), insert: jest.fn(), update: jest.fn(), delete: jest.fn() })),
+  })),
+}));

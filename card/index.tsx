@@ -2064,6 +2064,10 @@ function gameReducer(
       if (usedAllDice) {
         stNs = applyCourageStepReward(stNs, tf('courage.reason.fullEquation'));
       }
+      // Double bonus: triple roll AND all-three-dice equation in the same turn
+      if (usedAllDice && st.rolledTripleThisTurn) {
+        stNs = { ...stNs, lastCourageRewardReason: tf('courage.reason.doubleBonus') };
+      }
       // Track consecutive success streak for human (non-bot) players
       if (!stNs.botConfig?.playerIds.includes(stCp.id)) {
         stNs = { ...stNs, courageDiscardSuccessStreak: (st.courageDiscardSuccessStreak ?? 0) + 1 };
